@@ -2,13 +2,13 @@ import type { MonitorOptions } from '../src/monitor.ts';
 import type { Observation, PageElement } from '../src/observe.ts';
 import type { AddressInfo } from 'node:net';
 import type { Browser, Page } from 'playwright';
+import { Experimental_EvaluationMockModelV4, MockLanguageModelV4 } from 'ai/test';
 import { execFileSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
-import { Experimental_EvaluationMockModelV4, MockLanguageModelV4 } from 'ai/test';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { insertedText, pageChange, repeatsBlock } from '../src/act.ts';
@@ -18,6 +18,7 @@ import { createModels, gatewayFromEnv } from '../src/models.ts';
 import { createMonitor, matchesWrite } from '../src/monitor.ts';
 import { buildObservation, observe } from '../src/observe.ts';
 import { describeTarget, resolveTarget } from '../src/recording.ts';
+import { serveReport } from '../src/serve.ts';
 import { fillTemplate, templateKeys } from '../src/spec.ts';
 import { VERSION } from '../src/version.ts';
 import { startFixtureApp } from './fixtures/app.ts';
@@ -628,6 +629,33 @@ export default defineConfig({
         expect(existsSync(join(dir, 'jevwright.config.ts')) && existsSync(join(dir, 'jevwright/example.ts'))).toBe(true);
         expect(await cli(dir, ['init'])).toMatchObject({ code: 2, stderr: expect.stringContaining('Not overwriting') });
         expect(readFileSync(join(dir, '.gitignore'), 'utf8').match(/^\.jevwright\/$/gm)).toHaveLength(1);
+    });
+});
+
+describe('report server', () => {
+    it('serves the run directory only to the token holder, and nothing outside it', async () => {
+        const dir = await mkdtemp(join(tmpdir(), 'jevwright-serve-'));
+        await mkdir(join(dir, 'run'));
+        await writeFile(join(dir, 'run', 'report.html'), '<h1>report</h1>');
+        await writeFile(join(dir, 'secret.txt'), 'outside the run');
+        const server = await serveReport(join(dir, 'run'));
+        try {
+            const base = new URL(server.url);
+            const opened = await fetch(server.url);
+            expect([opened.status, await opened.text()]).toEqual([200, '<h1>report</h1>']);
+            // The token is traded for a cookie, so links inside the report work without it.
+            const cookie = opened.headers.get('set-cookie')!.split(';')[0]!;
+            const status = async (path: string, init: RequestInit = { headers: { cookie } }) => (await fetch(new URL(path, base), init)).status;
+            expect(await status('/report.html')).toBe(200);
+            expect(await status('/report.html', {})).toBe(401);
+            expect(await status('/..%2Fsecret.txt')).toBe(404);
+            expect(await status('/%E0%A4%A')).toBe(404);
+            expect(await status('/', { method: 'POST', headers: { cookie } })).toBe(405);
+            await expect(serveReport(join(dir, 'run'), Number(base.port))).rejects.toThrow(/already in use/);
+        } finally {
+            await server.close();
+            await rm(dir, { recursive: true, force: true });
+        }
     });
 });
 

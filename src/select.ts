@@ -44,22 +44,29 @@ export function assertValidTests(tests: ReadonlyArray<TestSpec<unknown>>): void 
             continue;
         }
         const where = typeof test.id === 'string' && test.id ? `"${test.id}"` : `Test ${index + 1}`;
-        if (typeof test.id !== 'string' || !ID.test(test.id)) {
-            problems.push(`${where}: id must be lowercase kebab-case, e.g. "profile-save"`);
-        } else if (seen.has(test.id)) {
-            problems.push(`${where}: another test has the same id`);
-        }
+        if (isId(test.id) && seen.has(test.id)) { problems.push(`${where}: another test has the same id`); }
         seen.add(test.id);
-        if (typeof test.title !== 'string' || !test.title.trim()) { problems.push(`${where}: title is required`); }
-        if (typeof test.risk !== 'string' || !test.risk.trim()) { problems.push(`${where}: risk is required (the business failure this test guards against)`); }
-        if (typeof test.start !== 'string' || !test.start.startsWith('/')) { problems.push(`${where}: start must be a path beginning with "/", e.g. "/settings"`); }
-        if (typeof test.steps !== 'function') { problems.push(`${where}: steps must be a function returning the steps`); }
-        for (const [key, value] of Object.entries(test.data ?? {})) {
-            if (typeof value !== 'string') { problems.push(`${where}: data.${key} must be a string`); }
-        }
-        problems.push(...undefinedKeys(test).map(key => `${where}: a step uses {${key}}, but data has no "${key}"`));
+        problems.push(...fieldProblems(test).map(problem => `${where}: ${problem}`));
     }
     if (problems.length) { throw new JevwrightError(`Invalid tests:\n  ${problems.join('\n  ')}`); }
+}
+
+const isId = (value: unknown): value is string => typeof value === 'string' && ID.test(value);
+const isText = (value: unknown): value is string => typeof value === 'string' && value.trim() !== '';
+
+/** What is wrong with one test's own fields, each phrased to follow the test's name. */
+function fieldProblems(test: TestSpec<unknown>): string[] {
+    const problems: string[] = [];
+    if (!isId(test.id)) { problems.push('id must be lowercase kebab-case, e.g. "profile-save"'); }
+    if (!isText(test.title)) { problems.push('title is required'); }
+    if (!isText(test.risk)) { problems.push('risk is required (the business failure this test guards against)'); }
+    if (typeof test.start !== 'string' || !test.start.startsWith('/')) { problems.push('start must be a path beginning with "/", e.g. "/settings"'); }
+    if (typeof test.steps !== 'function') { problems.push('steps must be a function returning the steps'); }
+    for (const [key, value] of Object.entries(test.data ?? {})) {
+        if (typeof value !== 'string') { problems.push(`data.${key} must be a string`); }
+    }
+    problems.push(...undefinedKeys(test).map(key => `a step uses {${key}}, but data has no "${key}"`));
+    return problems;
 }
 
 /**

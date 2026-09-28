@@ -1,9 +1,9 @@
 import type { ModelProvider } from './models.ts';
 import type { Env, TestSpec } from './spec.ts';
+import { createJiti } from 'jiti';
 import { existsSync } from 'node:fs';
 import { dirname, isAbsolute, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { createJiti } from 'jiti';
 import { z } from 'zod';
 import { JevwrightError } from './errors.ts';
 import { originProblem } from './origin.ts';

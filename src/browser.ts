@@ -80,30 +80,34 @@ function launchError(error: unknown): unknown {
     return error;
 }
 
+/**
+ * Runs in the page (Playwright serializes it, so it must not reference anything outside itself): the DOM
+ * mutation clock for settle(). Inline-style and SVG attribute churn is animation, and <head> churn (animated
+ * favicons, meta tags) is not page content; either would keep an animated page from ever looking quiet.
+ */
+const watchMutations = () => {
+    const describe = (record: MutationRecord) => {
+        const element = record.target instanceof Element ? record.target : record.target.parentElement;
+        const tag = element ? `${element.tagName.toLowerCase()}${element.id ? `#${element.id}` : ''}${typeof element.className === 'string' && element.className ? `.${element.className.trim().split(/\s+/)[0]}` : ''}` : '?';
+        return `${record.type}${record.attributeName ? `:${record.attributeName}` : ''} <${tag}>`;
+    };
+    Reflect.set(window, '__jevwrightMutatedAt', performance.now());
+    const observer = new MutationObserver((records) => {
+        const content = records.find(record => !(record.type === 'attributes' && (record.attributeName === 'style' || record.target instanceof SVGElement))
+            && !(document.head && document.head.contains(record.target)));
+        if (!content) { return; }
+        Reflect.set(window, '__jevwrightMutatedAt', performance.now());
+        Reflect.set(window, '__jevwrightLastMutation', describe(content));
+    });
+    const start = () => observer.observe(document, { subtree: true, childList: true, attributes: true, characterData: true });
+    if (document.documentElement) { start(); } else { addEventListener('DOMContentLoaded', start); }
+};
+
 export async function newTestContext(browser: Browser, options: { viewport: { width: number; height: number }; dialogs: 'accept' | 'dismiss'; baseURL?: string; locale?: string; timezone?: string; onDialog?: (detail: string) => void }): Promise<BrowserContext> {
     // `baseURL` lets test code call `page.goto('/path')` and `page.request.get('/api/...')` with relative URLs.
     const context = await browser.newContext({ viewport: options.viewport, serviceWorkers: 'block', acceptDownloads: false, locale: options.locale ?? 'en-US', timezoneId: options.timezone ?? 'UTC', ...(options.baseURL ? { baseURL: options.baseURL } : {}) });
     context.setDefaultTimeout(10_000);
-    // DOM mutation clock for settle(). Inline-style and SVG attribute churn is animation, and
-    // <head> churn (animated favicons, meta tags) is not page content; either would keep an
-    // animated page from ever looking quiet.
-    await context.addInitScript(() => {
-        const describe = (record: MutationRecord) => {
-            const element = record.target instanceof Element ? record.target : record.target.parentElement;
-            const tag = element ? `${element.tagName.toLowerCase()}${element.id ? `#${element.id}` : ''}${typeof element.className === 'string' && element.className ? `.${element.className.trim().split(/\s+/)[0]}` : ''}` : '?';
-            return `${record.type}${record.attributeName ? `:${record.attributeName}` : ''} <${tag}>`;
-        };
-        Reflect.set(window, '__jevwrightMutatedAt', performance.now());
-        const observer = new MutationObserver((records) => {
-            const content = records.find(record => !(record.type === 'attributes' && (record.attributeName === 'style' || record.target instanceof SVGElement))
-                && !(document.head && document.head.contains(record.target)));
-            if (!content) { return; }
-            Reflect.set(window, '__jevwrightMutatedAt', performance.now());
-            Reflect.set(window, '__jevwrightLastMutation', describe(content));
-        });
-        const start = () => observer.observe(document, { subtree: true, childList: true, attributes: true, characterData: true });
-        if (document.documentElement) { start(); } else { addEventListener('DOMContentLoaded', start); }
-    });
+    await context.addInitScript(watchMutations);
     context.on('page', (page) => {
         page.on('dialog', (dialog) => {
             options.onDialog?.(`${dialog.type()} "${dialog.message().slice(0, 120)}" ${options.dialogs === 'accept' ? 'accepted' : 'dismissed'}`);

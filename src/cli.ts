@@ -142,16 +142,9 @@ interface Pass { mode: RunMode; retries: number; record: boolean }
 
 async function runCommand(flags: Flags, io: CliIO): Promise<number> {
     const loaded = await loadConfig({ cwd: io.cwd, path: flags.config });
-    const { config } = loaded;
-    const mode = parseMode(flags.mode);
-    const passes = passesFor(flags, mode, config.retries ?? 1);
-    const tests = selectTests(config.tests, flags);
-    const needsModels = !flags['dry-run'] && passes.some(pass => pass.mode !== 'replay');
-    const models = modelOptions(loaded, io.env);
-    if (needsModels && !models) {
-        throw new JevwrightError('No model key found. Set OPENROUTER_API_KEY (or VERCEL_AI_GATEWAY_API_KEY), or pass one with --env-file. '
-            + 'Without a key, --mode replay runs recordings only and --dry-run checks fixtures and start pages.');
-    }
+    const passes = passesFor(flags, parseMode(flags.mode), loaded.config.retries ?? 1);
+    const tests = selectTests(loaded.config.tests, flags);
+    const models = requiredModels(loaded, flags, passes, io.env);
     const log = (line: string) => io.stderr(`${line}\n`);
     const controller = new AbortController();
     const unbind = bindCancellationSignals(controller, log);
@@ -160,38 +153,8 @@ async function runCommand(flags: Flags, io: CliIO): Promise<number> {
         const translationKeys = await loadTranslationKeys(loaded);
         const app = await startApp(loaded, flags, tests, controller.signal, log, (stop) => { teardown = stop; });
         if (controller.signal.aborted) { return 130; }
-        const options: Omit<SuiteOptions, 'mode' | 'retries' | 'updateRecordings'> = {
-            baseURL: app.baseURL,
-            allowedOrigins: config.allowedOrigins,
-            outputDir: loaded.outputDir,
-            recordingsDir: loaded.recordingsDir,
-            concurrency: parseCount(flags.concurrency, '--concurrency', 1) ?? config.concurrency,
-            maxCostUsd: parseCost(flags['max-cost']) ?? config.maxCostUsd ?? 1,
-            headless: !flags.headed,
-            signal: controller.signal,
-            ...(needsModels && models ? { models } : {}),
-            probe: flags.probe,
-            dryRun: flags['dry-run'],
-            failOnIssues: config.failOnIssues,
-            translationKeys,
-            viewport: config.viewport,
-            locale: config.locale,
-            timezone: config.timezone,
-            env: app.env,
-            command: `${config.command ?? 'npx jevwright'} run ${reproducibleArgs(flags)}`.trim(),
-            ...(app.metadata ? { metadata: app.metadata } : {}),
-            log,
-        };
-        for (const [index, pass] of passes.entries()) {
-            // Replay never calls the models it is given; the engine drops them for that mode.
-            const summary = await runSuite(tests, { ...options, mode: pass.mode, retries: pass.retries, updateRecordings: pass.record });
-            if (app.serverLog) { await writeFile(join(summary.directory, 'server.log'), await app.serverLog()).catch(() => undefined); }
-            io.stdout(summaryLine(summary, passes.length > 1 ? `pass ${index + 1}/${passes.length} (${pass.mode}${pass.record ? ', recording' : ''}): ` : '', io.cwd));
-            if (controller.signal.aborted) { return 130; }
-            // Replaying the recording of a failed first run proves nothing.
-            if (summary.totals.failed > 0) { return 1; }
-        }
-        return 0;
+        const options = suiteOptions(loaded, flags, app, { ...(models ? { models } : {}), translationKeys, signal: controller.signal, log });
+        return await runPasses(tests, passes, options, app, io);
     } catch (error) {
         if (controller.signal.aborted) { return 130; }
         throw error;
@@ -199,6 +162,54 @@ async function runCommand(flags: Flags, io: CliIO): Promise<number> {
         if (teardown) { await runTeardown(teardown, log); }
         unbind();
     }
+}
+
+/** The model settings a run needs: none when every pass replays or it is a dry run; otherwise a missing key is an error. */
+function requiredModels(loaded: LoadedConfig, flags: Flags, passes: readonly Pass[], env: CliIO['env']): SuiteOptions['models'] {
+    if (flags['dry-run'] || passes.every(pass => pass.mode === 'replay')) { return undefined; }
+    const models = modelOptions(loaded, env);
+    if (!models) {
+        throw new JevwrightError('No model key found. Set OPENROUTER_API_KEY (or VERCEL_AI_GATEWAY_API_KEY), or pass one with --env-file. '
+            + 'Without a key, --mode replay runs recordings only and --dry-run checks fixtures and start pages.');
+    }
+    return models;
+}
+
+/** Runs the passes in order and returns the exit code. A failed pass ends the run: replaying the recording of a failed first run proves nothing. */
+async function runPasses(tests: LoadedConfig['config']['tests'], passes: readonly Pass[], options: Omit<SuiteOptions, 'mode' | 'retries' | 'updateRecordings'>, app: Omit<SetupResult, 'teardown'>, io: CliIO): Promise<number> {
+    for (const [index, pass] of passes.entries()) {
+        // Replay never calls the models it is given; the engine drops them for that mode.
+        const summary = await runSuite(tests, { ...options, mode: pass.mode, retries: pass.retries, updateRecordings: pass.record });
+        if (app.serverLog) { await writeFile(join(summary.directory, 'server.log'), await app.serverLog()).catch(() => undefined); }
+        io.stdout(summaryLine(summary, passes.length > 1 ? `pass ${index + 1}/${passes.length} (${pass.mode}${pass.record ? ', recording' : ''}): ` : '', io.cwd));
+        if (options.signal?.aborted) { return 130; }
+        if (summary.totals.failed > 0) { return 1; }
+    }
+    return 0;
+}
+
+/** What every pass of `run` shares: the config and flags, resolved against the started app. */
+function suiteOptions(loaded: LoadedConfig, flags: Flags, app: Omit<SetupResult, 'teardown'>, run: Pick<SuiteOptions, 'models' | 'translationKeys' | 'signal' | 'log'>): Omit<SuiteOptions, 'mode' | 'retries' | 'updateRecordings'> {
+    const { config } = loaded;
+    return {
+        ...run,
+        baseURL: app.baseURL,
+        allowedOrigins: config.allowedOrigins,
+        outputDir: loaded.outputDir,
+        recordingsDir: loaded.recordingsDir,
+        concurrency: parseCount(flags.concurrency, '--concurrency', 1) ?? config.concurrency,
+        maxCostUsd: parseCost(flags['max-cost']) ?? config.maxCostUsd ?? 1,
+        headless: !flags.headed,
+        probe: flags.probe,
+        dryRun: flags['dry-run'],
+        failOnIssues: config.failOnIssues,
+        viewport: config.viewport,
+        locale: config.locale,
+        timezone: config.timezone,
+        env: app.env,
+        command: `${config.command ?? 'npx jevwright'} run ${reproducibleArgs(flags)}`.trim(),
+        ...(app.metadata ? { metadata: app.metadata } : {}),
+    };
 }
 
 /** How long teardown may take before the CLI stops waiting; a hung stop must not hang the run. */

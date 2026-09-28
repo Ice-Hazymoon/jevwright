@@ -94,7 +94,7 @@ const WHEN = [
     /\d{4}年\d{1,2}月\d{1,2}日/g, // 2026年9月28日
     new RegExp(`\\b${MONTH}\\s+\\d{1,2}(?:,?\\s+\\d{4})?\\b`, 'gi'), // Sep 28, 2026
     new RegExp(`\\b\\d{1,2}\\s+${MONTH}(?:\\s+\\d{4})?\\b`, 'gi'), // 28 Sept 2026
-    /\b\d{1,2}:\d{2}(?::\d{2})?(?:\s?[AaPp]\.?[Mm]\b\.?)?/g, // 14:05, 2:05 PM
+    /\b\d{1,2}:\d{2}(?::\d{2})?(?:\s?[ap]\.?m\b\.?)?/gi, // 14:05, 2:05 PM
     /\b(?:\d+|an?)\s+(?:second|minute|hour|day|week|month|year)s?\s+ago\b|\b(?:just now|yesterday|today)\b/gi, // 3 minutes ago
 ];
 

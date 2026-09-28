@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { readFile, realpath } from 'node:fs/promises';
+import type { IncomingMessage, Server, ServerResponse } from 'node:http';
 import { createServer } from 'node:http';
 import { extname, join, resolve, sep } from 'node:path';
 import { JevwrightError } from './errors.ts';
@@ -19,27 +20,41 @@ export async function serveReport(directory: string, port = 0): Promise<{ url: s
         response.setHeader('Referrer-Policy', 'no-referrer');
         if (request.method !== 'GET' && request.method !== 'HEAD') { response.writeHead(405).end(); return; }
         const url = new URL(request.url ?? '/', 'http://localhost');
-        const authorized = url.searchParams.get('token') === token || (request.headers.cookie ?? '').split(/;\s*/).includes(`jevwright=${token}`);
-        if (!authorized) { response.writeHead(401).end('Unauthorized'); return; }
+        if (!isAuthorized(request, url, token)) { response.writeHead(401).end('Unauthorized'); return; }
         if (url.searchParams.has('token')) { response.setHeader('Set-Cookie', `jevwright=${token}; HttpOnly; SameSite=Strict; Path=/`); }
-        const relative = decodeURIComponent(url.pathname === '/' ? '/report.html' : url.pathname);
-        try {
-            const file = await realpath(join(root, relative));
-            if (file !== root && !file.startsWith(root + sep)) { response.writeHead(404).end(); return; }
-            response.writeHead(200, { 'Content-Type': TYPES[extname(file)] ?? 'application/octet-stream' }).end(await readFile(file));
-        } catch {
-            response.writeHead(404).end();
-        }
+        await sendFile(response, root, url.pathname === '/' ? '/report.html' : url.pathname);
     });
-    await new Promise<void>((resolveListen, reject) => { server.once('error', reject); server.listen(port, '127.0.0.1', resolveListen); }).catch((error: NodeJS.ErrnoException) => {
-        throw error.code === 'EADDRINUSE' || error.code === 'EACCES'
-            ? new JevwrightError(`Cannot serve on port ${port} (${error.code === 'EADDRINUSE' ? 'already in use' : 'permission denied'}); pick another with --port, or leave it out for a free one`)
-            : error;
-    });
+    await listen(server, port);
     const address = server.address();
     if (!address || typeof address === 'string') { throw new Error('Report server did not bind'); }
     return {
         url: `http://127.0.0.1:${address.port}/?token=${token}`,
         close: () => new Promise<void>((resolveClose) => { server.close(() => resolveClose()); server.closeAllConnections(); }),
     };
+}
+
+/** The URL's token, or the cookie the first request traded it for. */
+function isAuthorized(request: IncomingMessage, url: URL, token: string): boolean {
+    return url.searchParams.get('token') === token || (request.headers.cookie ?? '').split(/;\s*/).includes(`jevwright=${token}`);
+}
+
+/** A file under `root` after resolving symlinks, so nothing outside the run directory is served; anything else is a 404. */
+async function sendFile(response: ServerResponse, root: string, pathname: string): Promise<void> {
+    try {
+        const file = await realpath(join(root, decodeURIComponent(pathname)));
+        if (file !== root && !file.startsWith(root + sep)) { response.writeHead(404).end(); return; }
+        response.writeHead(200, { 'Content-Type': TYPES[extname(file)] ?? 'application/octet-stream' }).end(await readFile(file));
+    } catch {
+        response.writeHead(404).end();
+    }
+}
+
+async function listen(server: Server, port: number): Promise<void> {
+    try {
+        await new Promise<void>((resolveListen, reject) => { server.once('error', reject); server.listen(port, '127.0.0.1', resolveListen); });
+    } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code !== 'EADDRINUSE' && code !== 'EACCES') { throw error; }
+        throw new JevwrightError(`Cannot serve on port ${port} (${code === 'EADDRINUSE' ? 'already in use' : 'permission denied'}); pick another with --port, or leave it out for a free one`);
+    }
 }

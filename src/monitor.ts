@@ -1,5 +1,5 @@
 import type { WriteExpectation, WriteRecord } from './spec.ts';
-import type { BrowserContext, ConsoleMessage, Page, Request } from 'playwright';
+import type { BrowserContext, ConsoleMessage, Page, Request, Response } from 'playwright';
 
 export type IssueKind = 'page-error' | 'asset-load' | 'app-unreachable' | 'console-error' | 'hydration-mismatch' | 'http-5xx' | 'http-4xx' | 'request-failed' | 'raw-i18n-key' | 'text-anomaly' | 'ui-error' | 'semantic' | 'accessibility';
 export type Severity = 'high' | 'medium' | 'low';
@@ -156,7 +156,7 @@ export function createMonitor(context: BrowserContext, options: MonitorOptions) 
     context.on('page', watchPage);
     for (const page of context.pages()) { watchPage(page); }
 
-    context.on('request', (request) => {
+    const onRequest = (request: Request) => {
         const type = request.resourceType();
         if (changesPage(type, ofApp(request.url()))) { inflight.set(request, Date.now()); }
         if (!ofApp(request.url()) || (type !== 'fetch' && type !== 'xhr')) { return; }
@@ -165,10 +165,11 @@ export function createMonitor(context: BrowserContext, options: MonitorOptions) 
         const record: WriteRecord = { id: ++writeId, step, method, path: new URL(request.url()).pathname, status: 'pending' };
         writes.push(record);
         byRequest.set(request, record);
-    });
+    };
+    context.on('request', onRequest);
     // Judged once headers arrive: the body can still be cut off (a navigation right after, save → reload, or an
     // opaque cross-origin response), and then `requestfinished` never fires for that request.
-    context.on('response', (response) => {
+    const onResponse = (response: Response) => {
         const request = response.request();
         const record = byRequest.get(request);
         if (record?.status === 'pending') { record.status = response.status(); }
@@ -185,8 +186,9 @@ export function createMonitor(context: BrowserContext, options: MonitorOptions) 
         } else if (status >= 400 && status !== 401 && REPORTED_4XX.has(request.resourceType()) && !expected(request.method(), path, status, record?.step)) {
             add({ kind: 'http-4xx', severity: 'medium', message: line });
         }
-    });
-    context.on('requestfinished', async (request) => {
+    };
+    context.on('response', onResponse);
+    const onRequestFinished = async (request: Request) => {
         inflight.delete(request);
         const record = byRequest.get(request);
         const response = record && await request.response().catch(() => null);
@@ -194,7 +196,8 @@ export function createMonitor(context: BrowserContext, options: MonitorOptions) 
             record.status = response.status();
             record.durationMs = Math.round(request.timing().responseEnd);
         }
-    });
+    };
+    context.on('requestfinished', onRequestFinished);
     const onRequestFailed = (request: Request) => {
         inflight.delete(request);
         const record = byRequest.get(request);

@@ -214,68 +214,81 @@ export async function runSuite(specs: ReadonlyArray<TestSpec<unknown>>, options:
         const maxAttempts = 1 + Math.max(0, manifest.retries);
         for (let attempt = 1; attempt <= maxAttempts; attempt++) {
             if (signal.aborted) { break; }
-            log(`▶ ${spec.id}${attempt > 1 ? ` (attempt ${attempt})` : ''}`);
-            const { result, recording: steps } = await runTestAttempt(spec, {
-                browser,
-                origin,
-                allowedOrigins,
-                env: options.env,
-                runId,
-                directory,
-                attempt,
-                signal,
-                models,
-                runBudget,
-                recording,
-                fresh: mode === 'ai',
-                probe: options.probe,
-                dryRun: options.dryRun,
-                translationKeys,
-                viewport: options.viewport,
-                locale: options.locale,
-                timezone: options.timezone,
-                failOnIssues: options.failOnIssues,
-                log: line => log(`[${spec.id}] ${line}`),
-            });
+            const { result, saved } = await runAttempt(spec, recording, attempt);
             attempts.push(result);
-            log(`${result.status === 'passed' ? '✓' : '✗'} ${spec.id} ${result.status}${result.cause ? ` (${result.cause})` : ''} ${(result.durationMs / 1000).toFixed(1)}s — ${result.summary}`);
-            const learned = result.recording.ai + result.recording.healed > 0;
-            if (steps && learned && !options.dryRun && (options.updateRecordings ?? mode !== 'replay') && store.enabled) {
-                await store.save({ version: 1, test: spec.id, updatedAt: new Date().toISOString(), steps });
-                recordingUpdated = true;
-            }
+            recordingUpdated ||= saved;
             if (isFinalAttempt(result, spec, runBudget)) { break; }
         }
-        const last = attempts.at(-1);
         // Cancelled while the recording loaded, before any attempt started.
-        if (!last) { return skipped(spec, 'Run cancelled before this test started'); }
-        const failures = attempts.filter(attempt => attempt.status === 'failed' && !isCancelled(attempt));
-        const status = finalStatus(last, failures, spec);
-        const usage = emptyUsage();
-        for (const attempt of attempts) { addUsage(usage, attempt.models); }
-        const issues = mergeIssues(attempts.flatMap(attempt => attempt.issues));
-        return {
-            id: spec.id,
-            module: spec.module,
-            title: spec.title,
-            risk: spec.risk,
-            tags: spec.tags ?? [],
-            status,
-            ...(status === 'passed' || status === 'skipped' ? {} : { cause: (failures.at(-1) ?? last).cause }),
-            ...(status === 'skipped' ? { skipReason: last.summary } : {}),
-            summary: status === 'flaky' ? `Passed on attempt ${attempts.length} after: ${failures[0]!.summary}` : last.summary,
-            ...(failures.length ? { reproduced: `${failures.length}/${attempts.length}` } : {}),
-            attempts,
-            issues,
-            models: usage,
-            durationMs: attempts.reduce((sum, attempt) => sum + attempt.durationMs, 0),
-            recordingUpdated,
-            ...(spec.knownIssue ? { knownIssue: spec.knownIssue } : {}),
-        };
+        if (!attempts.length) { return skipped(spec, 'Run cancelled before this test started'); }
+        return testResult(spec, attempts, recordingUpdated);
+    }
+
+    /** One logged attempt; whatever it learned (AI or healed steps) is saved to the recording. */
+    async function runAttempt(spec: TestSpec<unknown>, recording: TestRecording | undefined, attempt: number): Promise<{ result: AttemptResult; saved: boolean }> {
+        log(`▶ ${spec.id}${attempt > 1 ? ` (attempt ${attempt})` : ''}`);
+        const { result, recording: steps } = await runTestAttempt(spec, {
+            browser,
+            origin,
+            allowedOrigins,
+            env: options.env,
+            runId,
+            directory,
+            attempt,
+            signal,
+            models,
+            runBudget,
+            recording,
+            fresh: mode === 'ai',
+            probe: options.probe,
+            dryRun: options.dryRun,
+            translationKeys,
+            viewport: options.viewport,
+            locale: options.locale,
+            timezone: options.timezone,
+            failOnIssues: options.failOnIssues,
+            log: line => log(`[${spec.id}] ${line}`),
+        });
+        log(`${result.status === 'passed' ? '✓' : '✗'} ${spec.id} ${result.status}${result.cause ? ` (${result.cause})` : ''} ${(result.durationMs / 1000).toFixed(1)}s — ${result.summary}`);
+        const learned = result.recording.ai + result.recording.healed > 0;
+        const keep = options.updateRecordings ?? mode !== 'replay';
+        if (!steps || !learned || options.dryRun || !keep || !store.enabled) { return { result, saved: false }; }
+        await store.save({ version: 1, test: spec.id, updatedAt: new Date().toISOString(), steps });
+        return { result, saved: true };
     }
 }
 
-const isCancelled = (attempt: AttemptResult) => attempt.cancelled === true;
+/** A test's outcome over its attempts (at least one). */
+function testResult(spec: TestSpec<unknown>, attempts: AttemptResult[], recordingUpdated: boolean): TestResult {
+    const last = attempts.at(-1)!;
+    const failures = attempts.filter(attempt => attempt.status === 'failed' && !isCancelled(attempt));
+    const status = finalStatus(last, failures, spec);
+    const usage = emptyUsage();
+    for (const attempt of attempts) { addUsage(usage, attempt.models); }
+    return {
+        id: spec.id,
+        module: spec.module,
+        title: spec.title,
+        risk: spec.risk,
+        tags: spec.tags ?? [],
+        status,
+        ...(status === 'passed' || status === 'skipped' ? {} : { cause: (failures.at(-1) ?? last).cause }),
+        ...(status === 'skipped' ? { skipReason: last.summary } : {}),
+        summary: status === 'flaky' ? `Passed on attempt ${attempts.length} after: ${failures[0]!.summary}` : last.summary,
+        ...(failures.length ? { reproduced: `${failures.length}/${attempts.length}` } : {}),
+        attempts,
+        issues: mergeIssues(attempts.flatMap(attempt => attempt.issues)),
+        models: usage,
+        durationMs: attempts.reduce((sum, attempt) => sum + attempt.durationMs, 0),
+        recordingUpdated,
+        ...(spec.knownIssue ? { knownIssue: spec.knownIssue } : {}),
+    };
+}
+
+/** Stopped by Ctrl-C: not a failure of the test, so it never counts as a flaky retry. */
+function isCancelled(attempt: AttemptResult): boolean {
+    return attempt.cancelled === true;
+}
 
 /** True once another attempt cannot change the outcome, so the retry loop should stop. */
 function isFinalAttempt(result: AttemptResult, spec: TestSpec<unknown>, runBudget: RunBudget | undefined): boolean {

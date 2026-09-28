@@ -18,7 +18,6 @@ import type { Browser, BrowserContext, Page } from 'playwright';
  * }
  * ```
  */
-// eslint-disable-next-line ts/no-empty-object-type -- filled in by module augmentation
 export interface Register {}
 
 /** What the config's `setup` returned as `env` (`unknown` until `Register` declares it). */
