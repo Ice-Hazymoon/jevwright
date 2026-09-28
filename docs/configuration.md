@@ -2,7 +2,9 @@
 
 ## The config file
 
-`jevwright` looks for `jevwright.config.ts` (or `.mts`, `.js`, `.mjs`) in the current directory; `--config <file>` points elsewhere. The file and the tests it imports load without a build step.
+`jevwright` looks for `jevwright.config.ts` (or `.mts`, `.js`, `.mjs`) in the current directory; `--config <file>` points elsewhere. The file and the tests it imports load without a build step:
+- Under Node, [jiti](https://github.com/unjs/jiti) loads them. Subpath imports from `package.json` (`#lib/*`) work; tsconfig `paths` aliases do not.
+- Under Bun (`bunx --bun jevwright`), Bun loads them itself, so tsconfig `paths` work too.
 
 ```ts
 import { defineConfig } from '@hazymoon/jevwright';

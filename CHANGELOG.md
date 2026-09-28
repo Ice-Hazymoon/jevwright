@@ -12,6 +12,6 @@ First release.
 - Before a run starts, the tests, the config and the app's reachability are checked, and problems are reported with what to fix.
 - `jevwright` CLI: `run`, `list`, `init`, `report` and `serve`. Exit codes: 0 no failure, 1 a test failed, 2 a usage, config or setup error, 3 an internal error, 130 interrupted.
   - `run` supports `--new` (record, then replay), `--dry-run`, filters, `--env-file` and `--base-url`.
-- `jevwright.config.ts` has `setup` and `teardown` for a disposable app per run. `env` reaches fixtures and steps and is typed through `Register`.
+- `jevwright.config.ts` loads without a build step: through jiti under Node, through Bun's own loader (with tsconfig `paths`) under Bun. It has `setup` and `teardown` for a disposable app per run. `env` reaches fixtures and steps and is typed through `Register`.
 - Reports: `report.html`, `report.md` with a reproduce command per failure, `summary.json`, `run.json`, screenshots and Playwright traces.
 - Model gateways: OpenRouter and Vercel AI Gateway. Cost is capped per run (`maxCostUsd`) and model calls per test attempt.

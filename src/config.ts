@@ -2,6 +2,7 @@ import type { ModelProvider } from './models.ts';
 import type { Env, TestSpec } from './spec.ts';
 import { existsSync } from 'node:fs';
 import { dirname, isAbsolute, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { createJiti } from 'jiti';
 import { z } from 'zod';
 import { JevwrightError } from './errors.ts';
@@ -134,6 +135,15 @@ const schema = z.object({
 }).strict();
 
 /**
+ * Bun runs TypeScript itself and honours tsconfig `paths`, so under Bun the config loads through Bun; elsewhere
+ * jiti transpiles it.
+ */
+async function importConfig(file: string): Promise<object> {
+    if (process.versions.bun) { return await import(pathToFileURL(file).href) as object; }
+    return createJiti(import.meta.url, { interopDefault: true, moduleCache: false }).import<object>(file);
+}
+
+/**
  * Finds and loads the config: `path` when given, else the first `jevwright.config.{ts,mts,js,mjs}` in `cwd`.
  * TypeScript configs and the test files they import load without a build step.
  */
@@ -144,7 +154,7 @@ export async function loadConfig(options: { cwd?: string; path?: string } = {}):
     if (!existsSync(file)) { throw new JevwrightError(`Config file not found: ${file}`); }
     let module: object;
     try {
-        module = await createJiti(import.meta.url, { interopDefault: true, moduleCache: false }).import<object>(file);
+        module = await importConfig(file);
     } catch (error) {
         throw new JevwrightError(`Could not load ${file}:\n  ${error instanceof Error ? error.message : String(error)}`);
     }
