@@ -85,7 +85,7 @@ function launchError(error: unknown): unknown {
  * mutation clock for settle(). Inline-style and SVG attribute churn is animation, and <head> churn (animated
  * favicons, meta tags) is not page content; either would keep an animated page from ever looking quiet.
  */
-const watchMutations = () => {
+function watchMutations() {
     const describe = (record: MutationRecord) => {
         const element = record.target instanceof Element ? record.target : record.target.parentElement;
         const tag = element ? `${element.tagName.toLowerCase()}${element.id ? `#${element.id}` : ''}${typeof element.className === 'string' && element.className ? `.${element.className.trim().split(/\s+/)[0]}` : ''}` : '?';
@@ -101,7 +101,7 @@ const watchMutations = () => {
     });
     const start = () => observer.observe(document, { subtree: true, childList: true, attributes: true, characterData: true });
     if (document.documentElement) { start(); } else { addEventListener('DOMContentLoaded', start); }
-};
+}
 
 export async function newTestContext(browser: Browser, options: { viewport: { width: number; height: number }; dialogs: 'accept' | 'dismiss'; baseURL?: string; locale?: string; timezone?: string; onDialog?: (detail: string) => void }): Promise<BrowserContext> {
     // `baseURL` lets test code call `page.goto('/path')` and `page.request.get('/api/...')` with relative URLs.

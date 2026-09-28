@@ -1,6 +1,6 @@
+import type { IncomingMessage, Server, ServerResponse } from 'node:http';
 import { randomBytes } from 'node:crypto';
 import { readFile, realpath } from 'node:fs/promises';
-import type { IncomingMessage, Server, ServerResponse } from 'node:http';
 import { createServer } from 'node:http';
 import { extname, join, resolve, sep } from 'node:path';
 import { JevwrightError } from './errors.ts';

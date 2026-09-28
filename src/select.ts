@@ -30,6 +30,8 @@ export function selectTests<T extends TestSpec<unknown>>(tests: readonly T[], fi
 }
 
 const ID = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const isId = (value: unknown): value is string => typeof value === 'string' && ID.test(value);
+const isText = (value: unknown): value is string => typeof value === 'string' && value.trim() !== '';
 
 /**
  * Catches authoring mistakes before anything starts: missing fields, duplicate or unsafe ids (an id names its
@@ -50,9 +52,6 @@ export function assertValidTests(tests: ReadonlyArray<TestSpec<unknown>>): void 
     }
     if (problems.length) { throw new JevwrightError(`Invalid tests:\n  ${problems.join('\n  ')}`); }
 }
-
-const isId = (value: unknown): value is string => typeof value === 'string' && ID.test(value);
-const isText = (value: unknown): value is string => typeof value === 'string' && value.trim() !== '';
 
 /** What is wrong with one test's own fields, each phrased to follow the test's name. */
 function fieldProblems(test: TestSpec<unknown>): string[] {
