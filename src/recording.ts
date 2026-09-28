@@ -82,12 +82,30 @@ function sameIdentity(a: Pick<PageElement, 'role' | 'name' | 'near' | 'context'>
     return a.role === b.role && a.name === b.name && stable(a.near) === stable(b.near) && stable(a.context) === stable(b.context);
 }
 
+const MONTH = '(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|June?|July?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\\.?';
+
 /**
- * Surrounding text without what changes on every run: URLs (origin port, short codes) and generated ids
- * (8+ characters mixing letters and digits). Row labels and short numbers ("Order #1001") still tell rows apart.
+ * Dates and times as apps print them; a row's "Created" column changes every day a recording is replayed.
+ * Applied in order: "1 Sep 27, 2026" (a count, then a date) must lose "Sep 27, 2026", not "1 Sep".
+ */
+const WHEN = [
+    /\b\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?\b/g, // 2026-09-28, 2026-09-28T14:05:00Z
+    /\b\d{4}\/\d{1,2}\/\d{1,2}\b|\b\d{1,2}\/\d{1,2}\/\d{2,4}\b|\b\d{1,2}\.\d{1,2}\.\d{4}\b/g, // 2026/9/28, 9/28/2026, 28.09.2026
+    /\d{4}年\d{1,2}月\d{1,2}日/g, // 2026年9月28日
+    new RegExp(`\\b${MONTH}\\s+\\d{1,2}(?:,?\\s+\\d{4})?\\b`, 'gi'), // Sep 28, 2026
+    new RegExp(`\\b\\d{1,2}\\s+${MONTH}(?:\\s+\\d{4})?\\b`, 'gi'), // 28 Sept 2026
+    /\b\d{1,2}:\d{2}(?::\d{2})?(?:\s?[AaPp]\.?[Mm]\b\.?)?/g, // 14:05, 2:05 PM
+    /\b(?:\d+|an?)\s+(?:second|minute|hour|day|week|month|year)s?\s+ago\b|\b(?:just now|yesterday|today)\b/gi, // 3 minutes ago
+];
+
+/**
+ * Surrounding text without what changes between runs: URLs (origin port, short codes), dates and times, and
+ * generated ids (8+ characters mixing letters and digits). Row labels and short numbers ("Order #1001") still
+ * tell rows apart.
  */
 function stable(text: string | undefined): string {
-    return (text ?? '').replace(/\bhttps?:\/\/\S+/g, '<url>').replace(/\b(?=[\w-]*\d)(?=[\w-]*[a-z])[\w-]{8,}\b/gi, '<id>');
+    const timeless = WHEN.reduce((current, pattern) => current.replace(pattern, '<when>'), (text ?? '').replace(/\bhttps?:\/\/\S+/g, '<url>'));
+    return timeless.replace(/\b(?=[\w-]*\d)(?=[\w-]*[a-z])[\w-]{8,}\b/gi, '<id>');
 }
 
 /**

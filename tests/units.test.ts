@@ -326,6 +326,29 @@ describe('recording targets', () => {
         expect(resolveTarget(target, observation([next[1]!, next[0]!]))?.context).toContain('Launch link');
     });
 
+    it('matches a recorded row whose text carries the date or time it was recorded', () => {
+        const campaigns = (when: string, first = 'Existing campaign', second = 'Autumn launch') => [
+            element(0, { name: 'Rename campaign', context: `row "${first} 1 0 ${when} Rename campaign…" › table "Campaigns"` }),
+            element(1, { name: 'Rename campaign', context: `row "${second} 1 1 ${when} Rename campaign…" › table "Campaigns"` }),
+        ];
+        const replays: Array<[recorded: string, today: string]> = [
+            ['2026-09-27', '2026-09-28'],
+            ['Sep 27, 2026', 'Sep 28, 2026'],
+            ['27 September 2026', '28 September 2026'],
+            ['9/27/2026', '9/28/2026'],
+            ['2026年9月27日', '2026年9月28日'],
+            ['10:15 AM', '9:02 PM'],
+            ['3 minutes ago', '2 hours ago'],
+        ];
+        for (const [recorded, today] of replays) {
+            const target = describeTarget(campaigns(recorded)[1]!, observation(campaigns(recorded)));
+            expect(resolveTarget(target, observation(campaigns(today)))?.context, recorded).toContain('Autumn launch');
+        }
+        // Numbers that are not dates still tell rows apart.
+        const markets = campaigns('', 'Market 12', 'Market 13');
+        expect(resolveTarget(describeTarget(markets[1]!, observation(markets)), observation([markets[1]!, markets[0]!]))?.context).toContain('Market 13');
+    });
+
     it('refuses to guess among look-alikes when the recorded context is gone', () => {
         const target = describeTarget(rows[1]!, observation(rows));
         expect(resolveTarget(target, observation([rows[0]!, rows[2]!]))).toBeUndefined();
