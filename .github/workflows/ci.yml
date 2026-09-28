@@ -1,0 +1,87 @@
+name: CI
+
+on:
+    push:
+        branches: [main]
+    pull_request:
+
+permissions:
+    contents: read
+
+jobs:
+    node:
+        name: Node ${{ matrix.node }}
+        runs-on: ubuntu-latest
+        strategy:
+            fail-fast: false
+            matrix:
+                node: [22, 24]
+        steps:
+            -   uses: actions/checkout@v4
+            -   uses: actions/setup-node@v4
+                with:
+                    node-version: ${{ matrix.node }}
+            -   run: npm install --no-audit --no-fund
+            -   run: npx playwright install --with-deps chromium
+            -   run: npm run typecheck
+            # Offline: a local fixture app and scripted models. No network, no API key.
+            -   run: npm test
+            -   run: npm run build
+            -   run: npm pack --dry-run
+
+    smoke:
+        name: Installed package
+        runs-on: ubuntu-latest
+        steps:
+            -   uses: actions/checkout@v4
+            -   uses: actions/setup-node@v4
+                with:
+                    node-version: 22
+            -   run: npm install --no-audit --no-fund
+            -   run: npm run build
+            -   run: npm pack
+            -   name: Install into a fresh project
+                run: |
+                    mkdir "$RUNNER_TEMP/smoke" && cd "$RUNNER_TEMP/smoke"
+                    npm init -y > /dev/null
+                    npm install --no-audit --no-fund "$GITHUB_WORKSPACE"/hazymoon-jevwright-*.tgz playwright
+                    npx playwright install --with-deps chromium
+            -   name: CLI without a key
+                working-directory: ${{ runner.temp }}/smoke
+                run: |
+                    npx jevwright --version
+                    npx jevwright init
+                    npx jevwright list
+                    set +e; npx jevwright run; code=$?; set -e
+                    test "$code" -eq 2 # no key: a clear error, exit 2
+            -   name: Dry run against a static page
+                working-directory: ${{ runner.temp }}/smoke
+                run: |
+                    mkdir -p site/settings/profile
+                    echo '<!doctype html><title>Profile</title><main><label>Display name <input></label><button>Save profile</button></main>' > site/settings/profile/index.html
+                    (cd site && python3 -m http.server 4173 --bind 127.0.0.1 > /dev/null 2>&1 &)
+                    sleep 1
+                    npx jevwright run --dry-run --base-url http://127.0.0.1:4173
+                    # The example test has no recording yet: replay must fail it, not pass it.
+                    set +e; npx jevwright run --mode replay --base-url http://127.0.0.1:4173; code=$?; set -e
+                    test "$code" -eq 1
+
+    bun:
+        name: Bun
+        runs-on: ubuntu-latest
+        steps:
+            -   uses: actions/checkout@v4
+            -   uses: oven-sh/setup-bun@v2
+            -   run: bun install
+            -   run: bunx playwright install --with-deps chromium
+            -   run: bun run typecheck
+            -   run: bun run build
+            -   run: npm pack
+            -   name: CLI on the Bun runtime
+                run: |
+                    mkdir "$RUNNER_TEMP/smoke" && cd "$RUNNER_TEMP/smoke"
+                    echo '{ "name": "smoke", "private": true }' > package.json
+                    bun add "$GITHUB_WORKSPACE"/hazymoon-jevwright-*.tgz playwright
+                    bunx --bun jevwright --version
+                    bunx --bun jevwright init
+                    bunx --bun jevwright list
