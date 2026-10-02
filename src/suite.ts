@@ -166,7 +166,7 @@ export async function runSuite(specs: ReadonlyArray<TestSpec<unknown>>, options:
     const git = await gitState();
     const manifest = buildManifest({ runId, startedAt, git, mode, models, runBudget, specs, origin, options });
     const translationKeys = options.translationKeys ? new Set(options.translationKeys) : undefined;
-    await writeArtifact(join(directory, 'run.json'), `${JSON.stringify(manifest, null, 2)}\n`, redact);
+    await writeArtifact(join(directory, 'run.json'), manifest, redact);
     log(`jevwright run ${runId} (${mode}, ${specs.length} tests) → ${relative(process.cwd(), directory)}`);
 
     const blocked: string[] = [];
@@ -199,7 +199,7 @@ export async function runSuite(specs: ReadonlyArray<TestSpec<unknown>>, options:
         await close();
         manifest.finishedAt = new Date().toISOString();
         if (blocked.length) { manifest.blockedRequests = [...new Set(blocked)].slice(0, 50); }
-        await writeArtifact(join(directory, 'run.json'), `${JSON.stringify(manifest, null, 2)}\n`, redact);
+        await writeArtifact(join(directory, 'run.json'), manifest, redact);
         await publish();
     }
     // Stable order for reports: definition order, not completion order.

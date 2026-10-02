@@ -115,3 +115,54 @@ describe('secret boundaries', () => {
         await expect(readFile(path)).rejects.toMatchObject({ code: 'ENOENT' });
     });
 });
+
+it('redacts long, whitespace-normalized and nested-JSON values before observation clipping', async () => {
+    const { fixturePolicy } = await import('./support/fixture-policy.ts');
+    for (const raw of ['long-credential-prefix-' + 'x'.repeat(350) + '"tail', 'alpha  beta', 'abc"def']) {
+        const payload = secret(raw);
+        const scripted = scriptedModels(fixturePolicy);
+        const requests: unknown[] = [];
+        const model = scripted.settings.models!.evaluation;
+        const evaluate = model.doEvaluate.bind(model);
+        model.doEvaluate = async options => { requests.push(options); return evaluate(options); };
+        const summary = await runSuite([{ id: 'secret-clipping', title: 'Enter text', risk: 'Truncated secrets leak', start: '/profile', secrets: { bio: payload }, steps: () => [
+            act('Set the Bio to exactly {bio}'),
+            verify('exact field', async ({ page, secrets }) => ({ passed: await page.getByLabel('Bio').inputValue() === reveal(secrets.bio!), evidence: JSON.stringify(JSON.stringify(reveal(secrets.bio!))) })),
+        ] }], { baseURL: app.origin, outputDir: join(root, 'clipping'), models: scripted.settings, retries: 0, log: () => undefined });
+        expect(summary.results[0]?.status, summary.results[0]?.summary).toBe('passed');
+        const artifacts = (await files(summary.directory)).filter(path => !path.endsWith('.zip')).map(path => readFile(path, 'utf8'));
+        const outputs = [JSON.stringify(requests), ...await Promise.all(artifacts)];
+        const normalized = raw.replace(/\s+/g, ' ');
+        const prefix = raw.startsWith('long-') ? raw.slice(0, 40) : normalized;
+        for (const output of outputs) {
+            expect(output).not.toContain(prefix);
+            let encoded = raw;
+            for (let index = 0; index < 4; index++) { expect(output).not.toContain(encoded); encoded = JSON.stringify(encoded).slice(1, -1); }
+        }
+    }
+});
+
+it('keeps fixed result grammar intact when a secret coincides with it', async () => {
+    const summary = await runSuite([{ ...spec(), secrets: { state: secret('passed'), key: secret('models') }, steps: () => [verify('passes', () => true)] }], { baseURL: app.origin, outputDir: join(root, 'grammar'), mode: 'replay', retries: 1, log: () => undefined });
+    expect(summary.results[0]?.status).toBe('passed');
+    expect(summary.results[0]?.attempts).toHaveLength(1);
+    const saved = JSON.parse(await readFile(join(summary.directory, 'summary.json'), 'utf8'));
+    expect(saved.results[0].status).toBe('passed');
+    expect(saved.results[0].attempts[0].models.jevCalls).toBe(0);
+});
+
+it('deletes trace output when tracing.stop fails after writing it', async () => {
+    const summary = await runSuite([{ ...spec(), fixture: async ({ context }) => {
+        const stop = context.tracing.stop.bind(context.tracing);
+        context.tracing.stop = async options => { await stop(options); throw new Error('stop failed after saving'); };
+    }, steps: () => [verify('passes', () => true)] }], { baseURL: app.origin, outputDir: join(root, 'stop-failure'), mode: 'replay', log: () => undefined });
+    const attempt = summary.results[0]!.attempts[0]!;
+    expect(attempt.status).toBe('passed');
+    expect(attempt.traceWithheld).toBe(true);
+    await expect(readFile(join(attempt.directory, 'trace.zip'))).rejects.toMatchObject({ code: 'ENOENT' });
+});
+
+it('preserves usage errors from fixture-dependent secret assertions', async () => {
+    const dynamic: TestSpec<{ ready: boolean }> = { id: 'dynamic-secret', title: 'Dynamic definition', risk: 'Invalid assertion', start: '/secret', secrets: { apiKey: handle }, fixture: async () => ({ ready: true }), steps: fixture => fixture.ready ? [check('The field is {apiKey}')] : [] };
+    await expect(runSuite([dynamic], { baseURL: app.origin, outputDir: join(root, 'dynamic'), mode: 'replay', log: () => undefined })).rejects.toMatchObject({ name: 'JevwrightError', message: expect.stringContaining('check cannot reference') });
+});

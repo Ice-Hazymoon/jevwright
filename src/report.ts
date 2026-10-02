@@ -15,9 +15,9 @@ const CAUSE_LABEL: Record<string, string> = {
 
 export async function writeReports(summary: RunSummary, redact: Redactor = createRedactor()): Promise<void> {
     summary = redact.value(summary);
-    await writeArtifact(join(summary.directory, 'summary.json'), `${JSON.stringify(summary, null, 2)}\n`, redact);
-    await writeArtifact(join(summary.directory, 'report.md'), markdownReport(summary), redact);
-    await writeArtifact(join(summary.directory, 'report.html'), await htmlReport(summary), redact);
+    await writeArtifact(join(summary.directory, 'summary.json'), summary, redact);
+    await writeArtifact(join(summary.directory, 'report.md'), summary, redact, markdownReport);
+    await writeArtifact(join(summary.directory, 'report.html'), summary, redact, htmlReport);
 }
 
 export async function loadSummary(directory: string): Promise<RunSummary> {

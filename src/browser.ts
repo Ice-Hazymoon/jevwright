@@ -1,3 +1,4 @@
+import type { Redactor } from './secrets.ts';
 import type { Monitor } from './monitor.ts';
 import type { Browser, BrowserContext, Locator, Page } from 'playwright';
 import { createRequire } from 'node:module';
@@ -270,14 +271,15 @@ async function withCover(error: unknown, locator: Locator): Promise<unknown> {
         }
         // eslint-disable-next-line unicorn/prefer-dom-node-text-content -- innerText respects CSS visibility/layout; hidden text must not leak into the cover label
         const label = layer.getAttribute('aria-label') ?? layer.querySelector('h1, h2, h3, h4, [role=heading]')?.textContent ?? (layer as HTMLElement).innerText;
-        return (label ?? '').replace(/\s+/g, ' ').trim().slice(0, 80);
+        return label ?? '';
     }).catch(() => '');
     return cover ? new Error(`${error.message}\ncovered by: ${cover}`) : error;
 }
 
 /** Short, model-readable reason for a failed Playwright action. */
-export function actionError(error: unknown): string {
-    const message = error instanceof Error ? error.message : String(error);
+export function actionError(error: unknown, redact?: Redactor): string {
+    const raw = error instanceof Error ? error.message : String(error);
+    const message = redact?.text(raw) ?? raw;
     if (/intercepts pointer events/i.test(message)) {
         const cover = /\ncovered by: (.+)$/.exec(message)?.[1];
         return `click blocked: ${cover ? `"${cover}" covers the target` : 'another element covers the target'} (an open panel, drawer, dialog, overlay, toast or banner)`;

@@ -147,7 +147,8 @@ async function runCommand(flags: Flags, io: CliIO): Promise<number> {
     const passes = passesFor(flags, parseMode(flags.mode), loaded.config.retries ?? 1);
     const tests = selectTests(loaded.config.tests, flags);
     const models = requiredModels(loaded, flags, passes, io.env);
-    const log = (line: string) => io.stderr(`${line}\n`);
+    const redact = createRedactor(tests.flatMap(test => Object.values(test.secrets ?? {})));
+    const log = (line: string) => io.stderr(`${redact.text(line)}\n`);
     const controller = new AbortController();
     const unbind = bindCancellationSignals(controller, log);
     let teardown: SetupResult['teardown'];
