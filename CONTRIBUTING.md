@@ -72,3 +72,7 @@ reports sit beside it. Two net adverse flips for a test, or three across all tes
 No regression against a broken baseline does not establish correctness: inspect the absolute
 matched outcomes as well. Six or more pairs are required; unresolved intervals remain labeled at
 the pair limit. The temporary baseline worktree is removed on completion or the first interrupt.
+
+FW02 confines `forResults` to the suite, attempt and report writers. Model payloads use the generic
+redactor, including arbitrary object keys; user evidence/reference/metadata never inherits result grammar
+exemptions. Keep regression coverage for schema-shaped secrets and multiline text before splitting.

@@ -192,3 +192,9 @@ the original trace and sets `traceWithheld` without changing the test verdict.
 This is an accidental-disclosure boundary, not encrypted storage. It does not recognize arbitrary
 transformations such as truncation, case changes, hashes, or a secret split across nodes. Requests to
 allowed app origins still carry the tested input, as intended. Keep real credentials out of ordinary data.
+
+Secret-bearing attempts suppress screenshots from the start, including fixture-rendered echoes.
+Engine result grammar is preserved only for engine-owned fields. User evidence, reference and metadata
+objects are fully redacted, including their keys. CLI setup and translation callback errors are redacted
+before being printed. These protections cover declared values and their documented encodings, not
+arbitrary application hashes or application-truncated fragments of a secret.

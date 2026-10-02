@@ -2,7 +2,7 @@ import type { Issue } from './monitor.ts';
 import type { RunSummary, TestResult } from './suite.ts';
 import { readFile } from 'node:fs/promises';
 import { writeArtifact } from './artifacts.ts';
-import { createRedactor, type Redactor } from './secrets.ts';
+import { forResults, createRedactor, type Redactor } from './secrets.ts';
 import { join, relative } from 'node:path';
 
 const CAUSE_LABEL: Record<string, string> = {
@@ -14,7 +14,8 @@ const CAUSE_LABEL: Record<string, string> = {
 };
 
 export async function writeReports(summary: RunSummary, redact: Redactor = createRedactor()): Promise<void> {
-    summary = redact.value(summary);
+    redact = forResults(redact);
+    summary = redact.result(summary);
     await writeArtifact(join(summary.directory, 'summary.json'), summary, redact);
     await writeArtifact(join(summary.directory, 'report.md'), summary, redact, markdownReport);
     await writeArtifact(join(summary.directory, 'report.html'), summary, redact, htmlReport);

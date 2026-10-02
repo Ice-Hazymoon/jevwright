@@ -40,9 +40,10 @@ const grammar: Record<string, ReadonlySet<string>> = Object.fromEntries(Object.e
     cause: ['product', 'agent', 'environment', 'model', 'timeout'],
     source: ['replay', 'ai', 'healed', 'code', 'jev', 'llm'],
     mode: ['replay', 'auto', 'ai'],
-    kind: ['act', 'check', 'verify', 'goto', 'reload', 'back', 'run', 'jev', 'llm'],
+    kind: ['act', 'check', 'verify', 'goto', 'reload', 'back', 'run', 'jev', 'llm', 'page-error', 'asset-load', 'app-unreachable', 'console-error', 'hydration-mismatch', 'http-5xx', 'http-4xx', 'request-failed', 'raw-i18n-key', 'text-anomaly', 'ui-error', 'semantic', 'accessibility'],
     tool: ['click', 'type', 'select', 'press_enter', 'press_escape', 'wait', 'scroll', 'none', 'upload'],
     severity: ['low', 'medium', 'high'],
+    failure: ['assertion', 'invariant', 'exception', 'blocking-issue', 'not-recorded', 'timeout', 'expectation', 'not-found', 'ambiguous', 'stuck', 'max-actions', 'model', 'error-shown'],
 }).map(([key, values]) => [key, new Set(values)]));
 
 export function createRedactor(secrets: Iterable<Secret> = []) {
@@ -60,17 +61,20 @@ export function createRedactor(secrets: Iterable<Secret> = []) {
     }).sort((a, b) => b.length - a.length);
     const text = (input: string): string => variants(input.length).reduce((result, form) => result.replaceAll(form, '{secret}'), input);
     const contains = (input: string): boolean => variants(input.length).some(form => input.includes(form));
-    const value = (input: unknown, key = ''): unknown => {
-        if (typeof input === 'string') { return grammar[key]?.has(input) ? input : text(input); }
-        if (Array.isArray(input)) { return input.map(entry => value(entry)); }
+    const value = (input: unknown, engine = false, key = ''): unknown => {
+        if (typeof input === 'string') { return engine && grammar[key]?.has(input) ? input : text(input); }
+        if (Array.isArray(input)) { return input.map(entry => value(entry, engine)); }
         if (input && typeof input === 'object') {
             if (input instanceof Date) { return input.toJSON(); }
             if (isSecret(input)) { return '{secret}'; }
-            // Keys carry schema and model option identities, never a declared secret's value.
-            return Object.fromEntries(Object.entries(input).map(([name, entry]) => [name, value(entry, name)]));
+            // Evidence and metadata are user objects, even when their keys resemble result grammar.
+            return Object.fromEntries(Object.entries(input).map(([name, entry]) => [engine ? name : text(name), value(entry, engine && !['evidence', 'reference', 'metadata'].includes(name), name)]));
         }
         return input;
     };
-    return { text, contains, value: <T>(input: T): T => value(input) as T, active: forms.length > 0 };
+    return { text, contains, value: <T>(input: T): T => value(input) as T, result: <T>(input: T): T => value(input, true) as T, active: forms.length > 0 };
 }
 export type Redactor = ReturnType<typeof createRedactor>;
+
+/** Only engine-owned results use grammar preservation; model payloads never do. */
+export function forResults(redact: Redactor): Redactor { return { ...redact, value: redact.result }; }
