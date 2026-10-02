@@ -151,7 +151,8 @@ async function runCommand(flags: Flags, io: CliIO): Promise<number> {
     const passes = passesFor(flags, parseMode(flags.mode), loaded.config.retries ?? 1);
     const tests = selectTests(loaded.config.tests, flags);
     const models = requiredModels(loaded, flags, passes, io.env);
-    const log = (line: string) => io.stderr(`${line}\n`);
+    const redact = createRedactor(tests.flatMap(test => Object.values(test.secrets ?? {})));
+    const log = (line: string) => io.stderr(`${redact.text(line)}\n`);
     const controller = new AbortController();
     const unbind = bindCancellationSignals(controller, log);
     let teardown: SetupResult['teardown'];
@@ -431,7 +432,7 @@ Next:
 export function runFailureExitCode(summary: RunSummary, standalone = true): number {
     const failed = summary.results.filter(result => result.status === 'failed');
     if (!failed.length) { return 0; }
-    return standalone && summary.manifest.mode === 'replay' && failed.every(result => result.attempts.length > 0 && result.attempts.every(attempt => attempt.steps.some(step => step.failure === 'not-recorded') && attempt.steps.filter(step => step.status === 'failed').every(step => step.failure === 'not-recorded')))
+    return standalone && summary.manifest.mode === 'replay' && !summary.results.some(result => result.attempts.some(attempt => attempt.steps.some(step => step.endMismatch))) && failed.every(result => result.attempts.length > 0 && result.attempts.every(attempt => attempt.steps.some(step => step.failure === 'not-recorded') && attempt.steps.filter(step => step.status === 'failed').every(step => step.failure === 'not-recorded')))
         ? 4 : 1;
 }
 

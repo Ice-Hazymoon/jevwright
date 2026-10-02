@@ -4,8 +4,10 @@ import { readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { unzipSync, zipSync } from 'fflate';
 
 /** The sole text-artifact write boundary. Callers pass the run's complete redactor. */
-export async function writeArtifact(path: string, contents: string, redact: Redactor): Promise<void> {
-    await writeFile(path, redact.text(contents));
+export async function writeArtifact<T>(path: string, contents: T, redact: Redactor, render?: (safe: T) => string | Promise<string>): Promise<void> {
+    const safe = redact.value(contents);
+    const output = render ? await render(safe) : typeof safe === 'string' ? safe : `${JSON.stringify(safe, null, 2)}\n`;
+    await writeFile(path, output);
 }
 
 /** Text resources are redacted; binary resources containing a secret are discarded. Fail closed. */

@@ -6,10 +6,11 @@ import type { RecordedAction, StepRecording, TestRecording } from './recording.t
 import type { CheckOutcome, Env, FixtureContext, MaybePromise, RunContext, Step, TestSpec, Values, WriteRecord } from './spec.ts';
 import type { Browser, Page } from 'playwright';
 import { createDownloads } from './downloads.ts';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { writeArtifact, redactTrace } from './artifacts.ts';
 import { createRedactor, reveal, type Redactor } from './secrets.ts';
+import { JevwrightError } from './errors.ts';
 import { secretCheckProblems } from './select.ts';
 import { pageState, runAct } from './act.ts';
 import { newTestContext, settle } from './browser.ts';
@@ -167,7 +168,7 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
     try { acceptDownloads = spec.steps(undefined as F).some(step => step.kind === 'act' && !!step.expect?.download); } catch { /* Fixture-dependent declarations are known after fixture setup. */ }
     const context = await newTestContext(options.browser, { viewport, device: options.device, acceptDownloads, onDownload: downloads.receive, baseURL: options.origin, locale: options.locale, timezone: options.timezone, dialogs: spec.dialogs ?? 'accept', onDialog: detail => events.push(`dialog ${detail}`) });
     cleanups.push(async () => context.close());
-    const monitor = createMonitor(context, { origin: options.origin, allowedOrigins: options.allowedOrigins, expectedHttp: spec.expectedHttp, ignoreConsole: spec.ignoreConsole, i18nKeys: options.translationKeys, expectedAborts: spec.expectedAborts });
+    const monitor = createMonitor(context, { redact, origin: options.origin, allowedOrigins: options.allowedOrigins, expectedHttp: spec.expectedHttp, ignoreConsole: spec.ignoreConsole, i18nKeys: options.translationKeys, expectedAborts: spec.expectedAborts });
     await context.tracing.start({ screenshots: !secretKeys.size, snapshots: true, title: spec.id }).catch(() => undefined);
     const openedPages: Page[] = [];
     context.on('page', (opened) => {
@@ -227,13 +228,13 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
 
         const definition = spec.steps(fixture as F);
         const secretProblems = secretCheckProblems(definition, secrets);
-        if (secretProblems.length) { throw new Error(secretProblems.join("; ")); }
+        if (secretProblems.length) { throw new JevwrightError(secretProblems.join("; ")); }
         for (const [index, step] of definition.entries()) {
             if (step.kind === 'act' && step.expectError) { monitor.expectDuring(index, writeRules(step.expect)); }
         }
         if (options.dryRun) {
-            const observation = await observe(page);
-            await writeArtifact(join(directory, 'start-observation.json'), `${JSON.stringify(observation, null, 2)}\n`, redact);
+            const observation = await observe(page, { redact });
+            await writeArtifact(join(directory, 'start-observation.json'), observation, redact);
             await page.screenshot({ path: join(directory, 'start.jpg'), type: 'jpeg', quality: 60 }).catch(() => undefined);
             summary = `Dry run: fixture, start page and ${spec.invariants?.length ?? 0} invariant(s) OK; ${definition.length} steps not run`;
             throw new DryRunComplete();
@@ -332,6 +333,7 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
             previousLabel = label;
         }
     } catch (error) {
+        if (error instanceof JevwrightError) { throw error; }
         if (error instanceof DryRunComplete) {
             // Not a failure: the requested part of the test ran.
         } else if (error instanceof AttemptError) {
@@ -350,7 +352,11 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
         failedStep ??= steps.length;
     } finally {
         trace = join(directory, 'trace.zip');
-        await context.tracing.stop({ path: trace }).catch(() => { trace = undefined; });
+        await context.tracing.stop({ path: trace }).catch(async () => {
+            await rm(trace!, { force: true });
+            trace = undefined;
+            if (secretKeys.size) { traceWithheld = true; }
+        });
         if (trace && secretKeys.size && !await redactTrace(trace, redact)) { trace = undefined; traceWithheld = true; }
         for (const cleanup of cleanups.reverse()) {
             await Promise.race([Promise.resolve().then(cleanup), new Promise(resolve => setTimeout(resolve, 5000))]).catch((error: unknown) => events.push(`cleanup failed: ${message(error)}`));
@@ -395,8 +401,8 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
         ...(screenshotsWithheld ? { screenshotsWithheld: true } : {}),
         ...(traceWithheld ? { traceWithheld: true } : {}),
     };
-    await writeArtifact(join(directory, 'result.json'), `${JSON.stringify(result, null, 2)}\n`, redact);
-    return { result: redact.value(result), ...(status === 'passed' && counts.total ? { recording: newRecording } : {}) };
+    await writeArtifact(join(directory, 'result.json'), result, redact);
+    return { result, ...(status === 'passed' && counts.total ? { recording: newRecording } : {}) };
 
     async function runStep(step: Step<F>, index: number, result: StepResult, previousLabel: string | undefined): Promise<void> {
         switch (step.kind) {
@@ -475,26 +481,26 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
                 result.source = 'ai';
                 const claim = fillTemplate(step.assertion, data);
                 const reference = step.reference ? await step.reference(runContext(index)) : undefined;
-                let observed = await observe(page!);
+                let observed = await observe(page!, { redact });
                 let verdict = await judgeClaim(models, observed, claim, reference, signal);
                 const attempts: unknown[] = [verdict];
                 if (!verdict.passed || verdict.uncertain) {
                     // A second look after the page settles; UI updates can trail the data.
                     await page!.waitForTimeout(1500);
                     await settle(page!, monitor);
-                    observed = await observe(page!);
+                    observed = await observe(page!, { redact });
                     verdict = await judgeClaim(models, observed, claim, reference, signal);
                     attempts.push(verdict);
                 }
                 if (verdict.uncertain) {
-                    observed = await observe(page!);
+                    observed = await observe(page!, { redact });
                     const tie = await adjudicateClaim(models, observed, claim, reference, signal);
                     attempts.push({ adjudicated: tie });
                     verdict = { ...verdict, passed: tie.passed, note: tie.reason };
                 }
                 // Exactly what the claim was judged against, so a verdict can be audited without re-running.
                 result.observation = `step-${String(index + 1).padStart(2, '0')}-observation.json`;
-                await writeArtifact(join(directory, result.observation), `${JSON.stringify(pageState(observed), null, 2)}\n`, redact);
+                await writeArtifact(join(directory, result.observation), pageState(observed), redact);
                 result.evidence = { claim, ...(reference !== undefined ? { reference } : {}), verdicts: attempts };
                 if (!verdict.passed) {
                     result.status = 'failed';
@@ -598,5 +604,5 @@ async function screenshot(page: Page, directory: string, index: number): Promise
 }
 
 function message(error: unknown): string {
-    return error instanceof Error ? error.message.split('\n')[0]!.slice(0, 400) : String(error);
+    return error instanceof Error ? error.message : String(error);
 }

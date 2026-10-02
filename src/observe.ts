@@ -1,3 +1,4 @@
+import type { Redactor } from './secrets.ts';
 import type { Page } from 'playwright';
 import { createHash } from 'node:crypto';
 
@@ -80,6 +81,7 @@ const SECRET = /password|passcode|secret|token|api[\s_-]?key|otp|verification co
 export const LIMITS = { elements: 220, text: 4000, notice: 300, near: 80 };
 
 export interface ObserveOptions {
+    redact?: Redactor;
     viewport?: { width: number; height: number };
 }
 
@@ -92,7 +94,7 @@ export async function observe(page: Page, options: ObserveOptions = {}): Promise
     ]);
     const viewport = options.viewport ?? page.viewportSize() ?? { width: 1280, height: 900 };
     const values = await fieldValues(page, tree);
-    return buildObservation(tree, { url: page.url(), title, viewport, masked, values, inert });
+    return buildObservation(tree, { url: page.url(), title, viewport, masked, values, inert, redact: options.redact });
 }
 
 type Box = NonNullable<AriaNode['box']>;
@@ -156,8 +158,8 @@ async function maskedContent(page: Page): Promise<Array<{ name: string; text: st
             // A form field's innerText is its original markup, not what it holds now; its value comes from the snapshot.
             if (!name || element.closest('[aria-hidden="true"]') || element.matches('input, textarea, select')) { continue; }
             // eslint-disable-next-line unicorn/prefer-dom-node-text-content -- innerText respects CSS visibility/layout; hidden text must not leak into observations
-            const text = element.innerText.replace(/\s+/g, ' ').trim();
-            if (text.length > 1 && text !== name) { found.push({ name, text: text.slice(0, 300) }); }
+            const text = element.innerText;
+            if (text.length > 1 && text !== name) { found.push({ name, text }); }
         }
         return found;
     }).catch(() => []);
@@ -172,7 +174,8 @@ interface Walk {
 }
 
 /** Pure transformation, unit-tested with captured snapshots. */
-export function buildObservation(tree: unknown, page: { url: string; title: string; viewport: { width: number; height: number }; masked?: Array<{ name: string; text: string }>; values?: Record<string, string>; inert?: Box[] }): Observation {
+export function buildObservation(tree: unknown, page: { url: string; title: string; viewport: { width: number; height: number }; masked?: Array<{ name: string; text: string }>; values?: Record<string, string>; inert?: Box[]; redact?: Redactor }): Observation {
+    const clip = (text: string, max: number) => clipProtected(text, max, page.redact);
     const roots = normalize(tree);
     // Consumed in document order, so repeated labels ("Text" on every card) pair with their own content.
     const masked = [...(page.masked ?? [])];
@@ -211,7 +214,7 @@ export function buildObservation(tree: unknown, page: { url: string; title: stri
             if (node.role === 'heading' && (node.name || node.text)) { headings.push(clip(node.name || node.text || '', 120)); }
             const inMain = state.inMain || node.role === 'main' || node.role === 'dialog' || node.role === 'alertdialog';
             const inChrome = !inMain && (state.inChrome || node.role === 'navigation' || node.role === 'complementary' || node.role === 'banner' || node.role === 'contentinfo');
-            const containers = CONTAINERS.has(node.role) ? [containerLabel(node), ...state.containers].filter(Boolean) as string[] : state.containers;
+            const containers = CONTAINERS.has(node.role) ? [containerLabel(node, page.redact), ...state.containers].filter(Boolean) as string[] : state.containers;
             if (isElement(node)) {
                 const name = clean(node.name ?? '');
                 const exact = node.ref ? page.values?.[node.ref] : undefined;
@@ -227,7 +230,7 @@ export function buildObservation(tree: unknown, page: { url: string; title: stri
                     ref: node.disabled ? undefined : node.ref,
                     role: node.role,
                     name: label,
-                    ...(value !== undefined ? { value: SECRET.test(`${name} ${node.placeholder ?? ''}`) ? '••••' : clipValue(value, 300) } : {}),
+                    ...(value !== undefined ? { value: page.redact?.contains(value) ? value : SECRET.test(`${name} ${node.placeholder ?? ''}`) ? '••••' : clipValue(value, 300) } : {}),
                     ...(node.placeholder ? { placeholder: clip(node.placeholder, 80) } : {}),
                     ...(needsNear && near && near !== label ? { near } : {}),
                     ...contextOf(containers, label),
@@ -375,10 +378,10 @@ function contextOf(containers: string[], label: string): { context?: string } {
     return useful.length ? { context: useful.slice(0, 2).join(' › ') } : {};
 }
 
-function containerLabel(node: AriaNode): string | undefined {
-    if (node.name) { return `${node.role} "${clip(clean(node.name), 60)}"`; }
+function containerLabel(node: AriaNode, redact?: Redactor): string | undefined {
+    if (node.name) { return `${node.role} "${clipProtected(clean(node.name), 60, redact)}"`; }
     if (node.role === 'row' || node.role === 'listitem' || node.role === 'article') {
-        const text = clip(allText(node), 60);
+        const text = clipProtected(allText(node), 60, redact);
         return text ? `${node.role} "${text}"` : undefined;
     }
     return node.role === 'dialog' || node.role === 'alertdialog' ? node.role : undefined;
@@ -403,7 +406,8 @@ function clipValue(text: string, max: number): string {
     return value.length > max ? `${value.slice(0, max - 1)}…` : value;
 }
 
-function clip(text: string, max: number): string {
+function clipProtected(text: string, max: number, redact?: Redactor): string {
+    if (redact?.contains(text)) { return text; }
     const value = clean(text);
     return value.length > max ? `${value.slice(0, max - 1)}…` : value;
 }

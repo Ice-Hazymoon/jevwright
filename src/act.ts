@@ -124,7 +124,7 @@ export async function runAct(input: ActInput): Promise<ActResult> {
     const finish = async (result: Pick<ActResult, 'status' | 'source' | 'failure' | 'reason' | 'endMismatch' | 'replayOnTarget'>): Promise<ActResult> => {
         const recordedEnd = result.endMismatch ? input.recorded?.end
             : result.status === 'done' && start.observation
-                ? result.source === 'replay' && input.recorded?.end !== undefined ? input.recorded.end : recordEnd(start.observation, await observe(input.page), recording, input.redact)
+                ? result.source === 'replay' && input.recorded?.end !== undefined ? input.recorded.end : recordEnd(start.observation, await observe(input.page, { redact: input.redact }), recording, input.redact)
                 : undefined;
         return { ...result, actions, rounds, recording, end: { ...end, recorded: recordedEnd !== undefined && Boolean(recordedEnd.path || recordedEnd.appeared?.length || recordedEnd.gone?.length) }, ...(recordedEnd !== undefined ? { recordedEnd } : {}), ...(replayMiss ? { replayMiss } : {}) };
     };
@@ -174,7 +174,7 @@ async function awaitEnd(input: ActInput, end: import('./recording.ts').StepEnd):
     const deadline = performance.now() + 5000;
     for (;;) {
         input.signal.throwIfAborted();
-        const result = endMatches(end, await observe(input.page));
+        const result = endMatches(end, await observe(input.page, { redact: input.redact }));
         if (result.matched || performance.now() >= deadline) { return result; }
         await input.page.waitForTimeout(Math.min(500, Math.max(0, deadline - performance.now())));
     }
@@ -197,7 +197,7 @@ async function replaySteps(input: ActInput, recorded: RecordedAction[], actions:
         for (let attempt = 0; attempt < 4 && !element; attempt++) {
             if (attempt) { await input.page.waitForTimeout(600); }
             await settle(input.page, input.monitor);
-            observation = await observe(input.page);
+            observation = await observe(input.page, { redact: input.redact });
             start.observation ??= observation;
             start.notices ??= observation.notices;
             const match = action.target ? resolveTargetMatch(action.target, observation) : undefined;
@@ -220,8 +220,8 @@ async function replaySteps(input: ActInput, recorded: RecordedAction[], actions:
             actions.push({ tool: action.tool, element: element ? describeElement(element) : undefined, value: recordedLabel(action, value), source: 'replay', ok: true, durationMs: Math.round(performance.now() - started) });
             recording.push(action);
         } catch (error) {
-            actions.push({ tool: action.tool, element: element ? describeElement(element) : undefined, source: 'replay', ok: false, error: actionError(error), durationMs: Math.round(performance.now() - started) });
-            return { ok: false, reason: `${action.tool} failed: ${actionError(error)}` };
+            actions.push({ tool: action.tool, element: element ? describeElement(element) : undefined, source: 'replay', ok: false, error: actionError(error, input.redact), durationMs: Math.round(performance.now() - started) });
+            return { ok: false, reason: `${action.tool} failed: ${actionError(error, input.redact)}` };
         }
     }
     await settle(input.page, input.monitor);
@@ -254,7 +254,7 @@ async function decideLoop(input: ActInput, models: Models, actions: ActionRecord
     for (let round = 0; round <= maxActions; round++) {
         input.signal.throwIfAborted();
         await settle(input.page, input.monitor);
-        const observation = await observe(input.page);
+        const observation = await observe(input.page, { redact: input.redact });
         start.observation ??= observation;
         start.notices ??= observation.notices;
         const stale = start.notices.filter(notice => observation.notices.includes(notice));
@@ -295,7 +295,7 @@ async function decideLoop(input: ActInput, models: Models, actions: ActionRecord
         missing = completion.missing;
         if (missing.length && acted() && !valuesNudged) {
             valuesNudged = true;
-            history.push({ event: missingValuesEvent(input.values, missing, input.secretKeys) });
+            history.push({ event: missingValuesEvent(modelValues(input), missing, input.secretKeys) });
         }
         // The write the author declared is the step's effect; old notices on screen do not undo it. Typing can
         // trigger autosave writes before the text is complete, so only a submitting action ends the step here.
@@ -373,7 +373,7 @@ async function decideLoop(input: ActInput, models: Models, actions: ActionRecord
             if (escalations >= 2) { return { status: 'failed', failure: failureFor(escalate), reason: escalate }; }
             escalations++;
             const help = await escalateToLlm(input, models, observation, history, escalate, stale).catch((error: unknown) => ({ outcome: 'error' as const, reason: error instanceof Error ? error.message : String(error) }));
-            rounds.push({ round, source: 'llm', tool: help.outcome === 'act' ? help.decision.tool : help.outcome, ...(help.outcome === 'act' && help.decision.target ? { target: describeElement(help.decision.target) } : {}), note: `${escalate}; ${help.reason ?? ''}`.slice(0, 300), elements: observation.elements.length });
+            rounds.push({ round, source: 'llm', tool: help.outcome === 'act' ? help.decision.tool : help.outcome, ...(help.outcome === 'act' && help.decision.target ? { target: describeElement(help.decision.target) } : {}), note: (input.redact?.text(`${escalate}; ${help.reason ?? ''}`) ?? `${escalate}; ${help.reason ?? ''}`).slice(0, 300), elements: observation.elements.length });
             if (help.outcome === 'done') {
                 if (!saved) { return { status: 'failed', failure: 'expectation', reason: (await awaitExpectation(input, true)).reason }; }
                 if (missing.length) { return { status: 'failed', failure: 'stuck', reason: `${escalate}. Helper model said done, but ${neverEntered(missing)}` }; }
@@ -409,7 +409,7 @@ async function performDecision(input: ActInput, next: Decision, observation: Obs
         if (call.tool !== 'wait' && call.tool !== 'scroll') { recording.push(recordedDecision(next, call, observation)); }
     } catch (error) {
         record.ok = false;
-        record.error = actionError(error);
+        record.error = actionError(error, input.redact);
         input.log?.(`    ! ${record.error}`);
     }
     record.durationMs = Math.round(performance.now() - started);
@@ -830,7 +830,7 @@ export type { ChoiceAnswer };
 
 
 function modelValues(input: ActInput): Values {
-    return Object.fromEntries([...Object.entries(input.values).map(([key, value]) => [key, input.secretKeys?.has(key) ? '<secret value>' : value]), ...Object.entries(input.files ?? {}).map(([key, file]) => [key, `File: ${file.name}`])]);
+    return Object.fromEntries([...Object.entries(input.values).map(([key, value]) => [key, input.secretKeys?.has(key) ? '<secret value>' : input.redact?.text(value) ?? value]), ...Object.entries(input.files ?? {}).map(([key, file]) => [key, `File: ${input.redact?.text(file.name) ?? file.name}`])]);
 }
 
 function secretInput(input: ActInput, key: string | undefined, tool: Tool, element?: PageElement): boolean {
