@@ -19,3 +19,8 @@ export type { EndCheck } from './end-state.ts';
 
 export { secret, reveal } from './secrets.ts';
 export type { Secret } from './secrets.ts';
+
+export { file } from './files.ts';
+export type { FileRef } from './files.ts';
+export type { Device } from './devices.ts';
+export type { DownloadRecord } from './spec.ts';

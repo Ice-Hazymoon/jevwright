@@ -1,3 +1,5 @@
+import { resolveFiles } from './files.ts';
+import { resolveDevice, type Device } from './devices.ts';
 import type { ModelSettings, ModelUsage, RunBudget } from './models.ts';
 import type { Issue } from './monitor.ts';
 import type { TestRecording } from './recording.ts';
@@ -119,6 +121,9 @@ export interface SuiteOptions {
     /** The app's translation keys; one rendered verbatim on a page is reported as untranslated. */
     translationKeys?: Iterable<string>;
     /** Default 1280×900. */
+    rootDir?: string;
+    device?: Device;
+    deviceOverride?: Device;
     viewport?: { width: number; height: number };
     /** Browser locale. Default `en-US`. */
     locale?: string;
@@ -145,6 +150,8 @@ export interface SuiteOptions {
 export async function runSuite(specs: ReadonlyArray<TestSpec<unknown>>, options: SuiteOptions): Promise<RunSummary> {
     assertValidTests(specs);
     const redact = createRedactor(specs.flatMap(spec => Object.values(spec.secrets ?? {})));
+    const files = new Map(await Promise.all(specs.map(async spec => [spec.id, await resolveFiles(spec.files, options.rootDir)] as const)));
+    const devices = new Map(specs.map(spec => [spec.id, resolveDevice(options.deviceOverride ?? spec.device ?? options.device, options.viewport)]));
     const mode = options.mode ?? 'auto';
     if (mode !== 'replay' && !options.dryRun && !options.models) {
         throw new JevwrightError(`Mode "${mode}" needs \`models\`; use mode "replay" or \`dryRun\` to run without a model`);
@@ -211,7 +218,7 @@ export async function runSuite(specs: ReadonlyArray<TestSpec<unknown>>, options:
         if (spec.skip) { return skipped(spec, spec.skip); }
         let recording: TestRecording | undefined;
         try {
-            recording = await store.load(spec.id);
+            recording = await store.load(spec.id, devices.get(spec.id)!.key);
         } catch (error) {
             return notRun(spec, 'environment', `${error instanceof Error ? error.message : String(error)}. Fix or delete the file; the next auto run records the test again`);
         }
@@ -267,6 +274,8 @@ export async function runSuite(specs: ReadonlyArray<TestSpec<unknown>>, options:
             dryRun: options.dryRun,
             translationKeys,
             viewport: options.viewport,
+            device: devices.get(spec.id),
+            files: files.get(spec.id),
             locale: options.locale,
             timezone: options.timezone,
             failOnIssues: options.failOnIssues,
@@ -277,7 +286,7 @@ export async function runSuite(specs: ReadonlyArray<TestSpec<unknown>>, options:
         const learned = steps && (learnedRecording(recording, steps) || recording?.steps.some(entry => redact.contains(JSON.stringify(entry))));
         const keep = options.updateRecordings ?? mode !== 'replay';
         if (!steps || !learned || options.dryRun || !keep || !store.enabled) { return { result, saved: false, changed }; }
-        await store.save({ version: 1, test: spec.id, updatedAt: new Date().toISOString(), steps });
+        await store.save({ version: 1, test: spec.id, updatedAt: new Date().toISOString(), steps }, devices.get(spec.id)!.key);
         return { result, saved: true, changed };
     }
 }

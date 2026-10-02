@@ -65,6 +65,7 @@ function fieldProblems(test: TestSpec<unknown>): string[] {
     for (const [key, value] of Object.entries(test.data ?? {})) {
         if (typeof value !== 'string') { problems.push(`data.${key} must be a string`); }
     }
+    for (const key of Object.keys(test.files ?? {})) { if (key in (test.data ?? {}) || key in (test.secrets ?? {})) { problems.push(`files key ${key} is also defined in data or secrets`); } }
     for (const [key, value] of Object.entries(test.secrets ?? {})) {
         if (!isSecret(value)) { problems.push(`secrets.${key} must be a secret() handle`); }
         if (key in (test.data ?? {})) { problems.push(`data and secrets both define ${key}`); }
@@ -87,7 +88,7 @@ function undefinedKeys(test: TestSpec<unknown>): string[] {
     }
     if (!Array.isArray(steps)) { return []; }
     const templates = steps.flatMap(step => step?.kind === 'act' ? [step.instruction] : step?.kind === 'check' ? [step.assertion] : []);
-    return [...new Set(templates.flatMap(templateKeys))].filter(key => test.data?.[key] === undefined && test.secrets?.[key] === undefined);
+    return [...new Set(templates.flatMap(templateKeys))].filter(key => test.data?.[key] === undefined && test.secrets?.[key] === undefined && test.files?.[key] === undefined);
 }
 
 

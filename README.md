@@ -190,19 +190,18 @@ can be a product regression or a stale target and does not establish either on i
 
 - The engine can:
   - click, type, press Enter or Escape, and pick from a select;
+  - upload declared files and verify declared downloads;
+  - follow popups and return after they close;
   - scroll and wait;
   - hover to reveal controls;
   - double-click to probe duplicate submissions.
 - It cannot:
-  - upload files;
   - drag;
   - draw on a canvas;
-  - use the clipboard;
-  - download files;
-  - open several tabs.
+  - use the clipboard.
 
   When one of these is only a precondition, do it in a `fixture` or `run` step. When it is the behavior under test, use a scripted Playwright test.
-- The viewport is desktop only; it defaults to 1280×900 and has no touch support.
+- Desktop defaults to 1280×900. Use `device: "mobile"` for touch and a mobile user agent, or provide a custom device.
 - `check` is a model judgment. Exact values (money, multilingual text, line breaks) belong in `verify`.
 - Chromium only.
 

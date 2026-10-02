@@ -168,7 +168,7 @@ A failed test is retried (`retries`, default 1):
 - **Origin allowlist.** Every browser connection goes through a loopback proxy that only reaches `baseURL`'s origin and `allowedOrigins`, including redirects and WebSockets. Blocked destinations are listed in `run.json`. This is a guard rail for an autonomous agent, not a sandbox.
 - **Locked-down contexts.** Each test gets a fresh browser context:
   - service workers are blocked;
-  - downloads are cancelled;
+  - undeclared downloads are cancelled; declared downloads are saved for code verification with a 20 MiB limit;
   - native dialogs follow the test's `dialogs` setting.
 - **Report server.** `jevwright serve` binds to 127.0.0.1. It serves one run directory read-only, behind a random token that it trades for an HttpOnly cookie.
 - **Where your data goes.** Model requests carry the observed page: control names, values (passwords masked) and trimmed page text. They go only to the gateway you configure. Run tests against test data.

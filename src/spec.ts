@@ -1,5 +1,7 @@
 /* eslint-disable ts/method-signature-style -- fixture callbacks stay methods for parameter bivariance, see below */
 import type { Browser, BrowserContext, Page } from 'playwright';
+import type { FileRef } from './files.ts';
+import type { Device } from './devices.ts';
 import type { Secret } from './secrets.ts';
 
 /**
@@ -48,7 +50,10 @@ export interface WriteRecord {
     durationMs?: number;
 }
 
+export interface DownloadRecord { filename: string; path: string; bytes: number }
+
 export interface RunContext<F> {
+    readonly downloads: readonly DownloadRecord[];
     readonly page: Page;
     readonly context: BrowserContext;
     readonly fixture: F;
@@ -84,6 +89,7 @@ export interface Expectation {
     write?: WriteExpectation | readonly WriteExpectation[];
     /** The page URL (path + search) must match once the step ends. */
     url?: RegExp;
+    download?: { filename?: RegExp };
     timeoutMs?: number;
 }
 
@@ -161,6 +167,8 @@ export interface TestSpec<F = unknown> {
     data?: Values;
     /** Opaque values entered by code, withheld from models and artifacts. */
     secrets?: Readonly<Record<string, Secret>>;
+    files?: Readonly<Record<string, FileRef>>;
+    device?: Device;
     /** Prepares this test's own data and session (accounts, seed rows, cookies). Runs before the start page opens. */
     fixture?: (context: FixtureContext) => MaybePromise<F>;
     /** Wait until the application is interactive after the first navigation. */
@@ -220,7 +228,7 @@ export function defineTest<F>(spec: TestSpec<F>): TestSpec<F> {
 }
 
 /** Replace `{key}` with the quoted data value; unknown keys are an authoring error. */
-export function fillTemplate(template: string, data: Values, secrets: Readonly<Record<string, Secret>> = {}): string {
+export function fillTemplate(template: string, data: Values, secrets: Readonly<Record<string, unknown>> = {}): string {
     return template.replace(/\{(\w+)\}/g, (_, key: string) => {
         if (key in secrets) { return `{${key}}`; }
         const value = data[key];
@@ -236,7 +244,7 @@ export function templateKeys(template: string): string[] {
     return [...new Set(Array.from(template.matchAll(/\{(\w+)\}/g), match => match[1]!))];
 }
 
-export function describeStep(step: Step<unknown>, data: Values = {}, secrets: Readonly<Record<string, Secret>> = {}): string {
+export function describeStep(step: Step<unknown>, data: Values = {}, secrets: Readonly<Record<string, unknown>> = {}): string {
     switch (step.kind) {
         case 'act': return safeTemplate(step.instruction, data, secrets) + (step.double ? ' (double click)' : '');
         case 'check': return `Check: ${safeTemplate(step.assertion, data, secrets)}`;
@@ -248,7 +256,7 @@ export function describeStep(step: Step<unknown>, data: Values = {}, secrets: Re
     }
 }
 
-function safeTemplate(template: string, data: Values, secrets: Readonly<Record<string, Secret>>): string {
+function safeTemplate(template: string, data: Values, secrets: Readonly<Record<string, unknown>>): string {
     try {
         return fillTemplate(template, data, secrets);
     } catch {

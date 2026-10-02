@@ -65,6 +65,9 @@ export interface ActResult {
 }
 
 export interface ActInput {
+    files?: Readonly<Record<string, import('./files.ts').ResolvedFile>>;
+    hasTouch?: boolean;
+    downloadState?: () => { ok: boolean; violated?: boolean; reason?: string };
     page: Page;
     monitor: Monitor;
     models?: Models;
@@ -92,6 +95,7 @@ export interface ActInput {
 }
 
 const TOOLS: Record<Tool | 'none', string> = {
+    upload: 'Upload one of the declared files through the target file input or upload button',
     click: 'Click the target (button, link, tab, checkbox, switch, radio, menu item, option, card)',
     type: 'Type one of the given `task.values` into the target text field. The first typing into a field in this step replaces its content; typing a different value into it again continues at the cursor',
     press_enter: 'Press Enter in the target field (e.g. to submit a search or add an item)',
@@ -103,7 +107,7 @@ const TOOLS: Record<Tool | 'none', string> = {
 };
 /** Offered instead of `type` when the step names no values: the only thing to type is nothing. */
 const CLEAR = 'Clear the target text field, leaving it empty (this step gives no values to type)';
-const TARGETED = new Set<Tool>(['click', 'type', 'press_enter', 'select']);
+const TARGETED = new Set<Tool>(['click', 'type', 'press_enter', 'select', 'upload']);
 const SUBMITS = new Set<Tool>(['click', 'press_enter', 'select']);
 const FIELD_ROLES = new Set(['textbox', 'searchbox', 'combobox', 'spinbutton']);
 const THRESHOLDS = { doneAt: 0.5, sure: 0.85, target: 0.3, confirm: 0.65, likely: 0.45, error: 0.7, helperDone: 0.35 };
@@ -132,7 +136,7 @@ export async function runAct(input: ActInput): Promise<ActResult> {
             if (!expectation.ok) {
                 replayMiss = `expectation after replay: ${expectation.reason}`;
                 if (!input.models) { return finish({ status: 'failed', source: 'replay', failure: 'expectation', reason: replayMiss }); }
-            } else if (input.expect?.write || input.expect?.url || input.recorded.end === undefined) {
+            } else if (input.expect?.write || input.expect?.url || input.expect?.download || input.recorded.end === undefined) {
                 return finish({ status: 'done', source: 'replay' });
             } else {
                 end = await awaitEnd(input, input.recorded.end);
@@ -212,7 +216,7 @@ async function replaySteps(input: ActInput, recorded: RecordedAction[], actions:
         try {
             const sensitive = secretInput(input, action.valueKey, action.tool, element);
             if (action.template && templateKeys(action.template).some(key => input.secretKeys?.has(key))) { throw new Error('Secret input requires a single valueKey'); }
-            await perform(input.page, { sensitive, tool: action.tool, ref: element?.ref, locate: element && observation ? locateOf(element, observation) : undefined, value, double: action.double, ...(action.append ? { append: true } : {}) });
+            await perform(input.page, { hasTouch: input.hasTouch, filePath: uploadPath(input, action.tool, action.valueKey), sensitive, tool: action.tool, ref: element?.ref, locate: element && observation ? locateOf(element, observation) : undefined, value, double: action.double, ...(action.append ? { append: true } : {}) });
             actions.push({ tool: action.tool, element: element ? describeElement(element) : undefined, value: recordedLabel(action, value), source: 'replay', ok: true, durationMs: Math.round(performance.now() - started) });
             recording.push(action);
         } catch (error) {
@@ -296,7 +300,7 @@ async function decideLoop(input: ActInput, models: Models, actions: ActionRecord
         // The write the author declared is the step's effect; old notices on screen do not undo it. Typing can
         // trigger autosave writes before the text is complete, so only a submitting action ends the step here.
         const lastAction = actions.findLast(action => action.ok)?.tool;
-        if (input.expect?.write && saved && !missing.length && lastAction && SUBMITS.has(lastAction)) { return { status: 'done' }; }
+        if ((input.expect?.write || input.expect?.download) && saved && !missing.length && lastAction && SUBMITS.has(lastAction)) { return { status: 'done' }; }
         const canFinish = saved && !missing.length;
         const everything = acted() || round > 0;
 
@@ -395,10 +399,11 @@ async function performDecision(input: ActInput, next: Decision, observation: Obs
     const field = next.target ? describeElement(next.target) : undefined;
     const typing = typedLabel(next);
     const append = appends(next, actions, field, typing);
-    const call: ToolCall = { tool: next.tool as Tool, ref: next.target?.ref, locate: next.target ? locateOf(next.target, observation) : undefined, value: decidedValue(next, input.values), double: input.double && next.tool === 'click', ...(append ? { append } : {}) };
+    const call: ToolCall = { hasTouch: input.hasTouch, tool: next.tool as Tool, ref: next.target?.ref, locate: next.target ? locateOf(next.target, observation) : undefined, value: decidedValue(next, input.values), double: input.double && next.tool === 'click', ...(append ? { append } : {}) };
     const started = performance.now();
     const record: ActionRecord = { tool: call.tool, element: field, value: typing, source: next.source, ok: true, durationMs: 0 };
     try {
+        call.filePath = uploadPath(input, call.tool, next.valueKey);
         call.sensitive = secretInput(input, next.valueKey, call.tool, next.target);
         await perform(input.page, call);
         if (call.tool !== 'wait' && call.tool !== 'scroll') { recording.push(recordedDecision(next, call, observation)); }
@@ -602,6 +607,7 @@ function decisionQuestions(input: ActInput, observation: Observation, afterActio
     const withValues = hasValues ? ', with the given `task.values` (`task.values_entered`, when present, lists the ones code confirmed are exactly in a field)' : '';
     const actionable = observation.elements.filter(element => (element.ref || element.reveal) && !element.disabled);
     const tools: Partial<Record<Tool | 'none', string>> = { click: TOOLS.click };
+    if (Object.keys(input.files ?? {}).length && actionable.length) { tools.upload = TOOLS.upload; }
     if (actionable.some(element => FIELD_ROLES.has(element.role))) { tools.type = hasValues ? TOOLS.type : CLEAR; }
     if (actionable.some(element => FIELD_ROLES.has(element.role))) { tools.press_enter = TOOLS.press_enter; }
     if (observation.dialog || actionable.some(element => element.states?.includes('expanded'))) { tools.press_escape = TOOLS.press_escape; }
@@ -620,8 +626,8 @@ function decisionQuestions(input: ActInput, observation: Observation, afterActio
     if (actionable.length) {
         questions.target = { type: 'choice', instructions: 'Which entry of `page.elements` (by its `i`) should the next action toward `task.step` act on?', criteria: Object.fromEntries(actionable.slice(0, 250).map(element => [String(element.i), null])) };
     }
-    if (hasValues) {
-        questions.value = { type: 'choice', instructions: 'If the next action toward `task.step` types or selects something, which of `task.values` should it use? Prefer values not yet shown on `page` or listed in `task.values_entered`.', criteria: Object.fromEntries(Object.entries(modelValues(input)).map(([key, value]) => [key, value.slice(0, 200)])) };
+    if (hasValues || Object.keys(input.files ?? {}).length) {
+        questions.value = { type: 'choice', instructions: 'If the next action toward `task.step` types, selects or uploads something, which of `task.values` should it use? Prefer values not yet shown on `page` or listed in `task.values_entered`.', criteria: Object.fromEntries(Object.entries(modelValues(input)).map(([key, value]) => [key, value.slice(0, 200)])) };
     }
     if (input.probe) {
         questions.anomaly = { type: 'boolean', instructions: 'Ignoring whether `task.step` is finished, does `page` show something broken for a user: a crash or error screen, an error nobody asked for, raw code identifiers or placeholders, or malformed numbers, prices or dates?' };
@@ -658,7 +664,7 @@ function resolveDecision(observation: Observation, answers: Record<string, Answe
     if (resolved === 'select' && chosen?.options && valueKey !== undefined && !secretKeys?.has(valueKey) && !chosen.options.includes(values[valueKey] ?? '')) {
         return { tool: 'select', target: chosen, literal: bestOption(chosen.options, values[valueKey] ?? ''), source: 'jev' };
     }
-    return { tool: resolved, target: TARGETED.has(resolved as Tool) ? chosen : undefined, ...(resolved === 'type' || resolved === 'select' ? { valueKey } : {}), source: 'jev' };
+    return { tool: resolved, target: TARGETED.has(resolved as Tool) ? chosen : undefined, ...(resolved === 'type' || resolved === 'select' || resolved === 'upload' ? { valueKey } : {}), source: 'jev' };
 }
 
 function bestOption(options: string[], wanted: string): string {
@@ -764,6 +770,9 @@ async function awaitExpectation(input: ActInput, wait: boolean): Promise<Expecta
                 return { ok: false, violated: true, reason: `${last.method} ${last.path} returned ${last.status}, expected ${rule.status === undefined ? '2xx' : JSON.stringify(rule.status)}` };
             }
         }
+        const download = expectation.download ? input.downloadState?.() ?? { ok: false, reason: 'No download handler' } : { ok: true };
+        if (download.violated) { return download; }
+        if (!download.ok) { missing = download.reason; }
         const urlOk = !expectation.url || expectation.url.test(new URL(input.page.url()).pathname + new URL(input.page.url()).search);
         if (!missing && !pending && urlOk) { return { ok: true }; }
         if (Date.now() >= deadline) {
@@ -777,7 +786,7 @@ async function awaitExpectation(input: ActInput, wait: boolean): Promise<Expecta
 const helperSchema = z.object({
     reason: z.string().max(600),
     outcome: z.enum(['act', 'step_already_done', 'impossible']),
-    tool: z.enum(['click', 'type', 'press_enter', 'press_escape', 'select', 'scroll', 'wait']).nullable(),
+    tool: z.enum(['click', 'type', 'press_enter', 'press_escape', 'select', 'scroll', 'wait', 'upload']).nullable(),
     element: z.number().int().nullable(),
     value_key: z.string().nullable(),
     text: z.string().nullable(),
@@ -794,7 +803,7 @@ async function escalateToLlm(input: ActInput, models: Models, observation: Obser
     const target = answer.element !== null ? observation.elements[answer.element] : undefined;
     if (TARGETED.has(answer.tool) && ((!target?.ref && !target?.reveal) || target.disabled)) { return { outcome: 'impossible', reason: `helper chose an unusable element: ${answer.reason}` }; }
     const text = helperText(answer, input);
-    if ((answer.tool === 'type' || answer.tool === 'select') && !Object.keys(text).length) {
+    if ((answer.tool === 'type' || answer.tool === 'select' || answer.tool === 'upload') && !Object.keys(text).length) {
         return { outcome: 'impossible', reason: `helper proposed typing a value that is not in the step: ${answer.reason}` };
     }
     return { outcome: 'act', decision: { tool: answer.tool, target, ...text, source: 'llm' }, reason: answer.reason };
@@ -805,7 +814,7 @@ async function escalateToLlm(input: ActInput, models: Models, observation: Obser
  * one entry (two paragraphs with a blank line between them). Anything else would be invented data.
  */
 function helperText(answer: z.infer<typeof helperSchema>, input: ActInput): Pick<Decision, 'valueKey' | 'literal' | 'template'> {
-    if (answer.value_key !== null && answer.value_key in input.values) { return { valueKey: answer.value_key }; }
+    if (answer.value_key !== null && (answer.value_key in input.values || Object.hasOwn(input.files ?? {}, answer.value_key))) { return { valueKey: answer.value_key }; }
     if (answer.text === null || input.redact?.contains(answer.text) || templateKeys(answer.text).some(key => input.secretKeys?.has(key)) || answer.text.includes('<secret value>')) { return {}; }
     if (input.instruction.includes(answer.text)) { return { literal: answer.text }; }
     const template = valueTemplate(answer.text, input.values);
@@ -821,7 +830,7 @@ export type { ChoiceAnswer };
 
 
 function modelValues(input: ActInput): Values {
-    return Object.fromEntries(Object.entries(input.values).map(([key, value]) => [key, input.secretKeys?.has(key) ? '<secret value>' : value]));
+    return Object.fromEntries([...Object.entries(input.values).map(([key, value]) => [key, input.secretKeys?.has(key) ? '<secret value>' : value]), ...Object.entries(input.files ?? {}).map(([key, file]) => [key, `File: ${file.name}`])]);
 }
 
 function secretInput(input: ActInput, key: string | undefined, tool: Tool, element?: PageElement): boolean {
@@ -829,4 +838,13 @@ function secretInput(input: ActInput, key: string | undefined, tool: Tool, eleme
     if (tool !== 'type' || !element || element.disabled || !FIELD_ROLES.has(element.role)) { throw new Error('Secret input requires an enabled editable field and the type tool'); }
     input.onSecretInput?.();
     return true;
+}
+
+function uploadPath(input: ActInput, tool: Tool, key?: string): string | undefined {
+    if (tool !== 'upload') {
+        if (key && Object.hasOwn(input.files ?? {}, key)) { throw new Error('File keys require the upload tool'); }
+        return undefined;
+    }
+    if (!key || !Object.hasOwn(input.files ?? {}, key)) { throw new Error('Upload requires a declared file key'); }
+    return input.files![key]!.path;
 }

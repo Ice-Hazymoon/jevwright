@@ -40,7 +40,7 @@ export function initialState(): FixtureState {
 const style = '<style>body{font-family:sans-serif;margin:24px} .toast{position:fixed;right:16px;bottom:16px;background:#222;color:#fff;padding:8px 12px} label{display:block;margin-top:12px}</style>';
 
 function layout(title: string, body: string, script = ''): string {
-    return `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>${title}</title>${style}</head><body>
+    return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title>${style}</head><body>
 <nav aria-label="Sections"><a href="/profile">Profile</a> <a href="/settings">Settings</a> <a href="/items">Plans</a> <a href="/currency">Currency</a></nav>
 <main><h1>${title}</h1>${body}</main><div role="status" id="status"></div>
 <script>
@@ -57,6 +57,29 @@ function escapeHtml(text: string): string {
 function pages(state: FixtureState, url: URL): string | undefined {
     const bug = url.searchParams.get('bug');
     switch (url.pathname) {
+        case '/upload':
+            return layout('Avatar', '<label for="avatar">Choose avatar</label><input id="avatar" type="file" hidden><button id="choose">Upload avatar</button><button id="nothing">No chooser</button><label>Visible file<input type="file" id="visible"></label><output id="uploaded"></output>', `
+const avatar = document.getElementById('avatar');
+document.getElementById('choose').onclick = () => avatar.click();
+for (const field of [avatar, document.getElementById('visible')]) field.onchange = async () => { document.getElementById('uploaded').textContent = 'Uploaded ' + field.files[0].name + ': ' + await field.files[0].text(); };
+`);
+        case '/downloads':
+            return layout('Exports', '<button id="csv">Export CSV</button><button id="large">Export large</button>', `
+for (const [id, contents] of [['csv', 'name,value\\nAda,42'], ['large', 'x'.repeat(20 * 1024 * 1024 + 1)]]) {
+ document.getElementById(id).onclick = () => { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([contents])); a.download = id + '.csv'; a.click(); };
+}
+`);
+        case '/device':
+            return layout('Device', '<p>Server UA: ' + escapeHtml(url.searchParams.get('ua') ?? '') + '</p><style>@media(max-width:480px){#menu{display:none}#hamburger{display:block!important}}</style><button id="hamburger" style="display:none">Open menu</button><div id="menu"><button id="save">Choose plan</button></div><output id="events"></output>', `
+document.getElementById('hamburger').onclick = () => { document.getElementById('menu').style.display = 'block'; };
+document.getElementById('save').onclick = () => toast('Plan chosen');
+addEventListener('touchstart', () => document.getElementById('events').textContent = 'Touch received');
+`);
+        case '/popup-parent':
+            return layout('Parent', '<button onclick="window.open(\'/popup-child\')">Open child</button><button onclick="toast(\'Parent saved\')">Save parent</button>');
+        case '/popup-child':
+            return layout('Child', '<button onclick="window.close()">Close child</button>');
+
         case '/secret':
             return layout('API key', '<label>API key<input id="key"></label><button id="hint">Show hint</button><p id="help"></p><button id="save">Save key</button><button id="echo" hidden></button><output id="result"></output>', `
 document.getElementById('hint').onclick = () => { document.getElementById('help').textContent = 'Enter the API key'; };
@@ -242,6 +265,7 @@ export async function startFixtureApp() {
             setTimeout(() => response.writeHead(200, { 'content-type': 'text/javascript' }).end(BOARD_MODULE), 900);
             return;
         }
+        if (url.pathname === '/device') { url.searchParams.set('ua', request.headers['user-agent'] ?? ''); }
         const html = pages(state, url);
         if (!html) { response.writeHead(404).end('not found'); return; }
         response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(html);

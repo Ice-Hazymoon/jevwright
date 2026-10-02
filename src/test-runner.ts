@@ -5,6 +5,7 @@ import type { Issue } from './monitor.ts';
 import type { RecordedAction, StepRecording, TestRecording } from './recording.ts';
 import type { CheckOutcome, Env, FixtureContext, MaybePromise, RunContext, Step, TestSpec, Values, WriteRecord } from './spec.ts';
 import type { Browser, Page } from 'playwright';
+import { createDownloads } from './downloads.ts';
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { writeArtifact, redactTrace } from './artifacts.ts';
@@ -35,6 +36,7 @@ export interface StepResult {
     actions?: ActionRecord[];
     rounds?: Round[];
     writes: WriteRecord[];
+    downloads?: import('./spec.ts').DownloadRecord[];
     evidence?: unknown;
     error?: string;
     failure?: StepFailure;
@@ -114,6 +116,8 @@ export interface AttemptOptions {
     /** Stop after fixture, start page and initial invariants; saves the start observation. */
     dryRun?: boolean;
     translationKeys?: ReadonlySet<string>;
+    device?: import('./devices.ts').ResolvedDevice;
+    files?: Record<string, import('./files.ts').ResolvedFile>;
     viewport?: { width: number; height: number };
     locale?: string;
     timezone?: string;
@@ -143,6 +147,7 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
     const timeout = AbortSignal.timeout(spec.timeoutMs ?? 240_000);
     const signal = AbortSignal.any([options.signal, timeout]);
     const data: Values = spec.data ?? {};
+    const displayData = { ...data, ...Object.fromEntries(Object.entries(options.files ?? {}).map(([key, file]) => [key, file.name])) };
     const values = { ...data, ...Object.fromEntries(Object.entries(secrets).map(([key, handle]) => [key, reveal(handle)])) };
     const secretKeys = new Set(Object.keys(secrets));
     const viewport = options.viewport ?? { width: 1280, height: 900 };
@@ -156,11 +161,21 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
     let summary = 'All steps passed';
     let failedStep: number | undefined;
 
-    const context = await newTestContext(options.browser, { viewport, baseURL: options.origin, locale: options.locale, timezone: options.timezone, dialogs: spec.dialogs ?? 'accept', onDialog: detail => events.push(`dialog ${detail}`) });
+    const downloads = createDownloads(directory, signal);
+    cleanups.push(() => downloads.close());
+    let acceptDownloads = true;
+    try { acceptDownloads = spec.steps(undefined as F).some(step => step.kind === 'act' && !!step.expect?.download); } catch { /* Fixture-dependent declarations are known after fixture setup. */ }
+    const context = await newTestContext(options.browser, { viewport, device: options.device, acceptDownloads, onDownload: downloads.receive, baseURL: options.origin, locale: options.locale, timezone: options.timezone, dialogs: spec.dialogs ?? 'accept', onDialog: detail => events.push(`dialog ${detail}`) });
     cleanups.push(async () => context.close());
     const monitor = createMonitor(context, { origin: options.origin, allowedOrigins: options.allowedOrigins, expectedHttp: spec.expectedHttp, ignoreConsole: spec.ignoreConsole, i18nKeys: options.translationKeys, expectedAborts: spec.expectedAborts });
     await context.tracing.start({ screenshots: !secretKeys.size, snapshots: true, title: spec.id }).catch(() => undefined);
+    const openedPages: Page[] = [];
     context.on('page', (opened) => {
+        openedPages.push(opened);
+        opened.on('close', () => {
+            events.push('tab closed');
+            if (page === opened) { page = openedPages.findLast(candidate => !candidate.isClosed()); }
+        });
         if (page && opened !== page) {
             events.push(`new tab opened: ${shortUrl(opened.url())}`);
             page = opened;
@@ -179,6 +194,7 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
         env: options.env as Env,
         signal,
         writes: monitor.writes,
+        downloads: downloads.records,
         step: stepIndex,
     });
 
@@ -224,7 +240,7 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
         }
         nextAct = (index: number) => {
             const following = definition[index + 1];
-            return following?.kind === 'act' ? describeStep(following as Step<unknown>, data, secrets) : undefined;
+            return following?.kind === 'act' ? describeStep(following as Step<unknown>, displayData, secrets) : undefined;
         };
         /** A product-looking failure after AI-driven steps: the agent's, when a step acted on something it did not name. */
         const misstep = async (upTo: number): Promise<string | undefined> => {
@@ -243,7 +259,8 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
         for (const [index, step] of definition.entries()) {
             signal.throwIfAborted();
             monitor.setStep(index);
-            const label = describeStep(step as Step<unknown>, data, secrets);
+            downloads.setStep(index, step.kind === 'act' ? step.expect?.download : undefined);
+            const label = describeStep(step as Step<unknown>, displayData, secrets);
             const stepStarted = performance.now();
             const writesBefore = monitor.writes.length;
             const result: StepResult = { index, kind: step.kind, label, status: 'passed', durationMs: 0, url: shortUrl(page.url()), writes: [] };
@@ -260,13 +277,15 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
             await settle(page, monitor, { maxMs: 3000 }).catch(() => 0);
             await monitor.scanText(page);
             result.url = shortUrl(page.url());
+            await downloads.flush();
+            result.downloads = downloads.forStep(index);
             result.writes = monitor.writes.slice(writesBefore).map(write => ({ ...write }));
             const busy = [...new Set(monitor.settleCaps.filter(cap => cap.step === index).map(cap => cap.reason))];
             if (busy.length) { result.busy = busy.slice(0, 5); }
             result.durationMs = Math.round(performance.now() - stepStarted);
             result.screenshot = screenshotsWithheld ? undefined : await screenshot(page, directory, index);
             steps.push(result);
-            if (result.status === 'passed' && (step.kind === 'verify' || (step.kind === 'act' && (step.expect?.write || step.expect?.url)))) { deterministicChecks.push(index); }
+            if (result.status === 'passed' && (step.kind === 'verify' || (step.kind === 'act' && (step.expect?.write || step.expect?.url || step.expect?.download)))) { deterministicChecks.push(index); }
             log(`     ${STEP_MARK[result.status]} ${result.source ? `[${result.source}] ` : ''}${result.durationMs}ms${result.error ? ` — ${result.error}` : ''}`);
             if (result.status === 'failed') {
                 failedStep = index;
@@ -383,7 +402,7 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
         switch (step.kind) {
             case 'act': {
                 const keys = templateKeys(step.instruction);
-                const stepValues = Object.fromEntries(keys.map(key => [key, values[key]!]));
+                const stepValues = Object.fromEntries(keys.filter(key => Object.hasOwn(values, key)).map(key => [key, values[key]!]));
                 const key = stepKey(step);
                 const recorded = options.fresh ? undefined : options.recording?.steps.find(entry => entry.key === key);
                 if (!models && !recorded?.actions.length) {
@@ -395,13 +414,16 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
                 }
                 counts.total++;
                 const outcome = await runAct({
-                    page: page!,
+                    get page() { return page!; },
+                    files: Object.fromEntries(Object.entries(options.files ?? {}).filter(([key]) => keys.includes(key))),
+                    hasTouch: options.device?.hasTouch,
+                    downloadState: downloads.state,
                     monitor,
                     models,
                     signal,
                     stepIndex: index,
                     test: spec.title,
-                    instruction: fillTemplate(step.instruction, data, secrets),
+                    instruction: fillTemplate(step.instruction, displayData, secrets),
                     values: stepValues,
                     secretKeys,
                     redact,

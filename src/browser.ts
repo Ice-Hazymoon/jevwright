@@ -1,3 +1,4 @@
+import type { ResolvedDevice } from './devices.ts';
 import type { Monitor } from './monitor.ts';
 import type { Browser, BrowserContext, Locator, Page } from 'playwright';
 import { createRequire } from 'node:module';
@@ -103,9 +104,9 @@ function watchMutations() {
     if (document.documentElement) { start(); } else { addEventListener('DOMContentLoaded', start); }
 }
 
-export async function newTestContext(browser: Browser, options: { viewport: { width: number; height: number }; dialogs: 'accept' | 'dismiss'; baseURL?: string; locale?: string; timezone?: string; onDialog?: (detail: string) => void }): Promise<BrowserContext> {
+export async function newTestContext(browser: Browser, options: { viewport: { width: number; height: number }; dialogs: 'accept' | 'dismiss'; baseURL?: string; locale?: string; timezone?: string; device?: ResolvedDevice; acceptDownloads?: boolean; onDownload?: (download: import('playwright').Download) => void; onDialog?: (detail: string) => void }): Promise<BrowserContext> {
     // `baseURL` lets test code call `page.goto('/path')` and `page.request.get('/api/...')` with relative URLs.
-    const context = await browser.newContext({ viewport: options.viewport, serviceWorkers: 'block', acceptDownloads: false, locale: options.locale ?? 'en-US', timezoneId: options.timezone ?? 'UTC', ...(options.baseURL ? { baseURL: options.baseURL } : {}) });
+    const context = await browser.newContext({ ...(options.device ?? { viewport: options.viewport }), serviceWorkers: 'block', acceptDownloads: options.acceptDownloads ?? false, locale: options.locale ?? 'en-US', timezoneId: options.timezone ?? 'UTC', ...(options.baseURL ? { baseURL: options.baseURL } : {}) });
     context.setDefaultTimeout(10_000);
     await context.addInitScript(watchMutations);
     context.on('page', (page) => {
@@ -113,7 +114,7 @@ export async function newTestContext(browser: Browser, options: { viewport: { wi
             options.onDialog?.(`${dialog.type()} "${dialog.message()}" ${options.dialogs === 'accept' ? 'accepted' : 'dismissed'}`);
             void (options.dialogs === 'accept' ? dialog.accept() : dialog.dismiss()).catch(() => undefined);
         });
-        page.on('download', download => void download.cancel().catch(() => undefined));
+        page.on('download', download => options.onDownload ? options.onDownload(download) : void download.cancel().catch(() => undefined));
     });
     return context;
 }
@@ -146,7 +147,7 @@ export async function settle(page: Page, monitor: Pick<Monitor, 'pendingRequests
     return Date.now() - started;
 }
 
-export type Tool = 'click' | 'type' | 'press_enter' | 'press_escape' | 'select' | 'scroll' | 'wait';
+export type Tool = 'click' | 'type' | 'press_enter' | 'press_escape' | 'select' | 'scroll' | 'wait' | 'upload';
 
 export interface ToolCall {
     tool: Tool;
@@ -160,6 +161,8 @@ export interface ToolCall {
     append?: boolean;
     /** Fill atomically so trace snapshots cannot capture partial secret keystrokes. */
     sensitive?: boolean;
+    filePath?: string;
+    hasTouch?: boolean;
 }
 
 export async function perform(page: Page, call: ToolCall): Promise<void> {
@@ -174,7 +177,10 @@ export async function perform(page: Page, call: ToolCall): Promise<void> {
     switch (call.tool) {
         case 'click':
             try {
-                if (call.double) {
+                if (call.hasTouch) {
+                    await target().tap({ timeout });
+                    if (call.double) { await target().tap({ timeout }); }
+                } else if (call.double) {
                     await target().dblclick({ timeout });
                 } else {
                     await target().click({ timeout });
@@ -183,6 +189,22 @@ export async function perform(page: Page, call: ToolCall): Promise<void> {
                 throw await withCover(error, target());
             }
             return;
+        case 'upload': {
+            if (!call.filePath) { throw new Error('Upload requires a declared file key'); }
+            const locator = target();
+            if (await locator.evaluate(element => element instanceof HTMLInputElement && element.type === 'file')) {
+                await locator.setInputFiles(call.filePath, { timeout });
+            } else {
+                const chooser = page.waitForEvent('filechooser', { timeout }).catch(() => undefined);
+                try {
+                    if (call.hasTouch) { await locator.tap({ timeout }); } else { await locator.click({ timeout }); }
+                } catch (error) { await chooser; throw error; }
+                const opened = await chooser;
+                if (!opened) { throw new Error('Upload target did not open a file chooser within 5 seconds'); }
+                await opened.setFiles(call.filePath, { timeout });
+            }
+            return;
+        }
         case 'type': {
             if (call.value === undefined) { throw new Error('No value to type'); }
             const locator = target();

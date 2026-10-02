@@ -14,6 +14,8 @@ import { loadSummary, writeReports } from './report.ts';
 import { selectTests } from './select.ts';
 import { serveReport } from './serve.ts';
 import { bindCancellationSignals } from './signals.ts';
+import { resolveDevice } from './devices.ts';
+import { dirname } from 'node:path';
 import { runSuite } from './suite.ts';
 import { VERSION } from './version.ts';
 
@@ -44,6 +46,7 @@ Run options:
   --dry-run            Run fixtures, open start pages and check initial invariants only
   --no-record          Do not write recordings
   --base-url <origin>  Test an app already running here instead of calling the config's setup
+  --device <desktop|mobile>  Override test and config device
   --headed             Show the browser
   --probe              Also ask on every decision whether the page looks broken
 
@@ -60,6 +63,7 @@ Docs: https://github.com/Ice-Hazymoon/jevwright#readme
 `;
 
 const OPTIONS = {
+    device: { type: 'string' },
     'test': { type: 'string' },
     'module': { type: 'string' },
     'tag': { type: 'string' },
@@ -206,6 +210,9 @@ function suiteOptions(loaded: LoadedConfig, flags: Flags, app: Omit<SetupResult,
         dryRun: flags['dry-run'],
         failOnIssues: config.failOnIssues,
         viewport: config.viewport,
+        rootDir: dirname(loaded.file),
+        device: config.device,
+        deviceOverride: flags.device ? cliDevice(flags.device) : undefined,
         locale: config.locale,
         timezone: config.timezone,
         env: app.env,
@@ -319,7 +326,7 @@ function parseCost(raw: string | undefined): number | undefined {
 /** The flags that shape a run, so a report's reproduce command runs the same way (minus the selection). */
 function reproducibleArgs(flags: Flags): string {
     const parts: string[] = [];
-    for (const name of ['test', 'module', 'tag', 'mode', 'config', 'base-url', 'env-file'] as const) {
+    for (const name of ['test', 'module', 'tag', 'mode', 'config', 'base-url', 'env-file', 'device'] as const) {
         if (flags[name]) { parts.push(`--${name} ${flags[name]}`); }
     }
     if (flags['dry-run']) { parts.push('--dry-run'); }
@@ -426,4 +433,10 @@ export function runFailureExitCode(summary: RunSummary, standalone = true): numb
     if (!failed.length) { return 0; }
     return standalone && summary.manifest.mode === 'replay' && failed.every(result => result.attempts.length > 0 && result.attempts.every(attempt => attempt.steps.some(step => step.failure === 'not-recorded') && attempt.steps.filter(step => step.status === 'failed').every(step => step.failure === 'not-recorded')))
         ? 4 : 1;
+}
+
+function cliDevice(value: string): 'desktop' | 'mobile' {
+    if (value !== 'desktop' && value !== 'mobile') { throw new JevwrightError('--device must be desktop or mobile'); }
+    resolveDevice(value);
+    return value;
 }

@@ -64,7 +64,7 @@ const recordingSchema = z.object({
             gone: z.array(descriptorSchema).optional(),
         }).optional(),
         actions: z.array(z.object({
-            tool: z.enum(['click', 'type', 'press_enter', 'press_escape', 'select', 'scroll', 'wait']),
+            tool: z.enum(['click', 'type', 'press_enter', 'press_escape', 'select', 'scroll', 'wait', 'upload']),
             target: descriptorSchema.optional(),
             valueKey: z.string().optional(),
             value: z.string().optional(),
@@ -141,28 +141,28 @@ export function resolveTargetMatch(target: TargetDescriptor, observation: Observ
 }
 
 export function createRecordingStore(directory: string | undefined) {
-    const path = (test: string) => join(directory!, `${test}.json`);
+    const path = (test: string, device = 'desktop') => join(directory!, `${test}${device === 'desktop' ? '' : `.${device}`}.json`);
     return {
         enabled: Boolean(directory),
-        async load(test: string): Promise<TestRecording | undefined> {
+        async load(test: string, device = 'desktop'): Promise<TestRecording | undefined> {
             if (!directory) { return undefined; }
             try {
-                return recordingSchema.parse(JSON.parse(await readFile(path(test), 'utf8')));
+                return recordingSchema.parse(JSON.parse(await readFile(path(test, device), 'utf8')));
             } catch (error) {
                 if ((error as NodeJS.ErrnoException).code === 'ENOENT') { return undefined; }
                 const problem = error instanceof z.ZodError
                     ? error.issues.slice(0, 3).map(issue => `${issue.path.join('.') || 'file'}: ${issue.message}`).join('; ')
                     : error instanceof Error ? error.message : String(error);
-                throw new Error(`Invalid recording ${relative(process.cwd(), path(test))} (${problem})`);
+                throw new Error(`Invalid recording ${relative(process.cwd(), path(test, device))} (${problem})`);
             }
         },
         /** Atomic write; steps keep definition order. */
-        async save(recording: TestRecording): Promise<void> {
+        async save(recording: TestRecording, device = 'desktop'): Promise<void> {
             if (!directory) { return; }
-            await mkdir(dirname(path(recording.test)), { recursive: true });
-            const temporary = `${path(recording.test)}.${process.pid}.tmp`;
+            await mkdir(dirname(path(recording.test, device)), { recursive: true });
+            const temporary = `${path(recording.test, device)}.${process.pid}.tmp`;
             await writeFile(temporary, `${JSON.stringify(recording, null, 2)}\n`);
-            await rename(temporary, path(recording.test));
+            await rename(temporary, path(recording.test, device));
         },
     };
 }
