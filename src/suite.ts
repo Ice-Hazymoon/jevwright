@@ -11,7 +11,7 @@ import { mkdir } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import { promisify } from 'node:util';
 import { writeArtifact } from './artifacts.ts';
-import { createRedactor } from './secrets.ts';
+import { createRedactor, forResults } from './secrets.ts';
 import { launchBrowser } from './browser.ts';
 import { JevwrightError } from './errors.ts';
 import { addUsage, createRunBudget, emptyUsage, modelIds, runBudgetMessage } from './models.ts';
@@ -173,7 +173,7 @@ export async function runSuite(specs: ReadonlyArray<TestSpec<unknown>>, options:
     const git = await gitState();
     const manifest = buildManifest({ runId, startedAt, git, mode, models, runBudget, specs, origin, options });
     const translationKeys = options.translationKeys ? new Set(options.translationKeys) : undefined;
-    await writeArtifact(join(directory, 'run.json'), manifest, redact);
+    await writeArtifact(join(directory, 'run.json'), manifest, forResults(redact));
     log(`jevwright run ${runId} (${mode}, ${specs.length} tests) → ${relative(process.cwd(), directory)}`);
 
     const blocked: string[] = [];
@@ -197,7 +197,7 @@ export async function runSuite(specs: ReadonlyArray<TestSpec<unknown>>, options:
                 const result = runBudget?.reached() ? notRun(spec, 'model', `Not run: ${runBudgetMessage(runBudget)}`) : await runTest(spec);
                 if (!result.attempts.length && result.status === 'failed') { log(`✗ ${spec.id} failed (${result.cause}) — ${result.summary}`); }
                 results.push(result);
-                options.onResult?.(redact.value(result));
+                options.onResult?.(redact.result(result));
                 await publish();
             }
         };
@@ -206,13 +206,13 @@ export async function runSuite(specs: ReadonlyArray<TestSpec<unknown>>, options:
         await close();
         manifest.finishedAt = new Date().toISOString();
         if (blocked.length) { manifest.blockedRequests = [...new Set(blocked)].slice(0, 50); }
-        await writeArtifact(join(directory, 'run.json'), manifest, redact);
+        await writeArtifact(join(directory, 'run.json'), manifest, forResults(redact));
         await publish();
     }
     // Stable order for reports: definition order, not completion order.
     results.sort((a, b) => manifest.tests.indexOf(a.id) - manifest.tests.indexOf(b.id));
     await writeReports(summary(), redact);
-    return redact.value(summary());
+    return redact.result(summary());
 
     async function runTest(spec: TestSpec<unknown>): Promise<TestResult> {
         if (spec.skip) { return skipped(spec, spec.skip); }

@@ -23,6 +23,12 @@ export function artifactBoundaryViolations(file: string, text: string): string[]
             while (owner && !ts.isFunctionDeclaration(owner)) { owner = owner.parent; }
             if (!owner || !ts.isFunctionDeclaration(owner) || !owner.name || !allowed.has(owner.name.text)) { report(node); }
         }
+        // FW02: model and user-data boundaries cannot opt into result grammar preservation.
+        if (ts.isImportDeclaration(node) && node.importClause?.namedBindings && ts.isNamedImports(node.importClause.namedBindings)
+            && node.importClause.namedBindings.elements.some(entry => (entry.propertyName ?? entry.name).text === 'forResults')
+            && !['suite.ts', 'test-runner.ts', 'report.ts'].includes(file)) {
+            violations.push(`${file}:${source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1}: forResults is restricted to engine result writers (FW02)`);
+        }
         ts.forEachChild(node, visit);
     }
     visit(source);
