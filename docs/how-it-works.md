@@ -198,3 +198,7 @@ Engine result grammar is preserved only for engine-owned fields. User evidence, 
 objects are fully redacted, including their keys. CLI setup and translation callback errors are redacted
 before being printed. These protections cover declared values and their documented encodings, not
 arbitrary application hashes or application-truncated fragments of a secret.
+
+A failed or uncertain `check` still waits for delayed rendering and observes again. It asks Jev again
+only if the observation signature changed. An unchanged uncertain verdict goes to the helper;
+an unchanged certain rejection stays failed. The second observation remains available as evidence.
