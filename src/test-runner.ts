@@ -5,8 +5,11 @@ import type { Issue } from './monitor.ts';
 import type { RecordedAction, StepRecording, TestRecording } from './recording.ts';
 import type { CheckOutcome, Env, FixtureContext, MaybePromise, RunContext, Step, TestSpec, Values, WriteRecord } from './spec.ts';
 import type { Browser, Page } from 'playwright';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
+import { writeArtifact, redactTrace } from './artifacts.ts';
+import { createRedactor, reveal, type Redactor } from './secrets.ts';
+import { secretCheckProblems } from './select.ts';
 import { pageState, runAct } from './act.ts';
 import { newTestContext, settle } from './browser.ts';
 import { actedOnTarget, adjudicateClaim, judgeClaim } from './judge.ts';
@@ -42,6 +45,7 @@ export interface StepResult {
     endMismatch?: true;
     replayOnTarget?: true;
     screenshot?: string;
+    notRecorded?: string;
     /** What kept the page from settling when a wait hit its cap (slow-step diagnostics). */
     busy?: string[];
     /** File in the attempt directory with the page state a check judged. */
@@ -84,11 +88,14 @@ export interface AttemptResult {
     recording: { total: number; replayed: number; healed: number; ai: number };
     directory: string;
     trace?: string;
+    screenshotsWithheld?: true;
+    traceWithheld?: true;
     events: string[];
 }
 
 export interface AttemptOptions {
     browser: Browser;
+    redact?: Redactor;
     origin: string;
     /** Further origins of the app, monitored like `origin`. */
     allowedOrigins?: readonly string[];
@@ -127,10 +134,17 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
     const invariants: InvariantResult[] = [];
     const events: string[] = [];
     const cleanups: Array<() => MaybePromise<void>> = [];
-    const models: Models | undefined = options.models ? createModels(options.models, options.runBudget) : undefined;
+    const secrets = spec.secrets ?? {};
+    const redact = options.redact ?? createRedactor(Object.values(secrets));
+    const log = (line: string) => options.log(redact.text(line));
+    let screenshotsWithheld = false;
+    let traceWithheld = false;
+    const models: Models | undefined = options.models ? createModels(options.models, options.runBudget, redact) : undefined;
     const timeout = AbortSignal.timeout(spec.timeoutMs ?? 240_000);
     const signal = AbortSignal.any([options.signal, timeout]);
     const data: Values = spec.data ?? {};
+    const values = { ...data, ...Object.fromEntries(Object.entries(secrets).map(([key, handle]) => [key, reveal(handle)])) };
+    const secretKeys = new Set(Object.keys(secrets));
     const viewport = options.viewport ?? { width: 1280, height: 900 };
     const newRecording: StepRecording[] = [];
     const pendingEnds: Array<{ entry: StepRecording; index: number; end: NonNullable<StepRecording['end']> }> = [];
@@ -145,7 +159,7 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
     const context = await newTestContext(options.browser, { viewport, baseURL: options.origin, locale: options.locale, timezone: options.timezone, dialogs: spec.dialogs ?? 'accept', onDialog: detail => events.push(`dialog ${detail}`) });
     cleanups.push(async () => context.close());
     const monitor = createMonitor(context, { origin: options.origin, allowedOrigins: options.allowedOrigins, expectedHttp: spec.expectedHttp, ignoreConsole: spec.ignoreConsole, i18nKeys: options.translationKeys, expectedAborts: spec.expectedAborts });
-    await context.tracing.start({ screenshots: true, snapshots: true, title: spec.id }).catch(() => undefined);
+    await context.tracing.start({ screenshots: !secretKeys.size, snapshots: true, title: spec.id }).catch(() => undefined);
     context.on('page', (opened) => {
         if (page && opened !== page) {
             events.push(`new tab opened: ${shortUrl(opened.url())}`);
@@ -160,6 +174,7 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
         context,
         fixture: fixture as F,
         data,
+        secrets,
         origin: options.origin,
         env: options.env as Env,
         signal,
@@ -195,19 +210,21 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
         }
 
         const definition = spec.steps(fixture as F);
+        const secretProblems = secretCheckProblems(definition, secrets);
+        if (secretProblems.length) { throw new Error(secretProblems.join("; ")); }
         for (const [index, step] of definition.entries()) {
             if (step.kind === 'act' && step.expectError) { monitor.expectDuring(index, writeRules(step.expect)); }
         }
         if (options.dryRun) {
             const observation = await observe(page);
-            await writeFile(join(directory, 'start-observation.json'), `${JSON.stringify(observation, null, 2)}\n`);
+            await writeArtifact(join(directory, 'start-observation.json'), `${JSON.stringify(observation, null, 2)}\n`, redact);
             await page.screenshot({ path: join(directory, 'start.jpg'), type: 'jpeg', quality: 60 }).catch(() => undefined);
             summary = `Dry run: fixture, start page and ${spec.invariants?.length ?? 0} invariant(s) OK; ${definition.length} steps not run`;
             throw new DryRunComplete();
         }
         nextAct = (index: number) => {
             const following = definition[index + 1];
-            return following?.kind === 'act' ? describeStep(following as Step<unknown>, data) : undefined;
+            return following?.kind === 'act' ? describeStep(following as Step<unknown>, data, secrets) : undefined;
         };
         /** A product-looking failure after AI-driven steps: the agent's, when a step acted on something it did not name. */
         const misstep = async (upTo: number): Promise<string | undefined> => {
@@ -226,11 +243,11 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
         for (const [index, step] of definition.entries()) {
             signal.throwIfAborted();
             monitor.setStep(index);
-            const label = describeStep(step as Step<unknown>, data);
+            const label = describeStep(step as Step<unknown>, data, secrets);
             const stepStarted = performance.now();
             const writesBefore = monitor.writes.length;
             const result: StepResult = { index, kind: step.kind, label, status: 'passed', durationMs: 0, url: shortUrl(page.url()), writes: [] };
-            options.log(`  ${index + 1}. ${label}`);
+            log(`  ${index + 1}. ${label}`);
             try {
                 await runStep(step, index, result, previousLabel);
             } catch (error) {
@@ -247,10 +264,10 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
             const busy = [...new Set(monitor.settleCaps.filter(cap => cap.step === index).map(cap => cap.reason))];
             if (busy.length) { result.busy = busy.slice(0, 5); }
             result.durationMs = Math.round(performance.now() - stepStarted);
-            result.screenshot = await screenshot(page, directory, index);
+            result.screenshot = screenshotsWithheld ? undefined : await screenshot(page, directory, index);
             steps.push(result);
             if (result.status === 'passed' && (step.kind === 'verify' || (step.kind === 'act' && (step.expect?.write || step.expect?.url)))) { deterministicChecks.push(index); }
-            options.log(`     ${STEP_MARK[result.status]} ${result.source ? `[${result.source}] ` : ''}${result.durationMs}ms${result.error ? ` — ${result.error}` : ''}`);
+            log(`     ${STEP_MARK[result.status]} ${result.source ? `[${result.source}] ` : ''}${result.durationMs}ms${result.error ? ` — ${result.error}` : ''}`);
             if (result.status === 'failed') {
                 failedStep = index;
                 ({ cause, summary } = attribute(result));
@@ -315,6 +332,7 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
     } finally {
         trace = join(directory, 'trace.zip');
         await context.tracing.stop({ path: trace }).catch(() => { trace = undefined; });
+        if (trace && secretKeys.size && !await redactTrace(trace, redact)) { trace = undefined; traceWithheld = true; }
         for (const cleanup of cleanups.reverse()) {
             await Promise.race([Promise.resolve().then(cleanup), new Promise(resolve => setTimeout(resolve, 5000))]).catch((error: unknown) => events.push(`cleanup failed: ${message(error)}`));
         }
@@ -355,15 +373,17 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
         directory,
         ...(trace ? { trace } : {}),
         events,
+        ...(screenshotsWithheld ? { screenshotsWithheld: true } : {}),
+        ...(traceWithheld ? { traceWithheld: true } : {}),
     };
-    await writeFile(join(directory, 'result.json'), `${JSON.stringify(result, null, 2)}\n`);
-    return { result, ...(status === 'passed' && newRecording.length ? { recording: newRecording } : {}) };
+    await writeArtifact(join(directory, 'result.json'), `${JSON.stringify(result, null, 2)}\n`, redact);
+    return { result: redact.value(result), ...(status === 'passed' && counts.total ? { recording: newRecording } : {}) };
 
     async function runStep(step: Step<F>, index: number, result: StepResult, previousLabel: string | undefined): Promise<void> {
         switch (step.kind) {
             case 'act': {
                 const keys = templateKeys(step.instruction);
-                const values = Object.fromEntries(keys.map(key => [key, data[key]!]));
+                const stepValues = Object.fromEntries(keys.map(key => [key, values[key]!]));
                 const key = stepKey(step);
                 const recorded = options.fresh ? undefined : options.recording?.steps.find(entry => entry.key === key);
                 if (!models && !recorded?.actions.length) {
@@ -381,8 +401,11 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
                     signal,
                     stepIndex: index,
                     test: spec.title,
-                    instruction: fillTemplate(step.instruction, data),
-                    values,
+                    instruction: fillTemplate(step.instruction, data, secrets),
+                    values: stepValues,
+                    secretKeys,
+                    redact,
+                    onSecretInput: () => { screenshotsWithheld = true; },
                     previous: previousLabel,
                     next: nextAct(index),
                     expect: step.expect,
@@ -392,7 +415,7 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
                     recorded,
                     probe: options.probe,
                     events,
-                    log: options.log,
+                    log,
                 });
                 counts[outcome.source === 'replay' ? 'replayed' : outcome.source]++;
                 result.source = outcome.source;
@@ -413,7 +436,8 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
                         if (outcome.source === 'replay' && recorded?.end === undefined) { pendingEnds.push({ entry, index, end: outcome.recordedEnd }); }
                         else { entry.end = outcome.recordedEnd; }
                     }
-                    newRecording.push(entry);
+                    if (redact.contains(JSON.stringify(entry))) { result.notRecorded = 'not recorded: target text contains a secret'; }
+                    else { newRecording.push(entry); }
                 }
                 if (outcome.rounds.some(round => (round.anomaly ?? 0) >= 0.8)) {
                     monitor.report({ kind: 'semantic', severity: 'low', message: `Jev flagged broken-looking content on ${shortUrl(page!.url())}` });
@@ -448,7 +472,7 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
                 }
                 // Exactly what the claim was judged against, so a verdict can be audited without re-running.
                 result.observation = `step-${String(index + 1).padStart(2, '0')}-observation.json`;
-                await writeFile(join(directory, result.observation), `${JSON.stringify(pageState(observed), null, 2)}\n`);
+                await writeArtifact(join(directory, result.observation), `${JSON.stringify(pageState(observed), null, 2)}\n`, redact);
                 result.evidence = { claim, ...(reference !== undefined ? { reference } : {}), verdicts: attempts };
                 if (!verdict.passed) {
                     result.status = 'failed';

@@ -45,3 +45,9 @@ A full run costs a few cents. Run it after changing prompts, questions or thresh
 1. Update `CHANGELOG.md`, and bump `version` in both `package.json` and `src/version.ts`. A unit test keeps the two equal.
 2. `npm run typecheck && npm test && npm run build && npm pack --dry-run`. The pack list may hold only `dist/`, `README.md`, `CHANGELOG.md`, `LICENSE` and `package.json`.
 3. `npm publish`. `prepublishOnly` repeats the checks.
+
+
+Runtime text artifacts go through `writeArtifact(path, contents, redact)`. The run redactor includes
+all declared secrets. FW01 in the package checks rejects direct filesystem writes outside the artifact
+writer, recording store, and CLI scaffolding function. Binary trace rewriting remains a separate,
+fail-closed path. When adding a new artifact, verify both its model inputs and its saved bytes.

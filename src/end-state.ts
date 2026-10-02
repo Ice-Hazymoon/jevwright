@@ -1,5 +1,6 @@
 import type { Observation, PageElement } from './observe.ts';
 import type { Anchor, RecordedAction, StepEnd } from './recording.ts';
+import { createRedactor, type Redactor } from './secrets.ts';
 import { describeTarget, resolveTarget, stable } from './recording.ts';
 
 export interface EndCheck { checked: boolean; matched?: boolean; missing?: string[]; recorded?: boolean }
@@ -27,12 +28,12 @@ function present(anchor: Anchor, observation: Observation): boolean {
     return anchor.kind === 'heading' ? observation.headings.some(heading => normalize(heading) === text) : normalize(observation.dialog ?? '') === text;
 }
 
-export function recordEnd(start: Observation, end: Observation, actions: RecordedAction[]): StepEnd {
+export function recordEnd(start: Observation, end: Observation, actions: RecordedAction[], redact: Redactor = createRedactor()): StepEnd {
     const path = new URL(start.url, 'http://jevwright.invalid').pathname !== new URL(end.url, 'http://jevwright.invalid').pathname ? normalizedPath(end.url) : undefined;
-    if (actions.length && actions.every(action => action.tool === 'type')) { return path ? { path } : {}; }
-    const appeared = anchors(end).filter(anchor => !present(anchor, start)).slice(0, 4);
-    const gone = start.elements.filter((element: PageElement) => anchorName(element.name)).map(element => describeTarget(element, start)).filter(target => !resolveTarget(target, end, true)).slice(0, 2);
-    return { ...(path ? { path } : {}), ...(appeared.length ? { appeared } : {}), ...(gone.length ? { gone } : {}) };
+    if (actions.length && actions.every(action => action.tool === 'type')) { return path && !redact.contains(path) ? { path } : {}; }
+    const appeared = anchors(end).filter(anchor => !redact.contains(JSON.stringify(anchor)) && !present(anchor, start)).slice(0, 4);
+    const gone = start.elements.filter((element: PageElement) => anchorName(element.name)).map(element => describeTarget(element, start)).filter(target => !redact.contains(JSON.stringify(target)) && !resolveTarget(target, end, true)).slice(0, 2);
+    return { ...(path && !redact.contains(path) ? { path } : {}), ...(appeared.length ? { appeared } : {}), ...(gone.length ? { gone } : {}) };
 }
 
 export function endMatches(end: StepEnd, observation: Observation): EndCheck {

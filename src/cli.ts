@@ -1,6 +1,8 @@
 import type { LoadedConfig, SetupResult } from './config.ts';
 import type { RunMode, RunSummary, SuiteOptions } from './suite.ts';
 import { existsSync, readFileSync } from 'node:fs';
+import { writeArtifact } from './artifacts.ts';
+import { createRedactor } from './secrets.ts';
 import { appendFile, mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { basename, join, relative, resolve } from 'node:path';
 import { parseArgs, parseEnv } from 'node:util';
@@ -180,7 +182,7 @@ async function runPasses(tests: LoadedConfig['config']['tests'], passes: readonl
     for (const [index, pass] of passes.entries()) {
         // Replay never calls the models it is given; the engine drops them for that mode.
         const summary = await runSuite(tests, { ...options, mode: pass.mode, retries: pass.retries, updateRecordings: pass.record });
-        if (app.serverLog) { await writeFile(join(summary.directory, 'server.log'), await app.serverLog()).catch(() => undefined); }
+        if (app.serverLog) { await writeArtifact(join(summary.directory, 'server.log'), await app.serverLog(), createRedactor(tests.flatMap(test => Object.values(test.secrets ?? {})))).catch(() => undefined); }
         io.stdout(summaryLine(summary, passes.length > 1 ? `pass ${index + 1}/${passes.length} (${pass.mode}${pass.record ? ', recording' : ''}): ` : '', io.cwd));
         if (options.signal?.aborted) { return 130; }
         if (summary.totals.failed > 0) { return runFailureExitCode(summary, passes.length === 1); }

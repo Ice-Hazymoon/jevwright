@@ -110,7 +110,7 @@ export async function newTestContext(browser: Browser, options: { viewport: { wi
     await context.addInitScript(watchMutations);
     context.on('page', (page) => {
         page.on('dialog', (dialog) => {
-            options.onDialog?.(`${dialog.type()} "${dialog.message().slice(0, 120)}" ${options.dialogs === 'accept' ? 'accepted' : 'dismissed'}`);
+            options.onDialog?.(`${dialog.type()} "${dialog.message()}" ${options.dialogs === 'accept' ? 'accepted' : 'dismissed'}`);
             void (options.dialogs === 'accept' ? dialog.accept() : dialog.dismiss()).catch(() => undefined);
         });
         page.on('download', download => void download.cancel().catch(() => undefined));
@@ -158,6 +158,8 @@ export interface ToolCall {
     double?: boolean;
     /** Type at the cursor instead of replacing the field's content. */
     append?: boolean;
+    /** Fill atomically so trace snapshots cannot capture partial secret keystrokes. */
+    sensitive?: boolean;
 }
 
 export async function perform(page: Page, call: ToolCall): Promise<void> {
@@ -184,6 +186,11 @@ export async function perform(page: Page, call: ToolCall): Promise<void> {
         case 'type': {
             if (call.value === undefined) { throw new Error('No value to type'); }
             const locator = target();
+            if (call.sensitive) {
+                if (!await locator.isEditable({ timeout })) { throw new Error('Secret input needs an enabled editable field'); }
+                await locator.fill(call.append ? `${await locator.inputValue()}${call.value}` : call.value, { timeout });
+                return;
+            }
             if (call.append) {
                 // The caret is where the previous typing left it (e.g. after Enter); keep the text before it.
                 await locator.pressSequentially(call.value, { delay: 4, timeout: timeout + call.value.length * 20 });

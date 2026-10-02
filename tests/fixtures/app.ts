@@ -57,6 +57,18 @@ function escapeHtml(text: string): string {
 function pages(state: FixtureState, url: URL): string | undefined {
     const bug = url.searchParams.get('bug');
     switch (url.pathname) {
+        case '/secret':
+            return layout('API key', '<label>API key<input id="key"></label><button id="hint">Show hint</button><p id="help"></p><button id="save">Save key</button><button id="echo" hidden></button><output id="result"></output>', `
+document.getElementById('hint').onclick = () => { document.getElementById('help').textContent = 'Enter the API key'; };
+document.getElementById('save').onclick = () => {
+  const key = document.getElementById('key').value;
+  document.getElementById('result').textContent = key;
+  const echo = document.getElementById('echo'); echo.hidden = false; echo.textContent = key;
+  history.replaceState(null, '', '?key=' + encodeURIComponent(key));
+  confirm('Confirm ' + key); console.error('Echo key ' + key);
+};
+document.getElementById('echo').onclick = () => { document.getElementById('help').textContent = 'Echo confirmed'; };
+`);
         case '/effects': {
             const entries = [{ date: '2026-01-01', name: 'Alpha' }, { date: '2026-02-02', name: 'Beta' }];
             if (url.searchParams.has('single')) { entries.splice(1); }

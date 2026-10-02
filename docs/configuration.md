@@ -211,3 +211,22 @@ Differences from the CLI:
 - `runSuite` neither calls `setup` nor loads `--env-file`; pass `baseURL` and `env` yourself.
 
 `models.models` takes AI SDK evaluation and language models to use instead of a gateway, for example the SDK's mock models in your own tests. It is experimental: it relies on the AI SDK's experimental evaluation API, whose shape may change in a minor release.
+
+
+### Declaring secrets
+
+```ts
+import { act, reveal, secret, verify } from '@hazymoon/jevwright';
+
+const accessKey = secret(process.env.TEST_ACCESS_KEY!);
+// Inside a test:
+// secrets: { accessKey },
+// steps: () => [
+//     act('Enter {accessKey} in the API key field'),
+//     verify('key persisted', ({ secrets }) => storedKey === reveal(secrets.accessKey!)),
+// ],
+```
+
+Secrets need at least six Unicode code points. Duplicate keys across `data` and `secrets`, non-handle
+secret values, and `check` assertions that reference a secret key are authoring errors. Definitions that
+need their fixture are checked when that fixture has been created, before steps execute.

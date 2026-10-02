@@ -1,5 +1,6 @@
 import type { TestSpec } from './spec.ts';
 import { JevwrightError } from './errors.ts';
+import { isSecret } from './secrets.ts';
 import { templateKeys } from './spec.ts';
 
 /** Which tests to run. Every field narrows the selection; each takes a comma-separated list. */
@@ -64,6 +65,11 @@ function fieldProblems(test: TestSpec<unknown>): string[] {
     for (const [key, value] of Object.entries(test.data ?? {})) {
         if (typeof value !== 'string') { problems.push(`data.${key} must be a string`); }
     }
+    for (const [key, value] of Object.entries(test.secrets ?? {})) {
+        if (!isSecret(value)) { problems.push(`secrets.${key} must be a secret() handle`); }
+        if (key in (test.data ?? {})) { problems.push(`data and secrets both define ${key}`); }
+    }
+    try { problems.push(...secretCheckProblems(test.steps(undefined), test.secrets ?? {})); } catch { /* Fixture-dependent definitions are checked before running their steps. */ }
     problems.push(...undefinedKeys(test).map(key => `a step uses {${key}}, but data has no "${key}"`));
     return problems;
 }
@@ -81,5 +87,10 @@ function undefinedKeys(test: TestSpec<unknown>): string[] {
     }
     if (!Array.isArray(steps)) { return []; }
     const templates = steps.flatMap(step => step?.kind === 'act' ? [step.instruction] : step?.kind === 'check' ? [step.assertion] : []);
-    return [...new Set(templates.flatMap(templateKeys))].filter(key => test.data?.[key] === undefined);
+    return [...new Set(templates.flatMap(templateKeys))].filter(key => test.data?.[key] === undefined && test.secrets?.[key] === undefined);
+}
+
+
+export function secretCheckProblems(steps: readonly import('./spec.ts').Step[], secrets: Readonly<Record<string, unknown>>): string[] {
+    return steps.flatMap(step => step.kind === 'check' ? templateKeys(step.assertion).filter(key => key in secrets).map(key => `check cannot reference secret {${key}}; use verify with reveal()`) : []);
 }

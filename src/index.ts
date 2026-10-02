@@ -16,3 +16,6 @@ export { VERSION } from './version.ts';
 
 export type { Anchor, StepEnd, StepRecording, TargetDescriptor, TestRecording } from './recording.ts';
 export type { EndCheck } from './end-state.ts';
+
+export { secret, reveal } from './secrets.ts';
+export type { Secret } from './secrets.ts';

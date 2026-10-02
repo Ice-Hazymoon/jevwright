@@ -700,3 +700,30 @@ describe('recorded end states', () => {
         expect(endMatches(end, { ...observation, headings: ['Saved'] }).matched).toBe(false);
     });
 });
+
+describe('secret values', () => {
+    it('keeps accidental conversions opaque and redacts encoded appearances', async () => {
+        const { secret, reveal, createRedactor } = await import('../src/secrets.ts');
+        const raw = 'test-secret-<&"é';
+        const handle = secret(raw);
+        expect(String(handle)).toBe('{secret}');
+        expect(JSON.stringify(handle)).toBe('"{secret}"');
+        expect(`${handle}`).toBe('{secret}');
+        expect(reveal(handle)).toBe(raw);
+        const redact = createRedactor([handle]);
+        for (const encoded of [raw, encodeURIComponent(raw), JSON.stringify(raw).slice(1, -1), Buffer.from(raw).toString('base64'), raw.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('"', '&quot;')]) {
+            expect(redact.text(encoded)).toBe('{secret}');
+        }
+        expect(() => secret('short')).toThrow('6');
+    });
+});
+
+it('guards the redacted artifact boundary and its narrowly scoped filesystem owners (FW01)', async () => {
+    const { artifactBoundaryViolations: scan } = await import('./support/artifact-boundary.ts');
+    expect(scan('report.ts', "import { writeFile as save } from 'node:fs/promises'; async function report() { await save('result.json', raw); }")).toHaveLength(1);
+    expect(scan('cli.ts', "import { writeFile } from 'node:fs/promises'; async function runPasses() { await writeFile('server.log', raw); }")).toHaveLength(1);
+    expect(scan('report.ts', "import * as fs from 'node:fs/promises'; fs.writeFile('report.md', raw);")).toHaveLength(1);
+    expect(scan('cli.ts', "import { writeFile } from 'node:fs/promises'; async function initCommand() { await writeFile('config.ts', template); }")).toEqual([]);
+    const files = readdirSync(join(ROOT, 'src')).filter(name => name.endsWith('.ts'));
+    expect(files.flatMap(name => scan(name, readFileSync(join(ROOT, 'src', name), 'utf8')))).toEqual([]);
+});

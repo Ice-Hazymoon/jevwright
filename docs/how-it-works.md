@@ -172,3 +172,23 @@ A failed test is retried (`retries`, default 1):
   - native dialogs follow the test's `dialogs` setting.
 - **Report server.** `jevwright serve` binds to 127.0.0.1. It serves one run directory read-only, behind a random token that it trades for an HttpOnly cookie.
 - **Where your data goes.** Model requests carry the observed page: control names, values (passwords masked) and trimmed page text. They go only to the gateway you configure. Run tests against test data.
+
+
+### Secret values
+
+Use `secret(value)` in `TestSpec.secrets`, separate from ordinary string `data`. Handles stringify as
+`{secret}`. Only trusted test code can call `reveal(handle)`; `RunContext.secrets` exposes the handles.
+An action references a secret by `{key}`. Models receive that placeholder and `<secret value>`, while
+code fills the original value into an enabled editable field. Select actions and semantic `check`
+assertions cannot consume secrets; verify exact values with `verify` and `reveal` instead.
+
+Model payloads, progress logs and text artifacts redact the full secret, URI encoding (including browser
+URL encoding), JSON escaping, HTML entities and base64. A secret-bearing descriptor is not recorded;
+the report explains why that step needs AI again. Secret names are excluded from learned end anchors.
+After secret input, step screenshots are withheld. Secret tests disable trace frames from the start;
+trace text is rewritten and binary entries containing the secret are removed. Failed rewriting deletes
+the original trace and sets `traceWithheld` without changing the test verdict.
+
+This is an accidental-disclosure boundary, not encrypted storage. It does not recognize arbitrary
+transformations such as truncation, case changes, hashes, or a secret split across nodes. Requests to
+allowed app origins still carry the tested input, as intended. Keep real credentials out of ordinary data.
