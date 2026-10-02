@@ -209,7 +209,8 @@ export async function runSuite(specs: ReadonlyArray<TestSpec<unknown>>, options:
         try {
             recording = await store.load(spec.id);
         } catch (error) {
-            return notRun(spec, 'environment', `${error instanceof Error ? error.message : String(error)}. Fix or delete the file; the next auto run records the test again`);
+            if (mode !== 'ai') { return notRun(spec, 'environment', `${error instanceof Error ? error.message : String(error)}. Fix or delete the file; the next auto run records the test again`); }
+            log(`Ignoring unreadable recording for ${spec.id}; AI mode will record a new path`);
         }
         const attempts: AttemptResult[] = [];
         let recordingUpdated = false;

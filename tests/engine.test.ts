@@ -853,3 +853,30 @@ describe('fresh retry limits', () => {
         expect(limited.attempts[1]?.fresh).toBeUndefined();
     });
 });
+
+describe('reviewed replay boundaries', () => {
+    it('keeps exit 1 when missing recording follows an end mismatch', async () => {
+        const recordingsDir = join(root, 'mismatch-then-missing');
+        const spec = profileTest();
+        expect((await suite([spec], { recordingsDir }).run).totals.passed).toBe(1);
+        const path = join(recordingsDir, 'profile-save.json');
+        const recording = JSON.parse(await readFile(path, 'utf8'));
+        recording.steps = recording.steps.slice(0, 1);
+        recording.steps[0].end = { appeared: [{ kind: 'heading', text: 'Missing effect' }] };
+        await writeFile(path, JSON.stringify(recording));
+        const summary = await suite([spec], { recordingsDir, mode: 'replay' }).run;
+        expect(summary.results[0]?.attempts[0]?.steps[0]?.endMismatch).toBe(true);
+        expect(summary.results[0]?.attempts[0]?.steps[1]?.failure).toBe('not-recorded');
+        expect(runFailureExitCode(summary)).toBe(1);
+    });
+
+    it('recovers from an unreadable recording in AI mode', async () => {
+        const recordingsDir = join(root, 'invalid-ai-recording');
+        await mkdir(recordingsDir);
+        await writeFile(join(recordingsDir, 'profile-save.json'), '{broken');
+        const result = (await suite([profileTest()], { recordingsDir, mode: 'ai' }).run).results[0]!;
+        expect(result.status, result.summary).toBe('passed');
+        expect(result.recordingUpdated).toBe(true);
+        expect(JSON.parse(await readFile(join(recordingsDir, 'profile-save.json'), 'utf8')).steps.length).toBeGreaterThan(0);
+    });
+});
