@@ -203,6 +203,8 @@ A failed or uncertain `check` still waits for delayed rendering and observes aga
 only if the observation signature changed. An unchanged uncertain verdict goes to the helper;
 an unchanged certain rejection stays failed. The second observation remains available as evidence.
 
-Evaluation protocol types, question IDs and option IDs retain their identities; dynamic descriptions and
+Engine protocol types, question IDs and option IDs retain their identities. User data/file keys containing
+a declared secret use deterministic aliases that are checked for secret content and collisions; Jev and
+helper answers resolve back to the original key before browser execution. Dynamic descriptions and
 reference evidence are redacted. Report display paths may be redacted, while writers use the separate
 physical directory. A stable hashed selection key preserves `--last-failed` when a test ID is redacted.
