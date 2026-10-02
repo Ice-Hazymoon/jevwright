@@ -436,9 +436,12 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
                     // A second look after the page settles; UI updates can trail the data.
                     await page!.waitForTimeout(1500);
                     await settle(page!, monitor);
-                    observed = await observe(page!);
-                    verdict = await judgeClaim(models, observed, claim, reference, signal);
-                    attempts.push(verdict);
+                    const next = await observe(page!);
+                    if (next.signature !== observed.signature) {
+                        observed = next;
+                        verdict = await judgeClaim(models, observed, claim, reference, signal);
+                        attempts.push(verdict);
+                    }
                 }
                 if (verdict.uncertain) {
                     observed = await observe(page!);
