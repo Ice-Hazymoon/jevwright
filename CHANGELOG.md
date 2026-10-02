@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.1
+
+- Add paired maintainer calibration against a Git revision, with separate warmup recordings, correctness regression gates, bootstrap intervals and interrupted-run cleanup.
+
 ## 0.1.0
 
 First release.

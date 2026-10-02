@@ -45,3 +45,24 @@ A full run costs a few cents. Run it after changing prompts, questions or thresh
 1. Update `CHANGELOG.md`, and bump `version` in both `package.json` and `src/version.ts`. A unit test keeps the two equal.
 2. `npm run typecheck && npm test && npm run build && npm pack --dry-run`. The pack list may hold only `dist/`, `README.md`, `CHANGELOG.md`, `LICENSE` and `package.json`.
 3. `npm publish`. `prepublishOnly` repeats the checks.
+
+## Paired calibration
+
+Before changing a prompt or decision threshold, compare the candidate workspace with a Git revision:
+
+```bash
+npm run calibrate -- --ab HEAD --pairs 6 --mode auto --retries 1
+```
+
+A/B defaults to `auto`, one retry and at most 20 pairs. Each side first records its own AI warmup;
+those runs are excluded from statistics. Each pair uses the candidate fixture list in the same order,
+with a random choice of which engine runs first. The fixture app is shared and tests run serially.
+Declare `expected: 'passed' | 'product'` on every fixture and `requiredApis` on a calibration fixture that uses a new export; an older baseline excludes
+that case from paired statistics while the candidate still runs it.
+
+The Markdown report under `.jevwright/calibration/` shows per-test correctness flips and 95% paired
+bootstrap intervals for calls, cost, duration, healed steps and rerouted tests. Raw pairs and run
+reports sit beside it. Two net adverse flips for a test, or three across all tests, fail calibration.
+No regression against a broken baseline does not establish correctness: inspect the absolute
+matched outcomes as well. Six or more pairs are required; unresolved intervals remain labeled at
+the pair limit. The temporary baseline worktree is removed on completion or the first interrupt.
