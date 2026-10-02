@@ -794,6 +794,7 @@ it('guards the redacted artifact boundary and its narrowly scoped filesystem own
     const { artifactBoundaryViolations: scan } = await import('./support/artifact-boundary.ts');
     expect(scan('report.ts', "import { writeFile as save } from 'node:fs/promises'; async function report() { await save('result.json', raw); }")).toHaveLength(1);
     expect(scan('cli.ts', "import { writeFile } from 'node:fs/promises'; async function runPasses() { await writeFile('server.log', raw); }")).toHaveLength(1);
+    expect(scan('models.ts', "import { forResults as unsafe } from './secrets.ts';")).toHaveLength(1);
     expect(scan('report.ts', "import * as fs from 'node:fs/promises'; fs.writeFile('report.md', raw);")).toHaveLength(1);
     expect(scan('cli.ts', "import { writeFile } from 'node:fs/promises'; async function initCommand() { await writeFile('config.ts', template); }")).toEqual([]);
     const files = readdirSync(join(ROOT, 'src')).filter(name => name.endsWith('.ts'));

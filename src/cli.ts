@@ -170,7 +170,8 @@ async function runCommand(flags: Flags, io: CliIO): Promise<number> {
         return await runPasses(tests, passes, options, app, io);
     } catch (error) {
         if (controller.signal.aborted) { return 130; }
-        throw error;
+        if (error instanceof Error) { error.message = redact.text(error.message); if (error.stack) { error.stack = redact.text(error.stack); } }
+        throw error instanceof Error ? error : new Error(redact.text(String(error)));
     } finally {
         if (teardown) { await runTeardown(teardown, log); }
         unbind();

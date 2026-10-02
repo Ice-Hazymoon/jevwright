@@ -166,3 +166,36 @@ it('preserves usage errors from fixture-dependent secret assertions', async () =
     const dynamic: TestSpec<{ ready: boolean }> = { id: 'dynamic-secret', title: 'Dynamic definition', risk: 'Invalid assertion', start: '/secret', secrets: { apiKey: handle }, fixture: async () => ({ ready: true }), steps: fixture => fixture.ready ? [check('The field is {apiKey}')] : [] };
     await expect(runSuite([dynamic], { baseURL: app.origin, outputDir: join(root, 'dynamic'), mode: 'replay', log: () => undefined })).rejects.toMatchObject({ name: 'JevwrightError', message: expect.stringContaining('check cannot reference') });
 });
+
+it('redacts evidence keys and grammar-shaped user data while preserving engine failure codes', async () => {
+    const handles = { a: secret('passed'), b: secret('private-id'), c: secret('not-recorded') };
+    const redact = createRedactor(Object.values(handles));
+    expect(redact.value({ reference: { status: 'passed', 'private-id': 'value' } })).toEqual({ reference: { status: '{secret}', '{secret}': 'value' } });
+    const summary = await runSuite([{ ...spec(), secrets: handles, steps: () => [verify('evidence', () => ({ passed: true, evidence: { status: 'passed', 'private-id': 'value' } })), act('Save key')] }], { baseURL: app.origin, outputDir: join(root, 'grammar-evidence'), mode: 'replay', log: () => undefined });
+    expect(summary.results[0]?.attempts[0]?.steps[1]?.failure).toBe('not-recorded');
+    expect(summary.results[0]?.attempts[0]?.steps[0]?.evidence).toEqual({ status: '{secret}', '{secret}': 'value' });
+    const { runFailureExitCode } = await import('../src/cli.ts');
+    expect(runFailureExitCode(summary, true)).toBe(4);
+});
+
+it('redacts multiline text before scanning separate lines for anomalies', async () => {
+    const raw = 'NaN private\nsecondline';
+    const summary = await runSuite([{ ...spec(), secrets: { key: secret(raw) }, fixture: async ({ context }) => { await context.addInitScript(value => addEventListener('DOMContentLoaded', () => { const p = document.createElement('p'); p.textContent = value; document.body.append(p); }), raw); }, steps: () => [verify('ready', () => true)] }], { baseURL: app.origin, outputDir: join(root, 'multiline'), mode: 'replay', log: () => undefined });
+    expect(JSON.stringify(summary)).not.toContain('NaN private');
+});
+
+it('redacts setup and translation callback errors at the CLI boundary', async () => {
+    const config = await import('../src/config.ts');
+    const { main } = await import('../src/cli.ts');
+    const raw = 'private-cli-token';
+    for (const translation of [false, true]) {
+        const error = () => { throw new Error(`authentication failed for ${raw}`); };
+        const load = vi.spyOn(config, 'loadConfig').mockResolvedValue({ file: join(root, 'config.ts'), outputDir: join(root, 'cli'), recordingsDir: join(root, 'recordings'), config: { tests: [{ ...spec(), secrets: { token: secret(raw) } }], setup: error, ...(translation ? { translationKeys: error } : {}) } });
+        const stderr: string[] = [];
+        try {
+            expect(await main(['run', '--mode', 'replay'], { cwd: root, env: {}, stdout: () => undefined, stderr: text => stderr.push(text) })).toBe(2);
+            expect(stderr.join('')).toContain('{secret}');
+            expect(stderr.join('')).not.toContain(raw);
+        } finally { load.mockRestore(); }
+    }
+});

@@ -9,7 +9,7 @@ import { createDownloads } from './downloads.ts';
 import { mkdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { writeArtifact, redactTrace } from './artifacts.ts';
-import { createRedactor, reveal, type Redactor } from './secrets.ts';
+import { forResults, createRedactor, reveal, type Redactor } from './secrets.ts';
 import { JevwrightError } from './errors.ts';
 import { secretCheckProblems } from './select.ts';
 import { pageState, runAct } from './act.ts';
@@ -142,7 +142,7 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
     const secrets = spec.secrets ?? {};
     const redact = options.redact ?? createRedactor(Object.values(secrets));
     const log = (line: string) => options.log(redact.text(line));
-    let screenshotsWithheld = false;
+    let screenshotsWithheld = Object.keys(secrets).length > 0;
     let traceWithheld = false;
     const models: Models | undefined = options.models ? createModels(options.models, options.runBudget, redact) : undefined;
     const timeout = AbortSignal.timeout(spec.timeoutMs ?? 240_000);
@@ -401,7 +401,7 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
         ...(screenshotsWithheld ? { screenshotsWithheld: true } : {}),
         ...(traceWithheld ? { traceWithheld: true } : {}),
     };
-    await writeArtifact(join(directory, 'result.json'), result, redact);
+    await writeArtifact(join(directory, 'result.json'), result, forResults(redact));
     return { result, ...(status === 'passed' && counts.total ? { recording: newRecording } : {}) };
 
     async function runStep(step: Step<F>, index: number, result: StepResult, previousLabel: string | undefined): Promise<void> {

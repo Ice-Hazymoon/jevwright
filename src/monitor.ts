@@ -248,7 +248,7 @@ export function createMonitor(context: BrowserContext, options: MonitorOptions) 
                 }
                 return parts.join('\n');
             }).catch(() => '');
-            for (const line of text.split('\n')) {
+            for (const line of safe(text).split('\n')) {
                 // A client-rendered error screen can appear with no failed request and no uncaught exception.
                 if (ERROR_SCREEN.test(line.trim())) { add({ kind: 'ui-error', severity: 'high', message: `Server error screen on ${shortPath(page.url())}: "${safe(line).trim().slice(0, 80)}"` }); }
                 for (const [pattern, label] of SENTINELS) {
