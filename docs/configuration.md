@@ -251,4 +251,4 @@ available only to trusted test code. Untrusted suggested names never determine o
 Undeclared downloads are cancelled. Downloads larger than 20 MiB are deleted and fail the expectation.
 Transfers have a 30-second limit. Blob/data downloads are allowed; network downloads use the origin proxy.
 Fixture-dependent step declarations provisionally allow downloads in the context, but cancel every
-download outside a declared step. Downloaded files are test data; do not export production secrets.
+download outside a declared step. After verification, files containing a declared secret are removed and marked `withheld: true` in download metadata.

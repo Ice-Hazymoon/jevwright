@@ -65,7 +65,7 @@ export function createRedactor(secrets: Iterable<Secret> = []) {
         if (typeof input === 'string') { return engine && grammar[key]?.has(input) ? input : text(input); }
         if (Array.isArray(input)) { return input.map(entry => value(entry, engine)); }
         if (input && typeof input === 'object') {
-            if (input instanceof Date) { return input.toJSON(); }
+            if (input instanceof Date) { return text(input.toJSON()); }
             if (isSecret(input)) { return '{secret}'; }
             // Evidence and metadata are user objects, even when their keys resemble result grammar.
             return Object.fromEntries(Object.entries(input).map(([name, entry]) => [engine ? name : text(name), value(entry, engine && !['evidence', 'reference', 'metadata'].includes(name), name)]));

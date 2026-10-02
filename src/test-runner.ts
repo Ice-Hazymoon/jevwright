@@ -162,10 +162,9 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
     let summary = 'All steps passed';
     let failedStep: number | undefined;
 
-    const downloads = createDownloads(directory, signal);
-    cleanups.push(() => downloads.close());
+    const downloads = createDownloads(directory, signal, redact);
     let acceptDownloads = true;
-    try { acceptDownloads = spec.steps(undefined as F).some(step => step.kind === 'act' && !!step.expect?.download); } catch { /* Fixture-dependent declarations are known after fixture setup. */ }
+    try { acceptDownloads = !!spec.fixture || spec.steps(undefined as F).some(step => step.kind === 'act' && !!step.expect?.download); } catch { /* Fixture-dependent declarations are known after fixture setup. */ }
     const context = await newTestContext(options.browser, { viewport, device: options.device, acceptDownloads, onDownload: downloads.receive, baseURL: options.origin, locale: options.locale, timezone: options.timezone, dialogs: spec.dialogs ?? 'accept', onDialog: detail => events.push(`dialog ${detail}`) });
     cleanups.push(async () => context.close());
     const monitor = createMonitor(context, { redact, origin: options.origin, allowedOrigins: options.allowedOrigins, expectedHttp: spec.expectedHttp, ignoreConsole: spec.ignoreConsole, i18nKeys: options.translationKeys, expectedAborts: spec.expectedAborts });
@@ -279,6 +278,10 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
             await monitor.scanText(page);
             result.url = shortUrl(page.url());
             await downloads.flush();
+            if (step.kind === 'act' && step.expect?.download && result.status === 'passed') {
+                const state = downloads.state();
+                if (!state.ok) { result.status = 'failed'; result.failure = 'expectation'; result.error = state.reason; }
+            }
             result.downloads = downloads.forStep(index);
             result.writes = monitor.writes.slice(writesBefore).map(write => ({ ...write }));
             const busy = [...new Set(monitor.settleCaps.filter(cap => cap.step === index).map(cap => cap.reason))];
@@ -361,6 +364,7 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
         for (const cleanup of cleanups.reverse()) {
             await Promise.race([Promise.resolve().then(cleanup), new Promise(resolve => setTimeout(resolve, 5000))]).catch((error: unknown) => events.push(`cleanup failed: ${message(error)}`));
         }
+        await downloads.close();
     }
 
     // Stopped by Ctrl-C: whatever the attempt ran into while stopping says nothing about the app.
@@ -479,7 +483,7 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
                     return;
                 }
                 result.source = 'ai';
-                const claim = fillTemplate(step.assertion, data);
+                const claim = fillTemplate(step.assertion, displayData);
                 const reference = step.reference ? await step.reference(runContext(index)) : undefined;
                 let observed = await observe(page!, { redact });
                 let verdict = await judgeClaim(models, observed, claim, reference, signal);

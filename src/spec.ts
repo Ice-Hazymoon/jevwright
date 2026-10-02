@@ -50,7 +50,7 @@ export interface WriteRecord {
     durationMs?: number;
 }
 
-export interface DownloadRecord { filename: string; path: string; bytes: number }
+export interface DownloadRecord { filename: string; path: string; bytes: number; withheld?: true }
 
 export interface RunContext<F> {
     readonly downloads: readonly DownloadRecord[];

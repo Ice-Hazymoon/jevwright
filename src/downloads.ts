@@ -1,11 +1,12 @@
 import type { Download } from 'playwright';
 import type { DownloadRecord, Expectation } from './spec.ts';
-import { mkdir, rm, stat } from 'node:fs/promises';
+import type { Redactor } from './secrets.ts';
+import { mkdir, readFile, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 
 const MAX_BYTES = 20 * 1024 * 1024;
 /** Downloads belong to the step that started them, even when transfer finishes later. */
-export function createDownloads(directory: string, signal: AbortSignal) {
+export function createDownloads(directory: string, signal: AbortSignal, redact?: Redactor) {
     const records: DownloadRecord[] = [];
     const byStep = new Map<number, DownloadRecord[]>();
     const errors = new Map<number, string>();
@@ -14,6 +15,7 @@ export function createDownloads(directory: string, signal: AbortSignal) {
     let step = -1;
     let expected: Expectation['download'];
     let sequence = 0;
+    let closing = false;
     const cancel = () => { for (const download of active) { void download.cancel().catch(() => undefined); } };
     signal.addEventListener('abort', cancel, { once: true });
     return {
@@ -22,7 +24,7 @@ export function createDownloads(directory: string, signal: AbortSignal) {
         forStep(index: number) { return byStep.get(index) ?? []; },
         receive(download: Download) {
             const index = step;
-            if (!expected || signal.aborted) { void download.cancel().catch(() => undefined); return; }
+            if (closing || !expected || signal.aborted) { void download.cancel().catch(() => undefined); return; }
             const number = ++sequence;
             const filename = download.suggestedFilename();
             active.add(download);
@@ -60,6 +62,16 @@ export function createDownloads(directory: string, signal: AbortSignal) {
             return matched ? { ok: true } : { ok: false, reason: pattern ? `No download matched ${String(pattern)}` : 'No download completed during this step' };
         },
         async flush() { await Promise.all(pending); },
-        async close() { signal.removeEventListener('abort', cancel); cancel(); await Promise.all(pending); },
+        async close() {
+            closing = true;
+            signal.removeEventListener('abort', cancel); cancel(); await Promise.all(pending);
+            if (redact?.active) {
+                for (const record of records) {
+                    let withhold = true;
+                    try { withhold = redact.contains((await readFile(record.path)).toString('utf8')); } catch { /* Unreadable files cannot be verified safe. */ }
+                    if (withhold) { await rm(record.path, { force: true }); record.withheld = true; }
+                }
+            }
+        },
     };
 }

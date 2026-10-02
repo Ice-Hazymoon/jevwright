@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.0
+
+- Add root-scoped uploads, mobile/touch device contexts and separate device recordings.
+- Add declared downloads with completion and size checks, secret withholding after verification, and popup close recovery.
+
+
 ## 0.3.0
 
 - Add opaque secrets, restricted field input, model and artifact redaction, and fail-closed trace cleanup.
