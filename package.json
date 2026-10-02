@@ -1,7 +1,7 @@
 {
     "name": "@hazymoon/jevwright",
     "type": "module",
-    "version": "0.2.0",
+    "version": "0.3.0",
     "description": "Natural-language browser tests for business flows: TypeSafe's Jev grounds each step on the live page, and your code decides pass or fail.",
     "author": "Ice-Hazymoon",
     "license": "MIT",
