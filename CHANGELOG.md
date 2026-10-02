@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.4.0
+
+- Add root-scoped uploads, mobile/touch device contexts and separate device recordings.
+- Add declared downloads with completion and size checks, secret withholding after verification, and popup close recovery.
+
+
+## 0.3.0
+
+- Add opaque secrets, restricted field input, model and artifact redaction, and fail-closed trace cleanup.
+- Preserve internal result grammar and protect long, whitespace-normalized and nested JSON appearances.
+
+
 ## 0.2.0
 
 - Record visible action end states and check them during replay, preserving deterministic failure attribution and healing stale paths in auto mode.

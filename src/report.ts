@@ -1,6 +1,8 @@
 import type { Issue } from './monitor.ts';
 import type { RunSummary, TestResult } from './suite.ts';
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
+import { writeArtifact } from './artifacts.ts';
+import { forResults, createRedactor, type Redactor } from './secrets.ts';
 import { join, relative } from 'node:path';
 
 const CAUSE_LABEL: Record<string, string> = {
@@ -11,10 +13,12 @@ const CAUSE_LABEL: Record<string, string> = {
     timeout: 'Timeout',
 };
 
-export async function writeReports(summary: RunSummary): Promise<void> {
-    await writeFile(join(summary.directory, 'summary.json'), `${JSON.stringify(summary, null, 2)}\n`);
-    await writeFile(join(summary.directory, 'report.md'), markdownReport(summary));
-    await writeFile(join(summary.directory, 'report.html'), await htmlReport(summary));
+export async function writeReports(summary: RunSummary, redact: Redactor = createRedactor()): Promise<void> {
+    redact = forResults(redact);
+    summary = redact.result(summary);
+    await writeArtifact(join(summary.directory, 'summary.json'), summary, redact);
+    await writeArtifact(join(summary.directory, 'report.md'), summary, redact, markdownReport);
+    await writeArtifact(join(summary.directory, 'report.html'), summary, redact, htmlReport);
 }
 
 export async function loadSummary(directory: string): Promise<RunSummary> {
@@ -46,8 +50,10 @@ export function markdownReport(summary: RunSummary): string {
     lines.push(...testsTableSection(results));
     for (const result of results) {
         for (const attempt of result.attempts) {
+            if (attempt.screenshotsWithheld) { lines.push(`- ${result.id}: screenshots withheld after secret input`); }
+            if (attempt.traceWithheld) { lines.push(`- ${result.id}: trace withheld because redaction failed`); }
             for (const step of attempt.steps.filter(entry => entry.kind === 'act')) {
-                lines.push(`- ${result.id}, attempt ${attempt.attempt}, step ${step.index + 1}: ${step.end?.recorded === false ? 'no end state recorded' : step.end?.checked ? `end state ${step.end.matched ? 'matched' : 'mismatched'}${step.end.missing?.length ? ` (${step.end.missing.join(', ')})` : ''}` : 'no end state checked'}${step.endMismatch ? '; endMismatch — confirm with an auto run' : ''}`);
+                lines.push(`- ${result.id}, attempt ${attempt.attempt}, step ${step.index + 1}: ${step.end?.recorded === false ? 'no end state recorded' : step.end?.checked ? `end state ${step.end.matched ? 'matched' : 'mismatched'}${step.end.missing?.length ? ` (${step.end.missing.join(', ')})` : ''}` : 'no end state checked'}${step.endMismatch ? '; endMismatch — confirm with an auto run' : ''}${step.notRecorded ? `; ${step.notRecorded}` : ''}`);
             }
         }
     }
@@ -253,6 +259,7 @@ function stepView(attempt, step) {
   const body = [head];
   if (step.error) body.push(el('div', { class: 'err' }, step.error));
   if (step.end) body.push(el('div', { class: 'small' }, step.end.recorded === false ? 'No end state recorded' : step.end.checked ? 'End state: ' + (step.end.matched ? 'matched' : 'mismatched — ' + (step.end.missing || []).join(', ')) : 'No end state checked'));
+  if (step.notRecorded) body.push(el('div', { class: 'small' }, step.notRecorded));
   if (step.endMismatch) body.push(el('div', { class: 'err' }, 'Replay missed its recorded end state; confirm with an auto run'));
   if (step.replayMiss) body.push(el('div', { class: 'small' }, 'Recording no longer matched: ' + step.replayMiss));
   if (step.actions && step.actions.length) body.push(el('div', { class: 'small' }, 'Actions: ' + step.actions.map(a => (a.ok ? '' : '✗ ') + a.tool + (a.element ? ' ' + a.element : '') + (a.value ? ' ← ' + a.value : '') + ' [' + a.source + ']' + (a.error ? ' (' + a.error + ')' : '')).join(' → ')));
@@ -273,7 +280,7 @@ function render() {
     const body = el('div', { class: 'body' }, el('p', { class: 'small' }, 'Risk: ' + r.risk), r.knownIssue ? el('p', { class: 'small' }, (r.status === 'known' ? 'Known product issue: ' : 'Marked as a known issue, but it did not reproduce: ') + r.knownIssue) : null);
     if (r.issues.length) body.append(el('p', { class: 'small' }, 'Issues: ' + r.issues.map(i => i.severity + ' ' + i.kind + ': ' + i.message).join(' · ')));
     for (const a of r.attempts) {
-      body.append(el('h2', {}, 'Attempt ' + a.attempt + ' · ' + a.status + (a.cause ? ' (' + a.cause + ')' : '') + ' · ' + secs(a.durationMs)), el('p', { class: 'small' }, a.summary + (a.trace ? ' · trace: ' + a.trace : '') + (a.events.length ? ' · events: ' + a.events.join('; ') : '')));
+      body.append(el('h2', {}, 'Attempt ' + a.attempt + ' · ' + a.status + (a.cause ? ' (' + a.cause + ')' : '') + ' · ' + secs(a.durationMs)), el('p', { class: 'small' }, a.summary + (a.screenshotsWithheld ? ' · screenshots withheld after secret input' : '') + (a.traceWithheld ? ' · trace withheld: redaction failed' : '') + (a.trace ? ' · trace: ' + a.trace : '') + (a.events.length ? ' · events: ' + a.events.join('; ') : '')));
       for (const s of a.steps) body.append(stepView(a, s));
       if (a.invariants.length) body.append(el('p', { class: 'small' }, 'Invariants: ' + a.invariants.map(i => (i.passed ? '✓ ' : '✗ ') + i.name + ' @' + (i.step + 1)).join(', ')));
     }

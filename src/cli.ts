@@ -1,6 +1,8 @@
 import type { LoadedConfig, SetupResult } from './config.ts';
 import type { RunMode, RunSummary, SuiteOptions } from './suite.ts';
 import { existsSync, readFileSync } from 'node:fs';
+import { writeArtifact } from './artifacts.ts';
+import { createRedactor } from './secrets.ts';
 import { appendFile, mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { basename, join, relative, resolve } from 'node:path';
 import { parseArgs, parseEnv } from 'node:util';
@@ -12,6 +14,8 @@ import { loadSummary, writeReports } from './report.ts';
 import { selectTests } from './select.ts';
 import { serveReport } from './serve.ts';
 import { bindCancellationSignals } from './signals.ts';
+import { resolveDevice } from './devices.ts';
+import { dirname } from 'node:path';
 import { runSuite } from './suite.ts';
 import { VERSION } from './version.ts';
 
@@ -42,6 +46,7 @@ Run options:
   --dry-run            Run fixtures, open start pages and check initial invariants only
   --no-record          Do not write recordings
   --base-url <origin>  Test an app already running here instead of calling the config's setup
+  --device <desktop|mobile>  Override test and config device
   --headed             Show the browser
   --probe              Also ask on every decision whether the page looks broken
 
@@ -58,6 +63,7 @@ Docs: https://github.com/Ice-Hazymoon/jevwright#readme
 `;
 
 const OPTIONS = {
+    device: { type: 'string' },
     'test': { type: 'string' },
     'module': { type: 'string' },
     'tag': { type: 'string' },
@@ -145,7 +151,8 @@ async function runCommand(flags: Flags, io: CliIO): Promise<number> {
     const passes = passesFor(flags, parseMode(flags.mode), loaded.config.retries ?? 1);
     const tests = selectTests(loaded.config.tests, flags);
     const models = requiredModels(loaded, flags, passes, io.env);
-    const log = (line: string) => io.stderr(`${line}\n`);
+    const redact = createRedactor(tests.flatMap(test => Object.values(test.secrets ?? {})));
+    const log = (line: string) => io.stderr(`${redact.text(line)}\n`);
     const controller = new AbortController();
     const unbind = bindCancellationSignals(controller, log);
     let teardown: SetupResult['teardown'];
@@ -157,7 +164,8 @@ async function runCommand(flags: Flags, io: CliIO): Promise<number> {
         return await runPasses(tests, passes, options, app, io);
     } catch (error) {
         if (controller.signal.aborted) { return 130; }
-        throw error;
+        if (error instanceof Error) { error.message = redact.text(error.message); if (error.stack) { error.stack = redact.text(error.stack); } }
+        throw error instanceof Error ? error : new Error(redact.text(String(error)));
     } finally {
         if (teardown) { await runTeardown(teardown, log); }
         unbind();
@@ -180,7 +188,7 @@ async function runPasses(tests: LoadedConfig['config']['tests'], passes: readonl
     for (const [index, pass] of passes.entries()) {
         // Replay never calls the models it is given; the engine drops them for that mode.
         const summary = await runSuite(tests, { ...options, mode: pass.mode, retries: pass.retries, updateRecordings: pass.record });
-        if (app.serverLog) { await writeFile(join(summary.directory, 'server.log'), await app.serverLog()).catch(() => undefined); }
+        if (app.serverLog) { await writeArtifact(join(summary.directory, 'server.log'), await app.serverLog(), createRedactor(tests.flatMap(test => Object.values(test.secrets ?? {})))).catch(() => undefined); }
         io.stdout(summaryLine(summary, passes.length > 1 ? `pass ${index + 1}/${passes.length} (${pass.mode}${pass.record ? ', recording' : ''}): ` : '', io.cwd));
         if (options.signal?.aborted) { return 130; }
         if (summary.totals.failed > 0) { return runFailureExitCode(summary, passes.length === 1); }
@@ -204,6 +212,9 @@ function suiteOptions(loaded: LoadedConfig, flags: Flags, app: Omit<SetupResult,
         dryRun: flags['dry-run'],
         failOnIssues: config.failOnIssues,
         viewport: config.viewport,
+        rootDir: dirname(loaded.file),
+        device: config.device,
+        deviceOverride: flags.device ? cliDevice(flags.device) : undefined,
         locale: config.locale,
         timezone: config.timezone,
         env: app.env,
@@ -317,7 +328,7 @@ function parseCost(raw: string | undefined): number | undefined {
 /** The flags that shape a run, so a report's reproduce command runs the same way (minus the selection). */
 function reproducibleArgs(flags: Flags): string {
     const parts: string[] = [];
-    for (const name of ['test', 'module', 'tag', 'mode', 'config', 'base-url', 'env-file'] as const) {
+    for (const name of ['test', 'module', 'tag', 'mode', 'config', 'base-url', 'env-file', 'device'] as const) {
         if (flags[name]) { parts.push(`--${name} ${flags[name]}`); }
     }
     if (flags['dry-run']) { parts.push('--dry-run'); }
@@ -424,4 +435,10 @@ export function runFailureExitCode(summary: RunSummary, standalone = true): numb
     if (!failed.length) { return 0; }
     return standalone && summary.manifest.mode === 'replay' && !summary.results.some(result => result.attempts.some(attempt => attempt.steps.some(step => step.endMismatch))) && failed.every(result => result.attempts.length > 0 && result.attempts.every(attempt => attempt.steps.some(step => step.failure === 'not-recorded') && attempt.steps.filter(step => step.status === 'failed').every(step => step.failure === 'not-recorded')))
         ? 4 : 1;
+}
+
+function cliDevice(value: string): 'desktop' | 'mobile' {
+    if (value !== 'desktop' && value !== 'mobile') { throw new JevwrightError('--device must be desktop or mobile'); }
+    resolveDevice(value);
+    return value;
 }

@@ -1,3 +1,5 @@
+import { resolveFiles } from './files.ts';
+import { resolveDevice, type Device } from './devices.ts';
 import type { ModelSettings, ModelUsage, RunBudget } from './models.ts';
 import type { Issue } from './monitor.ts';
 import type { TestRecording } from './recording.ts';
@@ -5,9 +7,11 @@ import type { Env, TestSpec } from './spec.ts';
 import type { AttemptResult, Cause } from './test-runner.ts';
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import { promisify } from 'node:util';
+import { writeArtifact } from './artifacts.ts';
+import { createRedactor, forResults } from './secrets.ts';
 import { launchBrowser } from './browser.ts';
 import { JevwrightError } from './errors.ts';
 import { addUsage, createRunBudget, emptyUsage, modelIds, runBudgetMessage } from './models.ts';
@@ -117,6 +121,9 @@ export interface SuiteOptions {
     /** The app's translation keys; one rendered verbatim on a page is reported as untranslated. */
     translationKeys?: Iterable<string>;
     /** Default 1280×900. */
+    rootDir?: string;
+    device?: Device;
+    deviceOverride?: Device;
     viewport?: { width: number; height: number };
     /** Browser locale. Default `en-US`. */
     locale?: string;
@@ -142,6 +149,9 @@ export interface SuiteOptions {
  */
 export async function runSuite(specs: ReadonlyArray<TestSpec<unknown>>, options: SuiteOptions): Promise<RunSummary> {
     assertValidTests(specs);
+    const redact = createRedactor(specs.flatMap(spec => Object.values(spec.secrets ?? {})));
+    const files = new Map(await Promise.all(specs.map(async spec => [spec.id, await resolveFiles(spec.files, options.rootDir)] as const)));
+    const devices = new Map(specs.map(spec => [spec.id, resolveDevice(options.deviceOverride ?? spec.device ?? options.device, options.viewport)]));
     const mode = options.mode ?? 'auto';
     if (mode !== 'replay' && !options.dryRun && !options.models) {
         throw new JevwrightError(`Mode "${mode}" needs \`models\`; use mode "replay" or \`dryRun\` to run without a model`);
@@ -156,13 +166,14 @@ export async function runSuite(specs: ReadonlyArray<TestSpec<unknown>>, options:
     // Replay makes no model calls, so it never checks the budget; auto/ai share one pool across concurrent tests.
     const runBudget = models && options.maxCostUsd !== undefined ? createRunBudget(options.maxCostUsd) : undefined;
     const store = createRecordingStore(options.recordingsDir);
-    const log = options.log ?? ((line: string) => process.stderr.write(`${line}\n`));
+    const output = options.log ?? ((line: string) => process.stderr.write(`${line}\n`));
+    const log = (line: string) => output(redact.text(line));
     const signal = options.signal ?? new AbortController().signal;
     const startedAt = new Date().toISOString();
     const git = await gitState();
     const manifest = buildManifest({ runId, startedAt, git, mode, models, runBudget, specs, origin, options });
     const translationKeys = options.translationKeys ? new Set(options.translationKeys) : undefined;
-    await writeFile(join(directory, 'run.json'), `${JSON.stringify(manifest, null, 2)}\n`);
+    await writeArtifact(join(directory, 'run.json'), manifest, forResults(redact));
     log(`jevwright run ${runId} (${mode}, ${specs.length} tests) → ${relative(process.cwd(), directory)}`);
 
     const blocked: string[] = [];
@@ -171,7 +182,7 @@ export async function runSuite(specs: ReadonlyArray<TestSpec<unknown>>, options:
     const summary = (): RunSummary => ({ manifest, results: [...results], totals: totals(results), directory });
     let reporting = Promise.resolve();
     const publish = () => {
-        reporting = reporting.then(() => writeReports(summary())).catch((error: unknown) => log(`report write failed: ${String(error)}`));
+        reporting = reporting.then(() => writeReports(summary(), redact)).catch((error: unknown) => log(`report write failed: ${String(error)}`));
         return reporting;
     };
     try {
@@ -186,7 +197,7 @@ export async function runSuite(specs: ReadonlyArray<TestSpec<unknown>>, options:
                 const result = runBudget?.reached() ? notRun(spec, 'model', `Not run: ${runBudgetMessage(runBudget)}`) : await runTest(spec);
                 if (!result.attempts.length && result.status === 'failed') { log(`✗ ${spec.id} failed (${result.cause}) — ${result.summary}`); }
                 results.push(result);
-                options.onResult?.(result);
+                options.onResult?.(redact.result(result));
                 await publish();
             }
         };
@@ -195,19 +206,19 @@ export async function runSuite(specs: ReadonlyArray<TestSpec<unknown>>, options:
         await close();
         manifest.finishedAt = new Date().toISOString();
         if (blocked.length) { manifest.blockedRequests = [...new Set(blocked)].slice(0, 50); }
-        await writeFile(join(directory, 'run.json'), `${JSON.stringify(manifest, null, 2)}\n`);
+        await writeArtifact(join(directory, 'run.json'), manifest, forResults(redact));
         await publish();
     }
     // Stable order for reports: definition order, not completion order.
     results.sort((a, b) => manifest.tests.indexOf(a.id) - manifest.tests.indexOf(b.id));
-    await writeReports(summary());
-    return summary();
+    await writeReports(summary(), redact);
+    return redact.result(summary());
 
     async function runTest(spec: TestSpec<unknown>): Promise<TestResult> {
         if (spec.skip) { return skipped(spec, spec.skip); }
         let recording: TestRecording | undefined;
         try {
-            recording = await store.load(spec.id);
+            recording = await store.load(spec.id, devices.get(spec.id)!.key);
         } catch (error) {
             if (mode !== 'ai') { return notRun(spec, 'environment', `${error instanceof Error ? error.message : String(error)}. Fix or delete the file; the next auto run records the test again`); }
             log(`Ignoring unreadable recording for ${spec.id}; AI mode will record a new path`);
@@ -248,6 +259,7 @@ export async function runSuite(specs: ReadonlyArray<TestSpec<unknown>>, options:
         log(`▶ ${spec.id}${attempt > 1 ? ` (attempt ${attempt})` : ''}`);
         const { result, recording: steps } = await runTestAttempt(spec, {
             browser,
+            redact,
             origin,
             allowedOrigins,
             env: options.env,
@@ -263,6 +275,8 @@ export async function runSuite(specs: ReadonlyArray<TestSpec<unknown>>, options:
             dryRun: options.dryRun,
             translationKeys,
             viewport: options.viewport,
+            device: devices.get(spec.id),
+            files: files.get(spec.id),
             locale: options.locale,
             timezone: options.timezone,
             failOnIssues: options.failOnIssues,
@@ -270,10 +284,10 @@ export async function runSuite(specs: ReadonlyArray<TestSpec<unknown>>, options:
         });
         log(`${result.status === 'passed' ? '✓' : '✗'} ${spec.id} ${result.status}${result.cause ? ` (${result.cause})` : ''} ${(result.durationMs / 1000).toFixed(1)}s — ${result.summary}`);
         const changed = steps ? changedActionSteps(recording, steps) : [];
-        const learned = steps && learnedRecording(recording, steps);
+        const learned = steps && (learnedRecording(recording, steps) || recording?.steps.some(entry => redact.contains(JSON.stringify(entry))));
         const keep = options.updateRecordings ?? mode !== 'replay';
         if (!steps || !learned || options.dryRun || !keep || !store.enabled) { return { result, saved: false, changed }; }
-        await store.save({ version: 1, test: spec.id, updatedAt: new Date().toISOString(), steps });
+        await store.save({ version: 1, test: spec.id, updatedAt: new Date().toISOString(), steps }, devices.get(spec.id)!.key);
         return { result, saved: true, changed };
     }
 }

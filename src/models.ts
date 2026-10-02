@@ -2,6 +2,7 @@ import type { Experimental_EvaluationModel, Experimental_EvaluationQuestion, Lan
 import type { z } from 'zod';
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
 import { createGateway, experimental_evaluate as evaluate, generateText, NoObjectGeneratedError, NoOutputGeneratedError, Output } from 'ai';
+import { createRedactor, type Redactor } from './secrets.ts';
 import { JevwrightError } from './errors.ts';
 
 export type Question = Experimental_EvaluationQuestion;
@@ -125,7 +126,7 @@ export function modelIds(settings: Omit<ModelSettings, 'apiKey'>): { provider: M
     return { provider: settings.models ? 'offline' : provider, jev: settings.jevModel ?? DEFAULT_MODELS[provider].jev, llm: settings.llmModel ?? DEFAULT_MODELS[provider].llm };
 }
 
-export function createModels(settings: ModelSettings, runBudget?: RunBudget) {
+export function createModels(settings: ModelSettings, runBudget?: RunBudget, redact: Redactor = createRedactor()) {
     const ids = modelIds(settings);
     const jevModel = ids.jev;
     const llmModel = ids.llm;
@@ -147,8 +148,8 @@ export function createModels(settings: ModelSettings, runBudget?: RunBudget) {
         if (signal.aborted) { return new ModelError('Cancelled', 'cancelled'); }
         const name = error instanceof Error ? error.name : '';
         // Unparsable structured output: keep the start of what the model wrote, for diagnosis.
-        const output = NoObjectGeneratedError.isInstance(error) && error.text ? ` (output: ${error.text.slice(0, 160)})` : '';
-        const message = `${error instanceof Error ? error.message.split('\n')[0]!.slice(0, 200) : String(error)}${output}`;
+        const output = NoObjectGeneratedError.isInstance(error) && error.text ? ` (output: ${redact.text(error.text).slice(0, 160)})` : '';
+        const message = `${error instanceof Error ? redact.text(error.message).split('\n')[0]!.slice(0, 200) : String(error)}${output}`;
         return new ModelError(`${name}: ${message}`, /NoObjectGenerated|NoOutputGenerated|InvalidResponseData|TypeValidation|JSONParse/.test(name) ? 'output' : 'service');
     };
 
@@ -164,7 +165,7 @@ export function createModels(settings: ModelSettings, runBudget?: RunBudget) {
             const call: ModelCall = { kind: 'jev', purpose, durationMs: 0, inputTokens: 0, outputTokens: 0 };
             try {
                 // The SDK retries 408/429/5xx with exponential backoff; it validates distributions and arg-max.
-                const result = await evaluate({ model: evaluation, state: state as never, questions, maxRetries: 4, abortSignal: requestSignal(signal) });
+                const result = await evaluate({ model: evaluation, state: redact.value(state) as never, questions: redact.value(questions), maxRetries: 4, abortSignal: requestSignal(signal) });
                 call.inputTokens = result.usage.inputTokens ?? 0;
                 call.outputTokens = result.usage.outputTokens ?? 0;
                 call.cost = costOf(result.providerMetadata);
@@ -199,7 +200,7 @@ export function createModels(settings: ModelSettings, runBudget?: RunBudget) {
             const call: ModelCall = { kind: 'llm', purpose, durationMs: 0, inputTokens: 0, outputTokens: 0 };
             try {
                 const request = async () => {
-                    const result = await generateText({ model: language, system, prompt, output: Output.object({ schema }), reasoning: 'none', maxOutputTokens: 1500, maxRetries: 3, abortSignal: requestSignal(signal) });
+                    const result = await generateText({ model: language, system: redact.text(system), prompt: redact.text(prompt), output: Output.object({ schema }), reasoning: 'none', maxOutputTokens: 1500, maxRetries: 3, abortSignal: requestSignal(signal) });
                     // Reading `output` throws when the model stopped without writing any text.
                     return { result, output: result.output };
                 };

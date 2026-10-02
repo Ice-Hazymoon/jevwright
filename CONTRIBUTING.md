@@ -46,6 +46,12 @@ A full run costs a few cents. Run it after changing prompts, questions or thresh
 2. `npm run typecheck && npm test && npm run build && npm pack --dry-run`. The pack list may hold only `dist/`, `README.md`, `CHANGELOG.md`, `LICENSE` and `package.json`.
 3. `npm publish`. `prepublishOnly` repeats the checks.
 
+
+Runtime text artifacts go through `writeArtifact(path, contents, redact)`. The run redactor includes
+all declared secrets. FW01 in the package checks rejects direct filesystem writes outside the artifact
+writer, recording store, and CLI scaffolding function. Binary trace rewriting remains a separate,
+fail-closed path. When adding a new artifact, verify both its model inputs and its saved bytes.
+
 ## Paired calibration
 
 Before changing a prompt or decision threshold, compare the candidate workspace with a Git revision:
@@ -66,3 +72,7 @@ reports sit beside it. Two net adverse flips for a test, or three across all tes
 No regression against a broken baseline does not establish correctness: inspect the absolute
 matched outcomes as well. Six or more pairs are required; unresolved intervals remain labeled at
 the pair limit. The temporary baseline worktree is removed on completion or the first interrupt.
+
+FW02 confines `forResults` to the suite, attempt and report writers. Model payloads use the generic
+redactor, including arbitrary object keys; user evidence/reference/metadata never inherits result grammar
+exemptions. Keep regression coverage for schema-shaped secrets and multiline text before splitting.

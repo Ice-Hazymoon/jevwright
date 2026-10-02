@@ -211,3 +211,44 @@ Differences from the CLI:
 - `runSuite` neither calls `setup` nor loads `--env-file`; pass `baseURL` and `env` yourself.
 
 `models.models` takes AI SDK evaluation and language models to use instead of a gateway, for example the SDK's mock models in your own tests. It is experimental: it relies on the AI SDK's experimental evaluation API, whose shape may change in a minor release.
+
+
+### Declaring secrets
+
+```ts
+import { act, reveal, secret, verify } from '@hazymoon/jevwright';
+
+const accessKey = secret(process.env.TEST_ACCESS_KEY!);
+// Inside a test:
+// secrets: { accessKey },
+// steps: () => [
+//     act('Enter {accessKey} in the API key field'),
+//     verify('key persisted', ({ secrets }) => storedKey === reveal(secrets.accessKey!)),
+// ],
+```
+
+Secrets need at least six Unicode code points. Duplicate keys across `data` and `secrets`, non-handle
+secret values, and `check` assertions that reference a secret key are authoring errors. Definitions that
+need their fixture are checked when that fixture has been created, before steps execute.
+
+## Files, devices and downloads
+
+Declare upload inputs with `files: { avatar: file('fixtures/avatar.png') }`, then write
+`act('Upload {avatar} with Upload avatar')`. The model sees the filename, never the local path.
+Paths resolve under the configuration directory (programmatic `rootDir`, default current directory).
+Missing files and symlinks outside that root fail before browser launch. Native file inputs and
+visible buttons that open a file chooser are supported. A chooser must appear within five seconds.
+
+`--device mobile` overrides test `device`, then config `device`, then legacy `viewport`.
+Mobile uses 390×844, touch, DPR 3 and a mobile Chrome user agent. Custom devices accept `viewport`,
+`isMobile`, `hasTouch` and `userAgent`. Desktop recordings keep `<id>.json`; mobile uses
+`<id>.mobile.json`, and custom devices use a stable settings hash. Touch clicks use tap; hover
+reveal remains available. The runner returns to the most recent live page when a popup closes.
+
+`act('Export CSV', { expect: { download: { filename: /\.csv$/ } } })` waits for a matching download.
+A later `verify` reads `downloads`, an array of `{ filename, path, bytes }`; file contents are
+available only to trusted test code. Untrusted suggested names never determine output paths.
+Undeclared downloads are cancelled. Downloads larger than 20 MiB are deleted and fail the expectation.
+Transfers have a 30-second limit. Blob/data downloads are allowed; network downloads use the origin proxy.
+Fixture-dependent step declarations provisionally allow downloads in the context, but cancel every
+download outside a declared step. After verification, files containing a declared secret are removed and marked `withheld: true` in download metadata.

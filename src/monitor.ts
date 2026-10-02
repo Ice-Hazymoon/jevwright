@@ -16,6 +16,7 @@ export interface Issue {
 }
 
 export interface MonitorOptions {
+    redact?: import('./secrets.ts').Redactor;
     /** The app's origin: relative paths in expectations and messages refer to it. */
     origin: string;
     /** Further origins that belong to the app (a separate API or auth server); monitored like `origin`. */
@@ -86,6 +87,7 @@ function changesPage(type: string, sameOrigin: boolean): boolean {
  * uncaught exceptions, server errors, unexpected client errors and broken rendered text.
  */
 export function createMonitor(context: BrowserContext, options: MonitorOptions) {
+    const safe = (text: string) => options.redact?.text(text) ?? text;
     const origin = new URL(options.origin).origin;
     const appOrigins = new Set([origin, ...(options.allowedOrigins ?? []).map(value => new URL(value).origin)]);
     const issues = new Map<string, Issue>();
@@ -118,10 +120,10 @@ export function createMonitor(context: BrowserContext, options: MonitorOptions) 
     const watchPage = (page: Page) => {
         page.on('pageerror', (error) => {
             if (ASSET_LOAD.test(error.message)) {
-                add({ kind: 'asset-load', severity: 'high', message: firstLine(error.message) });
+                add({ kind: 'asset-load', severity: 'high', message: firstLine(safe(error.message)) });
                 return;
             }
-            add({ kind: 'page-error', severity: 'high', message: firstLine(error.message), detail: error.stack?.split('\n').slice(0, 4).join('\n') });
+            add({ kind: 'page-error', severity: 'high', message: firstLine(safe(error.message)), detail: error.stack ? safe(error.stack).split('\n').slice(0, 4).join('\n') : undefined });
         });
         let hydrationWarnings = 0;
         // Dev-server noise and requests the test itself aborted; only a real console error is worth reporting.
@@ -138,7 +140,7 @@ export function createMonitor(context: BrowserContext, options: MonitorOptions) 
                 hydrationWarnings++;
                 const path = shortPath(page.url());
                 void consoleText(message).then((described) => {
-                    const lines = described.split('\n').map(line => line.trim()).filter(Boolean);
+                    const lines = safe(described).split('\n').map(line => line.trim()).filter(Boolean);
                     add({ kind: 'hydration-mismatch', severity: 'medium', message: `${lines[0]!.replace(/^\[Vue warn\]:\s*/, '').slice(0, 200)} on ${path}`, detail: lines.slice(1, 6).join('\n').slice(0, 600) });
                 });
                 return;
@@ -150,7 +152,7 @@ export function createMonitor(context: BrowserContext, options: MonitorOptions) 
             }
             if (message.type() !== 'error') { return; }
             if (!isReportableConsoleError(text, message.location().url)) { return; }
-            add({ kind: 'console-error', severity: 'medium', message: firstLine(text).slice(0, 240) });
+            add({ kind: 'console-error', severity: 'medium', message: firstLine(safe(text)).slice(0, 240) });
         });
     };
     context.on('page', watchPage);
@@ -246,15 +248,15 @@ export function createMonitor(context: BrowserContext, options: MonitorOptions) 
                 }
                 return parts.join('\n');
             }).catch(() => '');
-            for (const line of text.split('\n')) {
+            for (const line of safe(text).split('\n')) {
                 // A client-rendered error screen can appear with no failed request and no uncaught exception.
-                if (ERROR_SCREEN.test(line.trim())) { add({ kind: 'ui-error', severity: 'high', message: `Server error screen on ${shortPath(page.url())}: "${line.trim().slice(0, 80)}"` }); }
+                if (ERROR_SCREEN.test(line.trim())) { add({ kind: 'ui-error', severity: 'high', message: `Server error screen on ${shortPath(page.url())}: "${safe(line).trim().slice(0, 80)}"` }); }
                 for (const [pattern, label] of SENTINELS) {
-                    if (pattern.test(line)) { add({ kind: 'text-anomaly', severity: 'medium', message: `${label}: "${line.slice(0, 120)}"` }); }
+                    if (pattern.test(line)) { add({ kind: 'text-anomaly', severity: 'medium', message: `${label}: "${safe(line).slice(0, 120)}"` }); }
                 }
                 if (options.i18nKeys?.size) {
                     for (const token of line.match(/\b[a-z][\w-]*(?:\.[\w-]+){1,6}\b/gi) ?? []) {
-                        if (options.i18nKeys.has(token)) { add({ kind: 'raw-i18n-key', severity: 'medium', message: `Untranslated key "${token}"`, detail: line.slice(0, 160) }); }
+                        if (options.i18nKeys.has(token)) { add({ kind: 'raw-i18n-key', severity: 'medium', message: `Untranslated key "${token}"`, detail: safe(line).slice(0, 160) }); }
                     }
                 }
             }

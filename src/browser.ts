@@ -1,3 +1,5 @@
+import type { ResolvedDevice } from './devices.ts';
+import type { Redactor } from './secrets.ts';
 import type { Monitor } from './monitor.ts';
 import type { Browser, BrowserContext, Locator, Page } from 'playwright';
 import { createRequire } from 'node:module';
@@ -103,17 +105,17 @@ function watchMutations() {
     if (document.documentElement) { start(); } else { addEventListener('DOMContentLoaded', start); }
 }
 
-export async function newTestContext(browser: Browser, options: { viewport: { width: number; height: number }; dialogs: 'accept' | 'dismiss'; baseURL?: string; locale?: string; timezone?: string; onDialog?: (detail: string) => void }): Promise<BrowserContext> {
+export async function newTestContext(browser: Browser, options: { viewport: { width: number; height: number }; dialogs: 'accept' | 'dismiss'; baseURL?: string; locale?: string; timezone?: string; device?: ResolvedDevice; acceptDownloads?: boolean; onDownload?: (download: import('playwright').Download) => void; onDialog?: (detail: string) => void }): Promise<BrowserContext> {
     // `baseURL` lets test code call `page.goto('/path')` and `page.request.get('/api/...')` with relative URLs.
-    const context = await browser.newContext({ viewport: options.viewport, serviceWorkers: 'block', acceptDownloads: false, locale: options.locale ?? 'en-US', timezoneId: options.timezone ?? 'UTC', ...(options.baseURL ? { baseURL: options.baseURL } : {}) });
+    const context = await browser.newContext({ ...(options.device ?? { viewport: options.viewport }), serviceWorkers: 'block', acceptDownloads: options.acceptDownloads ?? false, locale: options.locale ?? 'en-US', timezoneId: options.timezone ?? 'UTC', ...(options.baseURL ? { baseURL: options.baseURL } : {}) });
     context.setDefaultTimeout(10_000);
     await context.addInitScript(watchMutations);
     context.on('page', (page) => {
         page.on('dialog', (dialog) => {
-            options.onDialog?.(`${dialog.type()} "${dialog.message().slice(0, 120)}" ${options.dialogs === 'accept' ? 'accepted' : 'dismissed'}`);
+            options.onDialog?.(`${dialog.type()} "${dialog.message()}" ${options.dialogs === 'accept' ? 'accepted' : 'dismissed'}`);
             void (options.dialogs === 'accept' ? dialog.accept() : dialog.dismiss()).catch(() => undefined);
         });
-        page.on('download', download => void download.cancel().catch(() => undefined));
+        page.on('download', download => options.onDownload ? options.onDownload(download) : void download.cancel().catch(() => undefined));
     });
     return context;
 }
@@ -146,7 +148,7 @@ export async function settle(page: Page, monitor: Pick<Monitor, 'pendingRequests
     return Date.now() - started;
 }
 
-export type Tool = 'click' | 'type' | 'press_enter' | 'press_escape' | 'select' | 'scroll' | 'wait';
+export type Tool = 'click' | 'type' | 'press_enter' | 'press_escape' | 'select' | 'scroll' | 'wait' | 'upload';
 
 export interface ToolCall {
     tool: Tool;
@@ -158,6 +160,10 @@ export interface ToolCall {
     double?: boolean;
     /** Type at the cursor instead of replacing the field's content. */
     append?: boolean;
+    /** Fill atomically so trace snapshots cannot capture partial secret keystrokes. */
+    sensitive?: boolean;
+    filePath?: string;
+    hasTouch?: boolean;
 }
 
 export async function perform(page: Page, call: ToolCall): Promise<void> {
@@ -172,7 +178,10 @@ export async function perform(page: Page, call: ToolCall): Promise<void> {
     switch (call.tool) {
         case 'click':
             try {
-                if (call.double) {
+                if (call.hasTouch) {
+                    await target().tap({ timeout });
+                    if (call.double) { await target().tap({ timeout }); }
+                } else if (call.double) {
                     await target().dblclick({ timeout });
                 } else {
                     await target().click({ timeout });
@@ -181,9 +190,30 @@ export async function perform(page: Page, call: ToolCall): Promise<void> {
                 throw await withCover(error, target());
             }
             return;
+        case 'upload': {
+            if (!call.filePath) { throw new Error('Upload requires a declared file key'); }
+            const locator = target();
+            if (await locator.evaluate(element => element instanceof HTMLInputElement && element.type === 'file')) {
+                await locator.setInputFiles(call.filePath, { timeout });
+            } else {
+                const chooser = page.waitForEvent('filechooser', { timeout }).catch(() => undefined);
+                try {
+                    if (call.hasTouch) { await locator.tap({ timeout }); } else { await locator.click({ timeout }); }
+                } catch (error) { await chooser; throw error; }
+                const opened = await chooser;
+                if (!opened) { throw new Error('Upload target did not open a file chooser within 5 seconds'); }
+                await opened.setFiles(call.filePath, { timeout });
+            }
+            return;
+        }
         case 'type': {
             if (call.value === undefined) { throw new Error('No value to type'); }
             const locator = target();
+            if (call.sensitive) {
+                if (!await locator.isEditable({ timeout })) { throw new Error('Secret input needs an enabled editable field'); }
+                await locator.fill(call.append ? `${await locator.inputValue()}${call.value}` : call.value, { timeout });
+                return;
+            }
             if (call.append) {
                 // The caret is where the previous typing left it (e.g. after Enter); keep the text before it.
                 await locator.pressSequentially(call.value, { delay: 4, timeout: timeout + call.value.length * 20 });
@@ -263,14 +293,15 @@ async function withCover(error: unknown, locator: Locator): Promise<unknown> {
         }
         // eslint-disable-next-line unicorn/prefer-dom-node-text-content -- innerText respects CSS visibility/layout; hidden text must not leak into the cover label
         const label = layer.getAttribute('aria-label') ?? layer.querySelector('h1, h2, h3, h4, [role=heading]')?.textContent ?? (layer as HTMLElement).innerText;
-        return (label ?? '').replace(/\s+/g, ' ').trim().slice(0, 80);
+        return label ?? '';
     }).catch(() => '');
     return cover ? new Error(`${error.message}\ncovered by: ${cover}`) : error;
 }
 
 /** Short, model-readable reason for a failed Playwright action. */
-export function actionError(error: unknown): string {
-    const message = error instanceof Error ? error.message : String(error);
+export function actionError(error: unknown, redact?: Redactor): string {
+    const raw = error instanceof Error ? error.message : String(error);
+    const message = redact?.text(raw) ?? raw;
     if (/intercepts pointer events/i.test(message)) {
         const cover = /\ncovered by: (.+)$/.exec(message)?.[1];
         return `click blocked: ${cover ? `"${cover}" covers the target` : 'another element covers the target'} (an open panel, drawer, dialog, overlay, toast or banner)`;

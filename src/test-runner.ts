@@ -5,8 +5,13 @@ import type { Issue } from './monitor.ts';
 import type { RecordedAction, StepRecording, TestRecording } from './recording.ts';
 import type { CheckOutcome, Env, FixtureContext, MaybePromise, RunContext, Step, TestSpec, Values, WriteRecord } from './spec.ts';
 import type { Browser, Page } from 'playwright';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { createDownloads } from './downloads.ts';
+import { mkdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
+import { writeArtifact, redactTrace } from './artifacts.ts';
+import { forResults, createRedactor, reveal, type Redactor } from './secrets.ts';
+import { JevwrightError } from './errors.ts';
+import { secretCheckProblems } from './select.ts';
 import { pageState, runAct } from './act.ts';
 import { newTestContext, settle } from './browser.ts';
 import { actedOnTarget, adjudicateClaim, judgeClaim } from './judge.ts';
@@ -32,6 +37,7 @@ export interface StepResult {
     actions?: ActionRecord[];
     rounds?: Round[];
     writes: WriteRecord[];
+    downloads?: import('./spec.ts').DownloadRecord[];
     evidence?: unknown;
     error?: string;
     failure?: StepFailure;
@@ -42,6 +48,7 @@ export interface StepResult {
     endMismatch?: true;
     replayOnTarget?: true;
     screenshot?: string;
+    notRecorded?: string;
     /** What kept the page from settling when a wait hit its cap (slow-step diagnostics). */
     busy?: string[];
     /** File in the attempt directory with the page state a check judged. */
@@ -84,11 +91,14 @@ export interface AttemptResult {
     recording: { total: number; replayed: number; healed: number; ai: number };
     directory: string;
     trace?: string;
+    screenshotsWithheld?: true;
+    traceWithheld?: true;
     events: string[];
 }
 
 export interface AttemptOptions {
     browser: Browser;
+    redact?: Redactor;
     origin: string;
     /** Further origins of the app, monitored like `origin`. */
     allowedOrigins?: readonly string[];
@@ -107,6 +117,8 @@ export interface AttemptOptions {
     /** Stop after fixture, start page and initial invariants; saves the start observation. */
     dryRun?: boolean;
     translationKeys?: ReadonlySet<string>;
+    device?: import('./devices.ts').ResolvedDevice;
+    files?: Record<string, import('./files.ts').ResolvedFile>;
     viewport?: { width: number; height: number };
     locale?: string;
     timezone?: string;
@@ -127,10 +139,18 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
     const invariants: InvariantResult[] = [];
     const events: string[] = [];
     const cleanups: Array<() => MaybePromise<void>> = [];
-    const models: Models | undefined = options.models ? createModels(options.models, options.runBudget) : undefined;
+    const secrets = spec.secrets ?? {};
+    const redact = options.redact ?? createRedactor(Object.values(secrets));
+    const log = (line: string) => options.log(redact.text(line));
+    let screenshotsWithheld = Object.keys(secrets).length > 0;
+    let traceWithheld = false;
+    const models: Models | undefined = options.models ? createModels(options.models, options.runBudget, redact) : undefined;
     const timeout = AbortSignal.timeout(spec.timeoutMs ?? 240_000);
     const signal = AbortSignal.any([options.signal, timeout]);
     const data: Values = spec.data ?? {};
+    const displayData = { ...data, ...Object.fromEntries(Object.entries(options.files ?? {}).map(([key, file]) => [key, file.name])) };
+    const values = { ...data, ...Object.fromEntries(Object.entries(secrets).map(([key, handle]) => [key, reveal(handle)])) };
+    const secretKeys = new Set(Object.keys(secrets));
     const viewport = options.viewport ?? { width: 1280, height: 900 };
     const newRecording: StepRecording[] = [];
     const pendingEnds: Array<{ entry: StepRecording; index: number; end: NonNullable<StepRecording['end']> }> = [];
@@ -142,11 +162,20 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
     let summary = 'All steps passed';
     let failedStep: number | undefined;
 
-    const context = await newTestContext(options.browser, { viewport, baseURL: options.origin, locale: options.locale, timezone: options.timezone, dialogs: spec.dialogs ?? 'accept', onDialog: detail => events.push(`dialog ${detail}`) });
+    const downloads = createDownloads(directory, signal, redact);
+    let acceptDownloads = true;
+    try { acceptDownloads = !!spec.fixture || spec.steps(undefined as F).some(step => step.kind === 'act' && !!step.expect?.download); } catch { /* Fixture-dependent declarations are known after fixture setup. */ }
+    const context = await newTestContext(options.browser, { viewport, device: options.device, acceptDownloads, onDownload: downloads.receive, baseURL: options.origin, locale: options.locale, timezone: options.timezone, dialogs: spec.dialogs ?? 'accept', onDialog: detail => events.push(`dialog ${detail}`) });
     cleanups.push(async () => context.close());
-    const monitor = createMonitor(context, { origin: options.origin, allowedOrigins: options.allowedOrigins, expectedHttp: spec.expectedHttp, ignoreConsole: spec.ignoreConsole, i18nKeys: options.translationKeys, expectedAborts: spec.expectedAborts });
-    await context.tracing.start({ screenshots: true, snapshots: true, title: spec.id }).catch(() => undefined);
+    const monitor = createMonitor(context, { redact, origin: options.origin, allowedOrigins: options.allowedOrigins, expectedHttp: spec.expectedHttp, ignoreConsole: spec.ignoreConsole, i18nKeys: options.translationKeys, expectedAborts: spec.expectedAborts });
+    await context.tracing.start({ screenshots: !secretKeys.size, snapshots: true, title: spec.id }).catch(() => undefined);
+    const openedPages: Page[] = [];
     context.on('page', (opened) => {
+        openedPages.push(opened);
+        opened.on('close', () => {
+            events.push('tab closed');
+            if (page === opened) { page = openedPages.findLast(candidate => !candidate.isClosed()); }
+        });
         if (page && opened !== page) {
             events.push(`new tab opened: ${shortUrl(opened.url())}`);
             page = opened;
@@ -160,10 +189,12 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
         context,
         fixture: fixture as F,
         data,
+        secrets,
         origin: options.origin,
         env: options.env as Env,
         signal,
         writes: monitor.writes,
+        downloads: downloads.records,
         step: stepIndex,
     });
 
@@ -195,19 +226,21 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
         }
 
         const definition = spec.steps(fixture as F);
+        const secretProblems = secretCheckProblems(definition, secrets);
+        if (secretProblems.length) { throw new JevwrightError(secretProblems.join("; ")); }
         for (const [index, step] of definition.entries()) {
             if (step.kind === 'act' && step.expectError) { monitor.expectDuring(index, writeRules(step.expect)); }
         }
         if (options.dryRun) {
-            const observation = await observe(page);
-            await writeFile(join(directory, 'start-observation.json'), `${JSON.stringify(observation, null, 2)}\n`);
+            const observation = await observe(page, { redact });
+            await writeArtifact(join(directory, 'start-observation.json'), observation, redact);
             await page.screenshot({ path: join(directory, 'start.jpg'), type: 'jpeg', quality: 60 }).catch(() => undefined);
             summary = `Dry run: fixture, start page and ${spec.invariants?.length ?? 0} invariant(s) OK; ${definition.length} steps not run`;
             throw new DryRunComplete();
         }
         nextAct = (index: number) => {
             const following = definition[index + 1];
-            return following?.kind === 'act' ? describeStep(following as Step<unknown>, data) : undefined;
+            return following?.kind === 'act' ? describeStep(following as Step<unknown>, displayData, secrets) : undefined;
         };
         /** A product-looking failure after AI-driven steps: the agent's, when a step acted on something it did not name. */
         const misstep = async (upTo: number): Promise<string | undefined> => {
@@ -226,11 +259,12 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
         for (const [index, step] of definition.entries()) {
             signal.throwIfAborted();
             monitor.setStep(index);
-            const label = describeStep(step as Step<unknown>, data);
+            downloads.setStep(index, step.kind === 'act' ? step.expect?.download : undefined);
+            const label = describeStep(step as Step<unknown>, displayData, secrets);
             const stepStarted = performance.now();
             const writesBefore = monitor.writes.length;
             const result: StepResult = { index, kind: step.kind, label, status: 'passed', durationMs: 0, url: shortUrl(page.url()), writes: [] };
-            options.log(`  ${index + 1}. ${label}`);
+            log(`  ${index + 1}. ${label}`);
             try {
                 await runStep(step, index, result, previousLabel);
             } catch (error) {
@@ -243,14 +277,20 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
             await settle(page, monitor, { maxMs: 3000 }).catch(() => 0);
             await monitor.scanText(page);
             result.url = shortUrl(page.url());
+            await downloads.flush();
+            if (step.kind === 'act' && step.expect?.download && result.status === 'passed') {
+                const state = downloads.state();
+                if (!state.ok) { result.status = 'failed'; result.failure = 'expectation'; result.error = state.reason; }
+            }
+            result.downloads = downloads.forStep(index);
             result.writes = monitor.writes.slice(writesBefore).map(write => ({ ...write }));
             const busy = [...new Set(monitor.settleCaps.filter(cap => cap.step === index).map(cap => cap.reason))];
             if (busy.length) { result.busy = busy.slice(0, 5); }
             result.durationMs = Math.round(performance.now() - stepStarted);
-            result.screenshot = await screenshot(page, directory, index);
+            result.screenshot = screenshotsWithheld ? undefined : await screenshot(page, directory, index);
             steps.push(result);
-            if (result.status === 'passed' && (step.kind === 'verify' || (step.kind === 'act' && (step.expect?.write || step.expect?.url)))) { deterministicChecks.push(index); }
-            options.log(`     ${STEP_MARK[result.status]} ${result.source ? `[${result.source}] ` : ''}${result.durationMs}ms${result.error ? ` — ${result.error}` : ''}`);
+            if (result.status === 'passed' && (step.kind === 'verify' || (step.kind === 'act' && (step.expect?.write || step.expect?.url || step.expect?.download)))) { deterministicChecks.push(index); }
+            log(`     ${STEP_MARK[result.status]} ${result.source ? `[${result.source}] ` : ''}${result.durationMs}ms${result.error ? ` — ${result.error}` : ''}`);
             if (result.status === 'failed') {
                 failedStep = index;
                 ({ cause, summary } = attribute(result));
@@ -296,6 +336,7 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
             previousLabel = label;
         }
     } catch (error) {
+        if (error instanceof JevwrightError) { throw error; }
         if (error instanceof DryRunComplete) {
             // Not a failure: the requested part of the test ran.
         } else if (error instanceof AttemptError) {
@@ -314,10 +355,16 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
         failedStep ??= steps.length;
     } finally {
         trace = join(directory, 'trace.zip');
-        await context.tracing.stop({ path: trace }).catch(() => { trace = undefined; });
+        await context.tracing.stop({ path: trace }).catch(async () => {
+            await rm(trace!, { force: true });
+            trace = undefined;
+            if (secretKeys.size) { traceWithheld = true; }
+        });
+        if (trace && secretKeys.size && !await redactTrace(trace, redact)) { trace = undefined; traceWithheld = true; }
         for (const cleanup of cleanups.reverse()) {
             await Promise.race([Promise.resolve().then(cleanup), new Promise(resolve => setTimeout(resolve, 5000))]).catch((error: unknown) => events.push(`cleanup failed: ${message(error)}`));
         }
+        await downloads.close();
     }
 
     // Stopped by Ctrl-C: whatever the attempt ran into while stopping says nothing about the app.
@@ -355,15 +402,17 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
         directory,
         ...(trace ? { trace } : {}),
         events,
+        ...(screenshotsWithheld ? { screenshotsWithheld: true } : {}),
+        ...(traceWithheld ? { traceWithheld: true } : {}),
     };
-    await writeFile(join(directory, 'result.json'), `${JSON.stringify(result, null, 2)}\n`);
-    return { result, ...(status === 'passed' && newRecording.length ? { recording: newRecording } : {}) };
+    await writeArtifact(join(directory, 'result.json'), result, forResults(redact));
+    return { result, ...(status === 'passed' && counts.total ? { recording: newRecording } : {}) };
 
     async function runStep(step: Step<F>, index: number, result: StepResult, previousLabel: string | undefined): Promise<void> {
         switch (step.kind) {
             case 'act': {
                 const keys = templateKeys(step.instruction);
-                const values = Object.fromEntries(keys.map(key => [key, data[key]!]));
+                const stepValues = Object.fromEntries(keys.filter(key => Object.hasOwn(values, key)).map(key => [key, values[key]!]));
                 const key = stepKey(step);
                 const recorded = options.fresh ? undefined : options.recording?.steps.find(entry => entry.key === key);
                 if (!models && !recorded?.actions.length) {
@@ -375,14 +424,20 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
                 }
                 counts.total++;
                 const outcome = await runAct({
-                    page: page!,
+                    get page() { return page!; },
+                    files: Object.fromEntries(Object.entries(options.files ?? {}).filter(([key]) => keys.includes(key))),
+                    hasTouch: options.device?.hasTouch,
+                    downloadState: downloads.state,
                     monitor,
                     models,
                     signal,
                     stepIndex: index,
                     test: spec.title,
-                    instruction: fillTemplate(step.instruction, data),
-                    values,
+                    instruction: fillTemplate(step.instruction, displayData, secrets),
+                    values: stepValues,
+                    secretKeys,
+                    redact,
+                    onSecretInput: () => { screenshotsWithheld = true; },
                     previous: previousLabel,
                     next: nextAct(index),
                     expect: step.expect,
@@ -392,7 +447,7 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
                     recorded,
                     probe: options.probe,
                     events,
-                    log: options.log,
+                    log,
                 });
                 counts[outcome.source === 'replay' ? 'replayed' : outcome.source]++;
                 result.source = outcome.source;
@@ -413,7 +468,8 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
                         if (outcome.source === 'replay' && recorded?.end === undefined) { pendingEnds.push({ entry, index, end: outcome.recordedEnd }); }
                         else { entry.end = outcome.recordedEnd; }
                     }
-                    newRecording.push(entry);
+                    if (redact.contains(JSON.stringify(entry))) { result.notRecorded = 'not recorded: target text contains a secret'; }
+                    else { newRecording.push(entry); }
                 }
                 if (outcome.rounds.some(round => (round.anomaly ?? 0) >= 0.8)) {
                     monitor.report({ kind: 'semantic', severity: 'low', message: `Jev flagged broken-looking content on ${shortUrl(page!.url())}` });
@@ -427,16 +483,16 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
                     return;
                 }
                 result.source = 'ai';
-                const claim = fillTemplate(step.assertion, data);
+                const claim = fillTemplate(step.assertion, displayData);
                 const reference = step.reference ? await step.reference(runContext(index)) : undefined;
-                let observed = await observe(page!);
+                let observed = await observe(page!, { redact });
                 let verdict = await judgeClaim(models, observed, claim, reference, signal);
                 const attempts: unknown[] = [verdict];
                 if (!verdict.passed || verdict.uncertain) {
                     // A second look after the page settles; UI updates can trail the data.
                     await page!.waitForTimeout(1500);
                     await settle(page!, monitor);
-                    const next = await observe(page!);
+                    const next = await observe(page!, { redact });
                     if (next.signature !== observed.signature) {
                         observed = next;
                         verdict = await judgeClaim(models, observed, claim, reference, signal);
@@ -444,14 +500,14 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
                     }
                 }
                 if (verdict.uncertain) {
-                    observed = await observe(page!);
+                    observed = await observe(page!, { redact });
                     const tie = await adjudicateClaim(models, observed, claim, reference, signal);
                     attempts.push({ adjudicated: tie });
                     verdict = { ...verdict, passed: tie.passed, note: tie.reason };
                 }
                 // Exactly what the claim was judged against, so a verdict can be audited without re-running.
                 result.observation = `step-${String(index + 1).padStart(2, '0')}-observation.json`;
-                await writeFile(join(directory, result.observation), `${JSON.stringify(pageState(observed), null, 2)}\n`);
+                await writeArtifact(join(directory, result.observation), pageState(observed), redact);
                 result.evidence = { claim, ...(reference !== undefined ? { reference } : {}), verdicts: attempts };
                 if (!verdict.passed) {
                     result.status = 'failed';
@@ -555,5 +611,5 @@ async function screenshot(page: Page, directory: string, index: number): Promise
 }
 
 function message(error: unknown): string {
-    return error instanceof Error ? error.message.split('\n')[0]!.slice(0, 400) : String(error);
+    return error instanceof Error ? error.message : String(error);
 }
