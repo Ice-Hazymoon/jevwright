@@ -220,12 +220,15 @@ details.test > summary::-webkit-details-marker { display:none; }
 .err { color:var(--fail); white-space:pre-wrap; word-break:break-word; }
 pre, code { background:var(--code); border-radius:6px; font:12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; }
 pre { padding:8px; overflow:auto; max-height:260px; white-space:pre-wrap; word-break:break-word; }
+.issues-scroll { overflow-x:auto; }
+.issues-scroll th, .issues-scroll td:nth-child(-n+2) { white-space:nowrap; }
+.issues-scroll:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
 table { width:100%; border-collapse:collapse; background:var(--panel); border:1px solid var(--line); border-radius:8px; overflow:hidden; }
 th, td { text-align:left; padding:6px 10px; border-bottom:1px solid var(--line); font-size:13px; vertical-align:top; word-break:break-word; }
 .small { font-size:12px; color:var(--muted); }
 .hidden { display:none; }
 dialog { border:0; padding:0; background:transparent; max-width:95vw; } dialog img { max-width:95vw; max-height:90vh; }
-@media (max-width: 640px) { header, main { padding-left:16px; padding-right:16px; } .step { grid-template-columns:1fr; } .step img { width:100%; } }
+@media (max-width: 640px) { header, main { padding-left:16px; padding-right:16px; } .step { grid-template-columns:1fr; } .step img { width:100%; } .issues-scroll table { min-width:640px; } }
 </style>
 </head>
 <body>
@@ -253,7 +256,7 @@ if (data.issues.length) {
   box.append(el('h2', {}, 'Potential product issues (implicit oracles)'));
   const table = el('table', {}, el('tr', {}, el('th', {}, 'Severity'), el('th', {}, 'Kind'), el('th', {}, 'Message'), el('th', {}, 'Tests')));
   for (const issue of data.issues) table.append(el('tr', {}, el('td', { class: issue.severity === 'high' ? 's-failed' : issue.severity === 'medium' ? 's-flaky' : '' }, issue.severity), el('td', {}, issue.kind), el('td', {}, issue.message, issue.detail ? el('div', { class: 'small' }, issue.detail) : null), el('td', {}, issue.tests.join(', '))));
-  box.append(table);
+  box.append(el('div', { class: 'issues-scroll', role: 'region', 'aria-label': 'Potential product issues', tabindex: '0' }, table));
 }
 const zoom = document.getElementById('zoom');
 zoom.addEventListener('click', () => zoom.close());
