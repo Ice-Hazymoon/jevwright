@@ -1,9 +1,10 @@
-import { mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import type { TestSpec } from '../src/index.ts';
+import { mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { act, check, file, run, runSuite, secret, verify, type TestSpec } from '../src/index.ts';
 import { resolveFiles } from '../src/files.ts';
+import { act, check, file, run, runSuite, secret, verify } from '../src/index.ts';
 import { startFixtureApp } from './fixtures/app.ts';
 import { is, scriptedModels } from './support/scripted-models.ts';
 
@@ -73,7 +74,7 @@ describe('action coverage', () => {
         const cancelled: TestSpec = { ...base, id: 'cancel', start: '/downloads', steps: () => [run('download without expectation', async ({ page }) => { const download = page.waitForEvent('download'); await page.getByRole('button', { name: 'Export CSV' }).click(); expect(await (await download).failure()).not.toBeNull(); }), verify('no saved downloads', ({ downloads }) => downloads.length === 0)] };
         expect((await runSuite([cancelled], { ...options(), mode: 'replay' })).results[0]?.status).toBe('passed');
         const popup: TestSpec = { ...base, id: 'popup', start: '/popup-parent', steps: () => [act('Open child'), act('Close child'), act('Save parent'), verify('parent saved', async ({ page }) => (await page.locator('#status').textContent()) === 'Parent saved')] };
-        const models = scriptedModels(view => {
+        const models = scriptedModels((view) => {
             if (view.step === 'Open child') { return view.url.includes('popup-child') ? { done: 0.95 } : { tool: 'click', target: is('button', 'Open child') }; }
             if (view.step === 'Close child') { return view.url.includes('popup-parent') ? { done: 0.95 } : { tool: 'click', target: is('button', 'Close child') }; }
             return view.text.includes('Parent saved') ? { done: 0.95 } : { tool: 'click', target: is('button', 'Save parent') };
@@ -84,10 +85,9 @@ describe('action coverage', () => {
     });
 });
 
-
 it('waits for all downloads and rejects a late oversized second file', async () => {
     const spec: TestSpec = { ...base, id: 'late-large', start: '/downloads', fixture: async ({ context }) => {
-        context.on('page', page => page.on('download', download => { if (download.suggestedFilename() === 'large.csv') { const save = download.saveAs.bind(download); download.saveAs = async path => { await new Promise(resolve => setTimeout(resolve, 1500)); return save(path); }; } }));
+        context.on('page', page => page.on('download', (download) => { if (download.suggestedFilename() === 'large.csv') { const save = download.saveAs.bind(download); download.saveAs = async (path) => { await new Promise(resolve => setTimeout(resolve, 1500)); return save(path); }; } }));
     }, ready: async ({ page }) => page.evaluate(() => { const button = document.createElement('button'); button.textContent = 'Export both'; button.onclick = () => { document.getElementById('csv')!.click(); document.getElementById('large')!.click(); }; document.body.append(button); }), steps: () => [act('Export both', { expect: { download: { filename: /csv/ } } })] };
     const models = scriptedModels(view => view.history.length ? { done: 0.95 } : { tool: 'click', target: is('button', 'Export both') });
     const result = (await runSuite([spec], { ...options(), models: models.settings })).results[0]!;
@@ -98,10 +98,7 @@ it('waits for all downloads and rejects a late oversized second file', async () 
 
 it('enables fixture-dependent downloads and withholds secret files after raw verification', async () => {
     const raw = 'download-private-token';
-    const spec: TestSpec<boolean> = { ...base, id: 'private-download', start: '/downloads', secrets: { token: secret(raw) }, fixture: async () => true,
-        ready: async ({ page }) => page.evaluate(value => { document.getElementById('csv')!.onclick = () => { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([value])); a.download = 'private.csv'; a.click(); }; }, raw),
-        steps: enabled => enabled ? [act('Export CSV', { expect: { download: {} } }), verify('raw content', async ({ downloads }) => await readFile(downloads[0]!.path, 'utf8') === raw)] : [],
-    };
+    const spec: TestSpec<boolean> = { ...base, id: 'private-download', start: '/downloads', secrets: { token: secret(raw) }, fixture: async () => true, ready: async ({ page }) => page.evaluate((value) => { document.getElementById('csv')!.onclick = () => { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([value])); a.download = 'private.csv'; a.click(); }; }, raw), steps: enabled => enabled ? [act('Export CSV', { expect: { download: {} } }), verify('raw content', async ({ downloads }) => await readFile(downloads[0]!.path, 'utf8') === raw)] : [] };
     const models = scriptedModels(view => view.history.length ? { done: 0.95 } : { tool: 'click', target: is('button', 'Export CSV') });
     const result = (await runSuite([spec], { ...options(), models: models.settings })).results[0]!;
     expect(result.status, result.summary).toBe('passed');

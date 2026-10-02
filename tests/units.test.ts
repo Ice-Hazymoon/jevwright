@@ -703,7 +703,7 @@ describe('stable CI selection', () => {
     });
 });
 
-describe('CI reports', () => {
+describe('cI reports', () => {
     it('reads failed and flaky ids only from the latest completed publication', async () => {
         const { lastFailedIds } = await import('../src/last-failed.ts');
         const directory = await mkdtemp(join(tmpdir(), 'jevwright-last-failed-'));
@@ -727,18 +727,23 @@ describe('CI reports', () => {
         const { emptyUsage } = await import('../src/models.ts');
         const base = { id: 'plain', title: 'Example', risk: 'Example', tags: [], summary: 'quote " < & \u0001', attempts: [], issues: [], models: emptyUsage(), durationMs: 1200, recordingUpdated: false };
         const results: import('../src/suite.ts').TestResult[] = [
-            { ...base, id: 'pass', status: 'passed' }, { ...base, id: 'flaky', status: 'flaky', reproduced: '1/2' },
-            { ...base, id: 'defect', status: 'failed', cause: 'product' }, { ...base, id: 'infra', status: 'failed', cause: 'environment' },
-            { ...base, id: 'model', status: 'failed', cause: 'model' }, { ...base, id: 'known', status: 'known', knownIssue: 'tracked issue' },
+            { ...base, id: 'pass', status: 'passed' },
+            { ...base, id: 'flaky', status: 'flaky', reproduced: '1/2' },
+            { ...base, id: 'defect', status: 'failed', cause: 'product' },
+            { ...base, id: 'infra', status: 'failed', cause: 'environment' },
+            { ...base, id: 'model', status: 'failed', cause: 'model' },
+            { ...base, id: 'known', status: 'known', knownIssue: 'tracked issue' },
             { ...base, id: 'skip', status: 'skipped', skipReason: 'explicit skip' },
         ];
         const summary: import('../src/suite.ts').RunSummary = {
             manifest: { runId: 'fixture', engine: 'fixture', startedAt: '2026-01-01T00:00:00Z', mode: 'auto', git: null, models: null, origin: app.origin, concurrency: 1, retries: 1, tests: results.map(result => result.id), command: 'jevwright run --shard 1/3' },
-            results, directory: '.', totals: { tests: 7, passed: 1, flaky: 1, failed: 3, known: 1, skipped: 1, issues: 0, models: emptyUsage(), durationMs: 8400 },
+            results,
+            directory: '.',
+            totals: { tests: 7, passed: 1, flaky: 1, failed: 3, known: 1, skipped: 1, issues: 0, models: emptyUsage(), durationMs: 8400 },
         };
         const page = await browser.newPage();
         try {
-            const parsed = await page.evaluate(xml => {
+            const parsed = await page.evaluate((xml) => {
                 const document = new DOMParser().parseFromString(xml, 'application/xml');
                 return { errors: document.querySelectorAll('parsererror').length, cases: document.querySelectorAll('testcase').length, failures: document.querySelectorAll('failure').length, infrastructure: document.querySelectorAll('error').length, skipped: document.querySelectorAll('skipped').length, note: document.querySelector('system-out')?.textContent, message: document.querySelector('failure')?.getAttribute('message'), classname: document.querySelector('testcase')?.getAttribute('classname') };
             }, junitReport(summary));
@@ -746,7 +751,6 @@ describe('CI reports', () => {
         } finally { await page.close(); }
     });
 });
-
 
 it('rebuilds JUnit through the report command and removes stale selection from reproduce commands', async () => {
     const { writeReports, reproduceCommand } = await import('../src/report.ts');
@@ -792,11 +796,13 @@ describe('secret values', () => {
 
 it('guards the redacted artifact boundary and its narrowly scoped filesystem owners (FW01)', async () => {
     const { artifactBoundaryViolations: scan } = await import('./support/artifact-boundary.ts');
-    expect(scan('report.ts', "import { writeFile as save } from 'node:fs/promises'; async function report() { await save('result.json', raw); }")).toHaveLength(1);
-    expect(scan('cli.ts', "import { writeFile } from 'node:fs/promises'; async function runPasses() { await writeFile('server.log', raw); }")).toHaveLength(1);
-    expect(scan('models.ts', "import { forResults as unsafe } from './secrets.ts';")).toHaveLength(1);
-    expect(scan('report.ts', "import * as fs from 'node:fs/promises'; fs.writeFile('report.md', raw);")).toHaveLength(1);
-    expect(scan('cli.ts', "import { writeFile } from 'node:fs/promises'; async function initCommand() { await writeFile('config.ts', template); }")).toEqual([]);
+    expect(scan('report.ts', 'import { writeFile as save } from \'node:fs/promises\'; async function report() { await save(\'result.json\', raw); }')).toHaveLength(1);
+    expect(scan('cli.ts', 'import { writeFile } from \'node:fs/promises\'; async function runPasses() { await writeFile(\'server.log\', raw); }')).toHaveLength(1);
+    expect(scan('models.ts', 'redact.value(questions);')).toHaveLength(1);
+    expect(scan('models.ts', 'import { forResults as unsafe } from \'./secrets.ts\';')).toHaveLength(1);
+    expect(scan('cli.ts', 'writeReports({ ...summary, directory: dir });')).toHaveLength(1);
+    expect(scan('report.ts', 'import * as fs from \'node:fs/promises\'; fs.writeFile(\'report.md\', raw);')).toHaveLength(1);
+    expect(scan('cli.ts', 'import { writeFile } from \'node:fs/promises\'; async function initCommand() { await writeFile(\'config.ts\', template); }')).toEqual([]);
     const files = readdirSync(join(ROOT, 'src')).filter(name => name.endsWith('.ts'));
     expect(files.flatMap(name => scan(name, readFileSync(join(ROOT, 'src', name), 'utf8')))).toEqual([]);
 });
@@ -821,7 +827,6 @@ describe('paired calibration', () => {
         expect(applicableTests([{ id: 'old' }, { id: 'upload', requiredApis: ['file'] }], {})).toEqual({ supported: [{ id: 'old' }], unsupported: [{ id: 'upload', missing: ['file'] }] });
     });
 });
-
 
 it('calibration removes a registered baseline after a failing checkout hook', async () => {
     const { execFile } = await import('node:child_process');

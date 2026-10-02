@@ -31,7 +31,7 @@ function encodings(value: string): string[] {
     const uri = encodeURIComponent(value);
     const url = new URL(`http://jevwright.invalid/?v=${uri}`).search.slice(3);
     const form = new URLSearchParams({ v: value }).toString().slice(2);
-    return [value, uri, url, form, JSON.stringify(value).slice(1, -1), Buffer.from(value).toString('base64'), html.replaceAll("'", '&#39;'), html.replaceAll("'", '&apos;')];
+    return [value, uri, url, form, JSON.stringify(value).slice(1, -1), Buffer.from(value).toString('base64'), html.replaceAll('\'', '&#39;'), html.replaceAll('\'', '&apos;')];
 }
 
 /** Engine-owned grammar stays valid; user strings and evidence are still redacted. */
@@ -50,7 +50,7 @@ export function createRedactor(secrets: Iterable<Secret> = []) {
     const originals = [...secrets].map(reveal);
     // The accessibility tree and compact observations fold whitespace before we see it.
     const forms = [...new Set(originals.flatMap(raw => [raw, raw.replace(/\s+/g, ' ').trim(), raw.replace(/[^\S\n]+/g, ' ').replace(/ *\n */g, '\n').replace(/\n{3,}/g, '\n\n').trim()].flatMap(encodings)))].filter(Boolean).sort((a, b) => b.length - a.length);
-    const variants = (length: number) => forms.flatMap(form => {
+    const variants = (length: number) => forms.flatMap((form) => {
         const result = [form];
         let escaped = JSON.stringify(form).slice(1, -1);
         while (escaped !== result.at(-1) && escaped.length <= length) {
@@ -61,18 +61,18 @@ export function createRedactor(secrets: Iterable<Secret> = []) {
     }).sort((a, b) => b.length - a.length);
     const text = (input: string): string => variants(input.length).reduce((result, form) => result.replaceAll(form, '{secret}'), input);
     const contains = (input: string): boolean => variants(input.length).some(form => input.includes(form));
-    const value = (input: unknown, engine = false, key = ''): unknown => {
-        if (typeof input === 'string') { return engine && grammar[key]?.has(input) ? input : text(input); }
-        if (Array.isArray(input)) { return input.map(entry => value(entry, engine)); }
+    const value = (input: unknown, engine = false, key = '', keepKeys = engine): unknown => {
+        if (typeof input === 'string') { return engine && (grammar[key]?.has(input) || (key === 'selectionKey' && /^sha256:[a-f0-9]{64}$/.test(input)) || (['startedAt', 'finishedAt'].includes(key) && /^\d{4}-\d{2}-\d{2}T/.test(input))) ? input : text(input); }
+        if (Array.isArray(input)) { return input.map(entry => value(entry, engine, '', keepKeys)); }
         if (input && typeof input === 'object') {
             if (input instanceof Date) { return text(input.toJSON()); }
             if (isSecret(input)) { return '{secret}'; }
             // Evidence and metadata are user objects, even when their keys resemble result grammar.
-            return Object.fromEntries(Object.entries(input).map(([name, entry]) => [engine ? name : text(name), value(entry, engine && !['evidence', 'reference', 'metadata'].includes(name), name)]));
+            return Object.fromEntries(Object.entries(input).map(([name, entry]) => [keepKeys ? name : text(name), value(entry, engine && !['evidence', 'reference', 'metadata'].includes(name), name, keepKeys && !['evidence', 'reference', 'metadata'].includes(name))]));
         }
         return input;
     };
-    return { text, contains, value: <T>(input: T): T => value(input) as T, result: <T>(input: T): T => value(input, true) as T, active: forms.length > 0 };
+    return { text, contains, value: <T>(input: T): T => value(input) as T, result: <T>(input: T): T => value(input, true) as T, state: <T>(input: T): T => value(input, false, '', true) as T, active: forms.length > 0 };
 }
 export type Redactor = ReturnType<typeof createRedactor>;
 

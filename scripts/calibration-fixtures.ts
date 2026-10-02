@@ -1,6 +1,6 @@
 import type { TestSpec } from '../src/index.ts';
-import { act, check, reload, verify } from '../src/index.ts';
 import type { startFixtureApp } from '../tests/fixtures/app.ts';
+import { act, check, reload, verify } from '../src/index.ts';
 
 /** Declare newly required exports here so older engines can exclude unsupported cases. */
 export type CalibrationTest = TestSpec<void> & { expected: 'passed' | 'product'; requiredApis?: readonly string[] };
@@ -101,4 +101,3 @@ export function fixtureTests(app: App): Array<CalibrationTest> {
     });
     return tests;
 }
-

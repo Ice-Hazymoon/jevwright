@@ -1,6 +1,6 @@
-import type { View } from './support/scripted-models.ts';
 import type { TestSpec } from '../src/index.ts';
 import type { RunSummary, SuiteOptions } from '../src/suite.ts';
+import type { View } from './support/scripted-models.ts';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -734,7 +734,7 @@ describe('recorded effects and fresh retries', () => {
         expect(summary.results[0]?.recordingUpdated).toBe(false);
         expect(await readFile(path, 'utf8')).toBe(before);
         const replay = await suite([spec], { recordingsDir, mode: 'replay' }).run;
-        expect(replay.results[0]?.summary).toContain("step 2's replay missed its recorded end state");
+        expect(replay.results[0]?.summary).toContain('step 2\'s replay missed its recorded end state');
         expect(replay.results[0]?.attempts[0]?.steps[1]?.endMismatch).toBe(true);
     });
 
@@ -777,10 +777,8 @@ describe('recorded effects and fresh retries', () => {
     });
 });
 
-
 function effectTest(start = '/effects'): TestSpec<void> {
-    return { id: 'choose-entry', title: 'Choose the entry dated 2026-01-01', risk: 'The wrong dated row is selected', start,
-        steps: () => [act('Choose the entry dated 2026-01-01', { maxActions: 2 }), verify('Alpha selected', async ({ page }) => page.getByRole('heading', { name: 'Alpha chosen', exact: true }).isVisible())] };
+    return { id: 'choose-entry', title: 'Choose the entry dated 2026-01-01', risk: 'The wrong dated row is selected', start, steps: () => [act('Choose the entry dated 2026-01-01', { maxActions: 2 }), verify('Alpha selected', async ({ page }) => page.getByRole('heading', { name: 'Alpha chosen', exact: true }).isVisible())] };
 }
 const effectPolicy = (view: View) => view.text.includes('Alpha chosen') ? { done: 0.99, tool: 'none' } : { tool: 'click', target: (element: { name?: string; in?: string }) => element.name === 'Choose' && Boolean(element.in?.includes('2026-01-01')) };
 
@@ -792,7 +790,7 @@ describe('end state attribution', () => {
         const replay = (await suite([effectTest('/effects?bug=swapped')], { recordingsDir, mode: 'replay' }).run).results[0]!;
         expect(replay.status).toBe('failed');
         expect(replay.cause).toBe('product');
-        expect(replay.summary).toContain("step 1's replay missed its recorded end state");
+        expect(replay.summary).toContain('step 1\'s replay missed its recorded end state');
         const healed = (await suite([effectTest('/effects?bug=swapped')], { recordingsDir, policy: effectPolicy }).run).results[0]!;
         expect(healed.status).toBe('passed');
         expect(healed.attempts[0]?.steps[0]?.source).toBe('healed');
@@ -818,7 +816,6 @@ describe('end state attribution', () => {
         expect(result.summary).toContain('the recorded control was used and the step still had no effect');
     });
 });
-
 
 describe('replay exit codes', () => {
     it('uses 4 only for standalone replay failures entirely caused by missing recordings', async () => {
@@ -848,7 +845,7 @@ describe('fresh retry limits', () => {
         expect(freshFailed.attempts[0]?.cause).toBe('product');
         expect(freshFailed.attempts[1]?.cause).toBe('agent');
         expect(freshFailed.cause).toBe('product');
-        const limited = (await suite([spec], { recordingsDir, retries: 1, maxCostUsd: 1, costPerCall: 0.45 }).run).results[0]!;
+        const limited = (await suite([spec], { recordingsDir, retries: 1, maxCostUsd: 1, costPerCall: 0.9 }).run).results[0]!;
         expect(limited.freshRetrySkipped).toBe('fresh retry skipped: run budget');
         expect(limited.attempts[1]?.fresh).toBeUndefined();
     });
@@ -885,13 +882,11 @@ describe('unchanged check observations', () => {
     it('skips a second certain verdict only when the observed page stayed unchanged', async () => {
         for (const changes of [false, true]) {
             let checks = 0;
-            const models = scriptedModels(view => {
+            const models = scriptedModels((view) => {
                 if (view.claim) { checks++; return checks > 1 ? { holds: 0.99, support: 'supports' } : { holds: 0.01, support: 'contradicts' }; }
                 return {};
             });
-            const test: TestSpec<void> = { id: changes ? 'check-changed' : 'check-unchanged', title: 'Check delayed text', risk: 'Repeated verdict changes certainty', start: '/profile',
-                steps: () => [verify('start delayed render', async ({ page }) => { if (changes) { await page.evaluate(() => { setTimeout(() => { const p = document.createElement('p'); p.textContent = 'Saved marker'; document.body.append(p); }, 700); }); } return true; }), check('The saved marker is visible')],
-            };
+            const test: TestSpec<void> = { id: changes ? 'check-changed' : 'check-unchanged', title: 'Check delayed text', risk: 'Repeated verdict changes certainty', start: '/profile', steps: () => [verify('start delayed render', async ({ page }) => { if (changes) { await page.evaluate(() => { setTimeout(() => { const p = document.createElement('p'); p.textContent = 'Saved marker'; document.body.append(p); }, 700); }); } return true; }), check('The saved marker is visible')] };
             const result = await runSuite([test], { baseURL: app.origin, outputDir: join(root, 'check-dedup'), models: models.settings, retries: 0, log: () => undefined });
             expect(checks).toBe(changes ? 2 : 1);
             expect(result.results[0]?.status).toBe(changes ? 'passed' : 'failed');

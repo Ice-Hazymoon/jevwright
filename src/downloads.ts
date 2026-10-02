@@ -1,6 +1,6 @@
-import type { Download } from 'playwright';
-import type { DownloadRecord, Expectation } from './spec.ts';
 import type { Redactor } from './secrets.ts';
+import type { DownloadRecord, Expectation } from './spec.ts';
+import type { Download } from 'playwright';
 import { mkdir, readFile, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 
@@ -58,7 +58,7 @@ export function createDownloads(directory: string, signal: AbortSignal, redact?:
             if (error) { return { ok: false, violated: true, reason: error }; }
             const downloaded = byStep.get(step) ?? [];
             const pattern = expected?.filename;
-            const matched = downloaded.some(record => { if (!pattern) { return true; } pattern.lastIndex = 0; return pattern.test(record.filename); });
+            const matched = downloaded.some((record) => { if (!pattern) { return true; } pattern.lastIndex = 0; return pattern.test(record.filename); });
             return matched ? { ok: true } : { ok: false, reason: pattern ? `No download matched ${String(pattern)}` : 'No download completed during this step' };
         },
         async flush() { await Promise.all(pending); },

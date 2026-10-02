@@ -181,7 +181,5 @@ export function learnedRecording(previous: TestRecording | undefined, steps: Ste
 }
 
 function actionSignature(actions: RecordedAction[]): string {
-    return JSON.stringify(actions.map(action => [action.tool,
-        action.target ? [action.target.role, action.target.name, stable(action.target.near), stable(action.target.context), action.target.nth] : null,
-        action.valueKey ?? null, action.value ?? null, action.template ?? null, action.double ?? false, action.append ?? false]));
+    return JSON.stringify(actions.map(action => [action.tool, action.target ? [action.target.role, action.target.name, stable(action.target.near), stable(action.target.context), action.target.nth] : null, action.valueKey ?? null, action.value ?? null, action.template ?? null, action.double ?? false, action.append ?? false]));
 }

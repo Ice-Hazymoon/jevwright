@@ -3,8 +3,12 @@ import { reproduceCommand } from './report.ts';
 
 /** XML 1.0 characters; lone surrogates and forbidden controls become replacement characters. */
 function xml(value: string): string {
-    return value.replace(/[^\u0009\u000A\u000D\u0020-\uD7FF\uE000-\uFFFD\u{10000}-\u{10FFFF}]/gu, '\uFFFD')
-        .replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&apos;');
+    return value.replace(/[^\t\n\r\u0020-\uD7FF\uE000-\uFFFD\u{10000}-\u{10FFFF}]/gu, '\uFFFD')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll('\'', '&apos;');
 }
 
 const isError = (test: TestResult) => test.status === 'failed' && (test.cause === 'environment' || test.cause === 'model');
@@ -21,7 +25,7 @@ export function junitReport(summary: RunSummary): string {
         const errors = tests.filter(isError).length;
         const failures = tests.filter(test => test.status === 'failed').length - errors;
         const skipped = tests.filter(test => test.status === 'known' || test.status === 'skipped').length;
-        const cases = tests.map(test => {
+        const cases = tests.map((test) => {
             let result = '';
             if (test.status === 'failed') {
                 const tag = isError(test) ? 'error' : 'failure';

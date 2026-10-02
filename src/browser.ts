@@ -1,6 +1,6 @@
 import type { ResolvedDevice } from './devices.ts';
-import type { Redactor } from './secrets.ts';
 import type { Monitor } from './monitor.ts';
+import type { Redactor } from './secrets.ts';
 import type { Browser, BrowserContext, Locator, Page } from 'playwright';
 import { createRequire } from 'node:module';
 import { chromium } from 'playwright';

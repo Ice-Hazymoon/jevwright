@@ -1,7 +1,7 @@
 import type { Redactor } from './secrets.ts';
+import { unzipSync, zipSync } from 'fflate';
 import { randomUUID } from 'node:crypto';
 import { readFile, rename, rm, writeFile } from 'node:fs/promises';
-import { unzipSync, zipSync } from 'fflate';
 
 /** The sole text-artifact write boundary. Callers pass the run's complete redactor. */
 export async function writeArtifact<T>(path: string, contents: T, redact: Redactor, render?: (safe: T) => string | Promise<string>): Promise<void> {
@@ -20,10 +20,8 @@ export async function redactTrace(path: string, redact: Redactor): Promise<boole
             const name = redact.text(originalName);
             if (name !== originalName) { delete entries[originalName]; }
             let text: string;
-            try { text = decoder.decode(bytes); }
-            catch {
-                if (redact.contains(Buffer.from(bytes).toString('utf8'))) { delete entries[name]; }
-                else { entries[name] = bytes; }
+            try { text = decoder.decode(bytes); } catch {
+                if (redact.contains(Buffer.from(bytes).toString('utf8'))) { delete entries[name]; } else { entries[name] = bytes; }
                 continue;
             }
             entries[name] = new TextEncoder().encode(redact.text(text));

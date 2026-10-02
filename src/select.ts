@@ -99,7 +99,9 @@ function undefinedKeys(test: TestSpec<unknown>): string[] {
     return [...new Set(templates.flatMap(templateKeys))].filter(key => test.data?.[key] === undefined && test.secrets?.[key] === undefined && test.files?.[key] === undefined);
 }
 
-
 export function secretCheckProblems(steps: readonly import('./spec.ts').Step[], secrets: Readonly<Record<string, unknown>>): string[] {
     return steps.flatMap(step => step.kind === 'check' ? templateKeys(step.assertion).filter(key => key in secrets).map(key => `check cannot reference secret {${key}}; use verify with reveal()`) : []);
 }
+
+/** A stable, non-plaintext identity for selecting tests from redacted reports. */
+export function testSelectionKey(id: string): string { return `sha256:${createHash('sha256').update(id).digest('hex')}`; }

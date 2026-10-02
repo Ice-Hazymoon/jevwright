@@ -1,5 +1,4 @@
-import { resolveFiles } from './files.ts';
-import { resolveDevice, type Device } from './devices.ts';
+import type { Device } from './devices.ts';
 import type { ModelSettings, ModelUsage, RunBudget } from './models.ts';
 import type { Issue } from './monitor.ts';
 import type { TestRecording } from './recording.ts';
@@ -11,22 +10,27 @@ import { mkdir } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import { promisify } from 'node:util';
 import { writeArtifact } from './artifacts.ts';
-import { createRedactor, forResults } from './secrets.ts';
 import { launchBrowser } from './browser.ts';
+import { resolveDevice } from './devices.ts';
 import { JevwrightError } from './errors.ts';
+import { resolveFiles } from './files.ts';
 import { addUsage, createRunBudget, emptyUsage, modelIds, runBudgetMessage } from './models.ts';
 import { assertReachable, checkedOrigin } from './origin.ts';
 import { changedActionSteps, createRecordingStore, learnedRecording } from './recording.ts';
 import { writeReports } from './report.ts';
-import { assertValidTests } from './select.ts';
+import { createRedactor, forResults } from './secrets.ts';
+import { assertValidTests, testSelectionKey } from './select.ts';
 import { runTestAttempt } from './test-runner.ts';
 import { VERSION } from './version.ts';
+
+const artifactDirectories = new WeakMap<RunSummary, string>();
 
 /** `known`: failed on the product the way the test's `knownIssue` describes; it does not fail the run. */
 export type TestStatus = 'passed' | 'failed' | 'flaky' | 'known' | 'skipped';
 
 export interface TestResult {
     id: string;
+    selectionKey?: string;
     module?: string;
     title: string;
     risk: string;
@@ -212,7 +216,9 @@ export async function runSuite(specs: ReadonlyArray<TestSpec<unknown>>, options:
     // Stable order for reports: definition order, not completion order.
     results.sort((a, b) => manifest.tests.indexOf(a.id) - manifest.tests.indexOf(b.id));
     await writeReports(summary(), redact);
-    return redact.result(summary());
+    const publicSummary = redact.result(summary());
+    artifactDirectories.set(publicSummary, directory);
+    return publicSummary;
 
     async function runTest(spec: TestSpec<unknown>): Promise<TestResult> {
         if (spec.skip) { return skipped(spec, spec.skip); }
@@ -305,6 +311,7 @@ function testResult(spec: TestSpec<unknown>, attempts: AttemptResult[], recordin
     for (const attempt of attempts) { addUsage(usage, attempt.models); }
     return {
         id: spec.id,
+        selectionKey: testSelectionKey(spec.id),
         module: spec.module,
         title: spec.title,
         risk: spec.risk,
@@ -391,7 +398,7 @@ function notRun(spec: TestSpec<unknown>, cause: Cause, summary: string): TestRes
 }
 
 function unrun(spec: TestSpec<unknown>): Omit<TestResult, 'status' | 'summary'> {
-    return { id: spec.id, module: spec.module, title: spec.title, risk: spec.risk, tags: spec.tags ?? [], attempts: [], issues: [], models: emptyUsage(), durationMs: 0, recordingUpdated: false };
+    return { id: spec.id, selectionKey: testSelectionKey(spec.id), module: spec.module, title: spec.title, risk: spec.risk, tags: spec.tags ?? [], attempts: [], issues: [], models: emptyUsage(), durationMs: 0, recordingUpdated: false };
 }
 
 function mergeIssues(issues: Issue[]): Issue[] {
@@ -430,3 +437,6 @@ async function gitState(): Promise<RunManifest['git']> {
         return null;
     }
 }
+
+/** Internal consumers write with the physical path, never a redacted display value. */
+export function artifactDirectory(summary: RunSummary): string { return artifactDirectories.get(summary) ?? summary.directory; }

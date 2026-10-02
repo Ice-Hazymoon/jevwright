@@ -1,11 +1,11 @@
 import type { Issue } from './monitor.ts';
+import type { Redactor } from './secrets.ts';
 import type { RunSummary, TestResult } from './suite.ts';
 import { readFile } from 'node:fs/promises';
-import { writeArtifact } from './artifacts.ts';
-import { forResults, createRedactor, type Redactor } from './secrets.ts';
 import { join, relative } from 'node:path';
-
+import { writeArtifact } from './artifacts.ts';
 import { junitReport } from './junit.ts';
+import { createRedactor, forResults } from './secrets.ts';
 
 const CAUSE_LABEL: Record<string, string> = {
     product: 'Suspected product defect',
@@ -15,13 +15,13 @@ const CAUSE_LABEL: Record<string, string> = {
     timeout: 'Timeout',
 };
 
-export async function writeReports(summary: RunSummary, redact: Redactor = createRedactor()): Promise<void> {
+export async function writeReports(summary: RunSummary, redact: Redactor = createRedactor(), directory = summary.directory): Promise<void> {
     redact = forResults(redact);
     summary = redact.result(summary);
-    await writeArtifact(join(summary.directory, 'junit.xml'), summary, redact, junitReport);
-    await writeArtifact(join(summary.directory, 'summary.json'), summary, redact);
-    await writeArtifact(join(summary.directory, 'report.md'), summary, redact, markdownReport);
-    await writeArtifact(join(summary.directory, 'report.html'), summary, redact, htmlReport);
+    await writeArtifact(join(directory, 'junit.xml'), summary, redact, junitReport);
+    await writeArtifact(join(directory, 'summary.json'), summary, redact);
+    await writeArtifact(join(directory, 'report.md'), summary, redact, markdownReport);
+    await writeArtifact(join(directory, 'report.html'), summary, redact, htmlReport);
 }
 
 export async function loadSummary(directory: string): Promise<RunSummary> {

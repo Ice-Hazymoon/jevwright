@@ -1,7 +1,8 @@
 import type { Observation, PageElement } from './observe.ts';
 import type { Anchor, RecordedAction, StepEnd } from './recording.ts';
-import { createRedactor, type Redactor } from './secrets.ts';
+import type { Redactor } from './secrets.ts';
 import { describeTarget, resolveTarget, stable } from './recording.ts';
+import { createRedactor } from './secrets.ts';
 
 export interface EndCheck { checked: boolean; matched?: boolean; missing?: string[]; recorded?: boolean }
 const normalize = (text: string) => text.trim().replace(/\s+/g, ' ');

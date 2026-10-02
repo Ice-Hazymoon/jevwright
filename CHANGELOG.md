@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.0
+
+- Generate redacted JUnit reports, stable SHA-1 shards and last-failed selection from completed runs.
+- Regenerate JUnit with the report command and keep single-test reproduction independent of shard/history filters.
+
+
 ## 0.5.0
 
 - Skip the second check judgment when the observed page has not changed; uncertain first judgments still use the helper.

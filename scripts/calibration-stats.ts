@@ -10,8 +10,7 @@ export function applicableTests<T extends { id: string; requiredApis?: readonly 
     const unsupported: Array<{ id: string; missing: string[] }> = [];
     for (const test of tests) {
         const missing = (test.requiredApis ?? []).filter(name => !(name in api));
-        if (missing.length) { unsupported.push({ id: test.id, missing }); }
-        else { supported.push(test); }
+        if (missing.length) { unsupported.push({ id: test.id, missing }); } else { supported.push(test); }
     }
     return { supported, unsupported };
 }
@@ -29,9 +28,9 @@ export function comparePairs(pairs: readonly Pair[]) {
     }));
     const regression = flips.some(flip => flip.b - flip.c >= 2) || flips.reduce((sum, flip) => sum + flip.b - flip.c, 0) >= 3;
     // Fixed seed makes a report reproducible; pair execution order uses independent cryptographic randomness.
-    let seed = 0x5eed;
+    let seed = 0x5EED;
     const random = () => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed / 2 ** 32; };
-    const intervals = Object.fromEntries(metricNames.map(name => {
+    const intervals = Object.fromEntries(metricNames.map((name) => {
         const differences = pairs.map(pair => pair.candidate.metrics[name] - pair.baseline.metrics[name]);
         const baseline = pairs.reduce((sum, pair) => sum + pair.baseline.metrics[name], 0) / pairs.length;
         const samples = Array.from({ length: 10_000 }, () => differences.reduce(sum => sum + differences[Math.floor(random() * differences.length)]!, 0) / differences.length).sort((a, b) => a - b);

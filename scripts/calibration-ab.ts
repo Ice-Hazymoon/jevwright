@@ -3,12 +3,12 @@ import type { startFixtureApp } from '../tests/fixtures/app.ts';
 import type { CalibrationTest } from './calibration-fixtures.ts';
 import type { Pair, Sample } from './calibration-stats.ts';
 import { execFile, spawn } from 'node:child_process';
-import { promisify } from 'node:util';
 import { randomInt, randomUUID } from 'node:crypto';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { promisify } from 'node:util';
 import * as candidate from '../src/index.ts';
 import { addUsage, emptyUsage } from '../src/models.ts';
 import { applicableTests, comparePairs, metricNames } from './calibration-stats.ts';
@@ -30,15 +30,13 @@ async function command(command: string, args: string[], cwd: string, signal?: Ab
         const child = spawn(command, args, { cwd, stdio: 'inherit', detached: true });
         let timer: ReturnType<typeof setTimeout> | undefined;
         const kill = (signal: NodeJS.Signals) => { try { process.kill(-child.pid!, signal); } catch { /* Already exited. */ } };
-        const cancel = () => { kill('SIGTERM'); timer = setTimeout(() => kill('SIGKILL'), 3000); };
+        const cancel = () => { kill('SIGTERM'); timer = setTimeout(kill, 3000, 'SIGKILL'); };
         signal?.addEventListener('abort', cancel, { once: true });
         child.once('error', reject);
-        child.once('close', code => {
+        child.once('close', (code) => {
             signal?.removeEventListener('abort', cancel);
             clearTimeout(timer);
-            if (signal?.aborted) { reject(signal.reason); }
-            else if (code === 0) { resolve(); }
-            else { reject(new Error(`${command} exited ${code}`)); }
+            if (signal?.aborted) { reject(signal.reason); } else if (code === 0) { resolve(); } else { reject(new Error(`${command} exited ${code}`)); }
         });
     });
 }
@@ -78,6 +76,7 @@ export async function runCalibrationAB(tests: CalibrationTest[], app: Awaited<Re
     const pairs: Pair[] = [];
     const orders: string[][] = [];
     const directories: string[] = [];
+    let runFailure: unknown;
     try {
         // Do not interrupt Git while it changes registration; even a failing hook can leave a registered tree.
         await command('git', ['worktree', 'add', '--detach', worktree, options.ref], root);
@@ -126,28 +125,36 @@ export async function runCalibrationAB(tests: CalibrationTest[], app: Awaited<Re
         }
         const comparison = comparePairs(pairs);
         const report = [
-            '# Paired calibration', '',
-            `Baseline: ${options.ref}; candidate: current workspace. Mode: ${options.mode}; retries: ${options.retries}; pairs: ${pairs.length}.`, '',
-            `Correctness: **${comparison.regression ? 'REGRESSION' : 'no regression detected'}**. Secondary intervals: ${comparison.resolved ? 'resolved' : 'unresolved at pair limit'}.`, '',
-            '| Test | Baseline only correct (b) | Candidate only correct (c) |', '| --- | ---: | ---: |',
-            ...comparison.flips.map(flip => `| ${flip.id} | ${flip.b} | ${flip.c} |`), '',
-            '| Metric | Mean candidate − baseline | 95% paired bootstrap interval |', '| --- | ---: | --- |',
-            ...metricNames.map(name => `| ${name} | ${comparison.intervals[name].mean} | [${comparison.intervals[name].low}, ${comparison.intervals[name].high}] |`), '',
-            `Absolute matched outcomes: baseline ${pairs.reduce((count, pair) => count + Object.values(pair.baseline.matched).filter(Boolean).length, 0)}/${pairs.length * common.length}; candidate ${pairs.reduce((count, pair) => count + Object.values(pair.candidate.matched).filter(Boolean).length, 0)}/${pairs.length * common.length}. Both sides failing the same case is not evidence of correctness.`, '',
-            'Baseline not applicable (candidate results remain in its run reports):', ...baselineSelection.unsupported.map(test => `- ${test.id}: missing ${test.missing.join(', ')}`), '',
-            `Raw pairs, execution order and run directories: ${join(output, 'pairs.json')}`, '',
+            '# Paired calibration',
+            '',
+            `Baseline: ${options.ref}; candidate: current workspace. Mode: ${options.mode}; retries: ${options.retries}; pairs: ${pairs.length}.`,
+            '',
+            `Correctness: **${comparison.regression ? 'REGRESSION' : 'no regression detected'}**. Secondary intervals: ${comparison.resolved ? 'resolved' : 'unresolved at pair limit'}.`,
+            '',
+            '| Test | Baseline only correct (b) | Candidate only correct (c) |',
+            '| --- | ---: | ---: |',
+            ...comparison.flips.map(flip => `| ${flip.id} | ${flip.b} | ${flip.c} |`),
+            '',
+            '| Metric | Mean candidate − baseline | 95% paired bootstrap interval |',
+            '| --- | ---: | --- |',
+            ...metricNames.map(name => `| ${name} | ${comparison.intervals[name].mean} | [${comparison.intervals[name].low}, ${comparison.intervals[name].high}] |`),
+            '',
+            `Absolute matched outcomes: baseline ${pairs.reduce((count, pair) => count + Object.values(pair.baseline.matched).filter(Boolean).length, 0)}/${pairs.length * common.length}; candidate ${pairs.reduce((count, pair) => count + Object.values(pair.candidate.matched).filter(Boolean).length, 0)}/${pairs.length * common.length}. Both sides failing the same case is not evidence of correctness.`,
+            '',
+            'Baseline not applicable (candidate results remain in its run reports):',
+            ...baselineSelection.unsupported.map(test => `- ${test.id}: missing ${test.missing.join(', ')}`),
+            '',
+            `Raw pairs, execution order and run directories: ${join(output, 'pairs.json')}`,
+            '',
         ].join('\n');
         await writeFile(`${output}.md`, report);
         process.stdout.write(`A/B report: ${output}.md\n`);
         return comparison;
+    } catch (error) {
+        runFailure = error;
+        throw error;
     } finally {
-        try {
-            await removeOwnedWorktree(root, worktree);
-            await rm(temporary, { recursive: true, force: true });
-        } catch (error) {
-            process.stderr.write(`Calibration cleanup failed for ${worktree}: ${String(error)}\n`);
-            throw error;
-        }
+        await cleanupCalibration(root, worktree, temporary, runFailure);
     }
 }
 
@@ -156,5 +163,15 @@ export async function removeOwnedWorktree(root: string, worktree: string): Promi
     const { stdout } = await promisify(execFile)('git', ['worktree', 'list', '--porcelain', '-z'], { cwd: root });
     if (stdout.split('\0').includes(`worktree ${worktree}`)) {
         await command('git', ['worktree', 'remove', '--force', worktree], root);
+    }
+}
+
+async function cleanupCalibration(root: string, worktree: string, temporary: string, runFailure: unknown): Promise<void> {
+    try {
+        await removeOwnedWorktree(root, worktree);
+        await rm(temporary, { recursive: true, force: true });
+    } catch (error) {
+        process.stderr.write(`Calibration cleanup failed for ${worktree}: ${String(error)}\n`);
+        throw runFailure === undefined ? error : new AggregateError([runFailure, error], 'Calibration and cleanup both failed');
     }
 }

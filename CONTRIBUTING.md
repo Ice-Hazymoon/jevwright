@@ -76,3 +76,8 @@ the pair limit. The temporary baseline worktree is removed on completion or the 
 FW02 confines `forResults` to the suite, attempt and report writers. Model payloads use the generic
 redactor, including arbitrary object keys; user evidence/reference/metadata never inherits result grammar
 exemptions. Keep regression coverage for schema-shaped secrets and multiline text before splitting.
+
+FW03 rejects generic redaction of the evaluation question map: question IDs, schema types and option
+identities are protocol, while instructions, criteria descriptions and user reference data are payload.
+Report writers retain the physical directory separately from display text. Failed-test selection uses a
+stable SHA-256 selection key so redacted IDs cannot silently disappear from `--last-failed`.

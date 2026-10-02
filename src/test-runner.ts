@@ -1,24 +1,25 @@
-import type { EndCheck } from './end-state.ts';
 import type { ActFailure, ActionRecord, Round } from './act.ts';
+import type { EndCheck } from './end-state.ts';
 import type { ModelCall, Models, ModelSettings, ModelUsage, RunBudget } from './models.ts';
 import type { Issue } from './monitor.ts';
 import type { RecordedAction, StepRecording, TestRecording } from './recording.ts';
+import type { Redactor } from './secrets.ts';
 import type { CheckOutcome, Env, FixtureContext, MaybePromise, RunContext, Step, TestSpec, Values, WriteRecord } from './spec.ts';
 import type { Browser, Page } from 'playwright';
-import { createDownloads } from './downloads.ts';
 import { mkdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
-import { writeArtifact, redactTrace } from './artifacts.ts';
-import { forResults, createRedactor, reveal, type Redactor } from './secrets.ts';
-import { JevwrightError } from './errors.ts';
-import { secretCheckProblems } from './select.ts';
 import { pageState, runAct } from './act.ts';
+import { redactTrace, writeArtifact } from './artifacts.ts';
 import { newTestContext, settle } from './browser.ts';
+import { createDownloads } from './downloads.ts';
+import { JevwrightError } from './errors.ts';
 import { actedOnTarget, adjudicateClaim, judgeClaim } from './judge.ts';
 import { createModels, emptyUsage, ModelError } from './models.ts';
 import { createMonitor } from './monitor.ts';
 import { observe, shortUrl } from './observe.ts';
 import { stepKey } from './recording.ts';
+import { createRedactor, forResults, reveal } from './secrets.ts';
+import { secretCheckProblems } from './select.ts';
 import { describeStep, fillTemplate, templateKeys, writeRules } from './spec.ts';
 
 export type StepStatus = 'passed' | 'failed' | 'skipped';
@@ -227,7 +228,7 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
 
         const definition = spec.steps(fixture as F);
         const secretProblems = secretCheckProblems(definition, secrets);
-        if (secretProblems.length) { throw new JevwrightError(secretProblems.join("; ")); }
+        if (secretProblems.length) { throw new JevwrightError(secretProblems.join('; ')); }
         for (const [index, step] of definition.entries()) {
             if (step.kind === 'act' && step.expectError) { monitor.expectDuring(index, writeRules(step.expect)); }
         }
@@ -465,11 +466,9 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
                 } else {
                     const entry: StepRecording = { key, instruction: step.instruction, actions: outcome.source === 'replay' && recorded ? recorded.actions : outcome.recording as RecordedAction[] };
                     if (outcome.recordedEnd !== undefined) {
-                        if (outcome.source === 'replay' && recorded?.end === undefined) { pendingEnds.push({ entry, index, end: outcome.recordedEnd }); }
-                        else { entry.end = outcome.recordedEnd; }
+                        if (outcome.source === 'replay' && recorded?.end === undefined) { pendingEnds.push({ entry, index, end: outcome.recordedEnd }); } else { entry.end = outcome.recordedEnd; }
                     }
-                    if (redact.contains(JSON.stringify(entry))) { result.notRecorded = 'not recorded: target text contains a secret'; }
-                    else { newRecording.push(entry); }
+                    if (redact.contains(JSON.stringify(entry))) { result.notRecorded = 'not recorded: target text contains a secret'; } else { newRecording.push(entry); }
                 }
                 if (outcome.rounds.some(round => (round.anomaly ?? 0) >= 0.8)) {
                     monitor.report({ kind: 'semantic', severity: 'low', message: `Jev flagged broken-looking content on ${shortUrl(page!.url())}` });

@@ -1,8 +1,8 @@
 /* eslint-disable ts/method-signature-style -- fixture callbacks stay methods for parameter bivariance, see below */
-import type { Browser, BrowserContext, Page } from 'playwright';
-import type { FileRef } from './files.ts';
 import type { Device } from './devices.ts';
+import type { FileRef } from './files.ts';
 import type { Secret } from './secrets.ts';
+import type { Browser, BrowserContext, Page } from 'playwright';
 
 /**
  * Authoring API. A test is an ordered list of natural-language steps plus trusted checks.

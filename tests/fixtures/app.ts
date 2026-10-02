@@ -70,7 +70,7 @@ for (const [id, contents] of [['csv', 'name,value\\nAda,42'], ['large', 'x'.repe
 }
 `);
         case '/device':
-            return layout('Device', '<p>Server UA: ' + escapeHtml(url.searchParams.get('ua') ?? '') + '</p><style>@media(max-width:480px){#menu{display:none}#hamburger{display:block!important}}</style><button id="hamburger" style="display:none">Open menu</button><div id="menu"><button id="save">Choose plan</button></div><output id="events"></output>', `
+            return layout('Device', `<p>Server UA: ${escapeHtml(url.searchParams.get('ua') ?? '')}</p><style>@media(max-width:480px){#menu{display:none}#hamburger{display:block!important}}</style><button id="hamburger" style="display:none">Open menu</button><div id="menu"><button id="save">Choose plan</button></div><output id="events"></output>`, `
 document.getElementById('hamburger').onclick = () => { document.getElementById('menu').style.display = 'block'; };
 document.getElementById('save').onclick = () => toast('Plan chosen');
 addEventListener('touchstart', () => document.getElementById('events').textContent = 'Touch received');
@@ -98,7 +98,7 @@ document.getElementById('echo').onclick = () => { document.getElementById('help'
             if (bug === 'swapped') { entries.reverse(); }
             return layout('Recorded effects', `<table><tbody>${entries.map(entry => `<tr><td>Entry ${entry.date}</td><td><button data-name="${entry.name}">Choose</button></td></tr>`).join('')}</tbody></table><h2 id="choice">No selection</h2>`, `
 for (const button of document.querySelectorAll('button[data-name]')) button.addEventListener('click', () => {
-  ${bug === 'no-effect' ? 'return;' : "document.getElementById('choice').textContent = button.dataset.name + ' chosen';"}
+  ${bug === 'no-effect' ? 'return;' : 'document.getElementById(\'choice\').textContent = button.dataset.name + \' chosen\';'}
 });`);
         }
         case '/profile':

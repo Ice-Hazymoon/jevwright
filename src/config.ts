@@ -1,11 +1,12 @@
+import type { Device } from './devices.ts';
 import type { ModelProvider } from './models.ts';
 import type { Env, TestSpec } from './spec.ts';
-import { deviceSchema, type Device } from './devices.ts';
 import { createJiti } from 'jiti';
 import { existsSync } from 'node:fs';
 import { dirname, isAbsolute, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { z } from 'zod';
+import { deviceSchema } from './devices.ts';
 import { JevwrightError } from './errors.ts';
 import { originProblem } from './origin.ts';
 import { assertValidTests } from './select.ts';

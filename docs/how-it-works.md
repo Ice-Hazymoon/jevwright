@@ -202,3 +202,7 @@ arbitrary application hashes or application-truncated fragments of a secret.
 A failed or uncertain `check` still waits for delayed rendering and observes again. It asks Jev again
 only if the observation signature changed. An unchanged uncertain verdict goes to the helper;
 an unchanged certain rejection stays failed. The second observation remains available as evidence.
+
+Evaluation protocol types, question IDs and option IDs retain their identities; dynamic descriptions and
+reference evidence are redacted. Report display paths may be redacted, while writers use the separate
+physical directory. A stable hashed selection key preserves `--last-failed` when a test ID is redacted.

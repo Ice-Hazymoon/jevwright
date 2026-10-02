@@ -29,6 +29,15 @@ export function artifactBoundaryViolations(file: string, text: string): string[]
             && !['suite.ts', 'test-runner.ts', 'report.ts'].includes(file)) {
             violations.push(`${file}:${source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1}: forResults is restricted to engine result writers (FW02)`);
         }
+        if (file === 'models.ts' && ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)
+            && node.expression.name.text === 'value' && node.arguments.some(argument => ts.isIdentifier(argument) && argument.text === 'questions')) {
+            violations.push(`${file}:${source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1}: redact question descriptions without changing protocol identities (FW03)`);
+        }
+        if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === 'writeReports'
+            && node.arguments[0] && ts.isObjectLiteralExpression(node.arguments[0])
+            && node.arguments[0].properties.some(property => property.name && ((ts.isIdentifier(property.name) && property.name.text === 'directory') || (ts.isStringLiteral(property.name) && property.name.text === 'directory')))) {
+            violations.push(`${file}:${source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1}: pass the physical report directory separately from redacted content (FW04)`);
+        }
         ts.forEachChild(node, visit);
     }
     visit(source);

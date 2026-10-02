@@ -1,9 +1,10 @@
+import type { Redactor } from './secrets.ts';
 import type { Experimental_EvaluationModel, Experimental_EvaluationQuestion, LanguageModel } from 'ai';
 import type { z } from 'zod';
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
 import { createGateway, experimental_evaluate as evaluate, generateText, NoObjectGeneratedError, NoOutputGeneratedError, Output } from 'ai';
-import { createRedactor, type Redactor } from './secrets.ts';
 import { JevwrightError } from './errors.ts';
+import { createRedactor } from './secrets.ts';
 
 export type Question = Experimental_EvaluationQuestion;
 type LanguageModelV4 = Extract<LanguageModel, { specificationVersion: 'v4' }>;
@@ -165,7 +166,13 @@ export function createModels(settings: ModelSettings, runBudget?: RunBudget, red
             const call: ModelCall = { kind: 'jev', purpose, durationMs: 0, inputTokens: 0, outputTokens: 0 };
             try {
                 // The SDK retries 408/429/5xx with exponential backoff; it validates distributions and arg-max.
-                const result = await evaluate({ model: evaluation, state: redact.value(state) as never, questions: redact.value(questions), maxRetries: 4, abortSignal: requestSignal(signal) });
+                const safeQuestions = Object.fromEntries(Object.entries(questions).map(([id, question]): [string, Question] => {
+                    const instructions = redact.value(question.instructions);
+                    if (question.type === 'choice') { return [id, { ...question, instructions, criteria: Object.fromEntries(Object.entries(question.criteria).map(([key, description]) => [key, redact.value(description)])) }]; }
+                    if (question.type === 'score') { return [id, { ...question, instructions, criteria: question.criteria.map(description => redact.value(description)) }]; }
+                    return [id, { ...question, instructions }];
+                }));
+                const result = await evaluate({ model: evaluation, state: redact.state(state) as never, questions: safeQuestions, maxRetries: 4, abortSignal: requestSignal(signal) });
                 call.inputTokens = result.usage.inputTokens ?? 0;
                 call.outputTokens = result.usage.outputTokens ?? 0;
                 call.cost = costOf(result.providerMetadata);

@@ -1,23 +1,22 @@
 import type { LoadedConfig, SetupResult } from './config.ts';
 import type { RunMode, RunSummary, SuiteOptions } from './suite.ts';
 import { existsSync, readFileSync } from 'node:fs';
-import { writeArtifact } from './artifacts.ts';
-import { createRedactor } from './secrets.ts';
 import { appendFile, mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
-import { basename, join, relative, resolve } from 'node:path';
+import { basename, dirname, join, relative, resolve } from 'node:path';
 import { parseArgs, parseEnv } from 'node:util';
+import { writeArtifact } from './artifacts.ts';
 import { loadConfig } from './config.ts';
+import { resolveDevice } from './devices.ts';
 import { JevwrightError } from './errors.ts';
 import { lastFailedIds } from './last-failed.ts';
 import { gatewayFromEnv } from './models.ts';
 import { checkedOrigin } from './origin.ts';
 import { loadSummary, writeReports } from './report.ts';
-import { selectTests } from './select.ts';
+import { createRedactor } from './secrets.ts';
+import { selectTests, testSelectionKey } from './select.ts';
 import { serveReport } from './serve.ts';
 import { bindCancellationSignals } from './signals.ts';
-import { resolveDevice } from './devices.ts';
-import { dirname } from 'node:path';
-import { runSuite } from './suite.ts';
+import { artifactDirectory, runSuite } from './suite.ts';
 import { VERSION } from './version.ts';
 
 const HELP = `jevwright ${VERSION} — natural-language browser tests for business flows
@@ -66,7 +65,7 @@ Docs: https://github.com/Ice-Hazymoon/jevwright#readme
 `;
 
 const OPTIONS = {
-    device: { type: 'string' },
+    'device': { type: 'string' },
     'test': { type: 'string' },
     'module': { type: 'string' },
     'tag': { type: 'string' },
@@ -139,11 +138,12 @@ function loadEnvFile(file: string, env: CliIO['env']): void {
 async function listCommand(flags: Flags, io: CliIO): Promise<number> {
     const loaded = await loadConfig({ cwd: io.cwd, path: flags.config });
     const tests = await selectedTests(loaded, flags);
+    const redact = createRedactor(tests.flatMap(test => Object.values(test.secrets ?? {})));
     const rows = tests.map(test => [test.id, test.module ?? '', (test.tags ?? []).join(','), test.title]);
     // Only columns some test fills, each as wide as its longest cell.
     const widths = [0, 1, 2].map(column => Math.max(...rows.map(row => row[column]!.length)));
     for (const row of rows) {
-        io.stdout(`${row.map((cell, column) => column < 3 ? (widths[column] ? `${cell.padEnd(widths[column]!)}  ` : '') : cell).join('')}\n`);
+        io.stdout(redact.text(`${row.map((cell, column) => column < 3 ? (widths[column] ? `${cell.padEnd(widths[column]!)}  ` : '') : cell).join('')}\n`));
     }
     io.stdout(`${tests.length} test${tests.length === 1 ? '' : 's'}\n`);
     return 0;
@@ -194,7 +194,7 @@ async function runPasses(tests: LoadedConfig['config']['tests'], passes: readonl
     for (const [index, pass] of passes.entries()) {
         // Replay never calls the models it is given; the engine drops them for that mode.
         const summary = await runSuite(tests, { ...options, mode: pass.mode, retries: pass.retries, updateRecordings: pass.record });
-        if (app.serverLog) { await writeArtifact(join(summary.directory, 'server.log'), await app.serverLog(), createRedactor(tests.flatMap(test => Object.values(test.secrets ?? {})))).catch(() => undefined); }
+        if (app.serverLog) { await writeArtifact(join(artifactDirectory(summary), 'server.log'), await app.serverLog(), createRedactor(tests.flatMap(test => Object.values(test.secrets ?? {})))).catch(() => undefined); }
         io.stdout(summaryLine(summary, passes.length > 1 ? `pass ${index + 1}/${passes.length} (${pass.mode}${pass.record ? ', recording' : ''}): ` : '', io.cwd));
         if (options.signal?.aborted) { return 130; }
         if (summary.totals.failed > 0) { return runFailureExitCode(summary, passes.length === 1); }
@@ -354,7 +354,7 @@ async function reportCommand(directory: string | undefined, io: CliIO): Promise<
     if (!directory) { throw new JevwrightError('Usage: jevwright report <run-dir>'); }
     const dir = resolve(io.cwd, directory);
     const summary = await loadSummary(dir).catch(() => { throw new JevwrightError(`${directory} has no readable summary.json`); });
-    await writeReports({ ...summary, directory: dir });
+    await writeReports(summary, undefined, dir);
     io.stdout(`${relative(io.cwd, join(dir, 'report.md'))}\n${relative(io.cwd, join(dir, 'report.html'))}\n`);
     return 0;
 }
@@ -440,7 +440,7 @@ async function selectedTests(loaded: LoadedConfig, flags: Flags) {
     const tests = selectTests(loaded.config.tests, flags);
     if (!flags['last-failed']) { return tests; }
     const ids = await lastFailedIds(loaded.outputDir);
-    return tests.filter(test => ids.has(test.id));
+    return tests.filter(test => ids.has(test.id) || ids.has(testSelectionKey(test.id)));
 }
 
 /** Missing recordings alone are a maintenance outcome; missing targets can be real regressions. */
@@ -448,7 +448,8 @@ export function runFailureExitCode(summary: RunSummary, standalone = true): numb
     const failed = summary.results.filter(result => result.status === 'failed');
     if (!failed.length) { return 0; }
     return standalone && summary.manifest.mode === 'replay' && !summary.results.some(result => result.attempts.some(attempt => attempt.steps.some(step => step.endMismatch))) && failed.every(result => result.attempts.length > 0 && result.attempts.every(attempt => attempt.steps.some(step => step.failure === 'not-recorded') && attempt.steps.filter(step => step.status === 'failed').every(step => step.failure === 'not-recorded')))
-        ? 4 : 1;
+        ? 4
+        : 1;
 }
 
 function cliDevice(value: string): 'desktop' | 'mobile' {
