@@ -1,5 +1,6 @@
 import type { ModelProvider } from './models.ts';
 import type { Env, TestSpec } from './spec.ts';
+import { deviceSchema, type Device } from './devices.ts';
 import { createJiti } from 'jiti';
 import { existsSync } from 'node:fs';
 import { dirname, isAbsolute, resolve } from 'node:path';
@@ -70,6 +71,7 @@ export interface JevwrightConfig {
     maxCostUsd?: number;
     /** Default 1280×900. */
     viewport?: { width: number; height: number };
+    device?: Device;
     /** Browser locale. Default `en-US`. */
     locale?: string;
     /** Browser time zone. Default `UTC`. */
@@ -119,6 +121,7 @@ const schema = z.object({
     retries: z.number().int().min(0).optional(),
     maxCostUsd: z.number().positive().optional(),
     viewport: z.object({ width: positiveInt, height: positiveInt }).optional(),
+    device: deviceSchema.optional(),
     locale: z.string().min(1).optional(),
     timezone: z.string().min(1).optional(),
     failOnIssues: z.boolean().optional(),

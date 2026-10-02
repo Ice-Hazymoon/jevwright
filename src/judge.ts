@@ -23,7 +23,7 @@ const PASS = { holds: 0.7, support: 0.6 };
  * acted on target. A two-way choice, not a yes/no: on real histories the yes/no scored wrong-field steps
  * anywhere from 0.07 to 0.85, while the choice puts them near 0 and correct steps well above.
  */
-export async function actedOnTarget(models: Models, steps: ReadonlyArray<{ step: string; history: Array<Record<string, string>> }>, signal: AbortSignal): Promise<number[]> {
+export async function actedOnTarget(models: Models, steps: ReadonlyArray<{ step: string; history: Array<Record<string, string>> }>, signal: AbortSignal, missingProbability = 1): Promise<number[]> {
     const questions = Object.fromEntries(steps.map((_, index) => [`on_target_${index}`, {
         type: 'choice' as const,
         instructions: `Compare the elements in \`steps[${index}].history\` with what \`steps[${index}].step\` tells the user to act on. Each element is written as its role and accessible name.`,
@@ -34,7 +34,7 @@ export async function actedOnTarget(models: Models, steps: ReadonlyArray<{ step:
     }]));
     const answers = await models.judge({ steps }, questions, signal, 'audit');
     // No answer is no evidence against the step.
-    return steps.map((_, index) => 1 - (choiceOf(answers[`on_target_${index}`])?.probabilities.different ?? 0));
+    return steps.map((_, index) => choiceOf(answers[`on_target_${index}`])?.probabilities.named ?? missingProbability);
 }
 const FAIL = { holds: 0.3, support: 0.6 };
 

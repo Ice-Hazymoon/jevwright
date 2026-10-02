@@ -761,3 +761,84 @@ it('rebuilds JUnit through the report command and removes stale selection from r
         expect(reproduceCommand('jevwright run --last-failed --shard 1/3 --tag smoke', 'chosen')).toBe('jevwright run --test chosen');
     } finally { await rm(directory, { recursive: true, force: true }); }
 });
+
+describe('recorded end states', () => {
+    it('normalizes dynamic paths and requires half the appeared anchors', async () => {
+        const { endMatches, normalizedPath } = await import('../src/end-state.ts');
+        expect(normalizedPath('/items/123/ab12cd34')).toBe('/items/:id/:id');
+        const observation: Observation = { url: 'http://localhost/items/456/ef56gh78', title: '', notices: [], headings: ['Saved', 'Ready'], text: '', elements: [], omitted: 0, signature: '' };
+        const end = { path: '/items/:id/:id', appeared: ['Saved', 'Ready', 'Done', 'Complete'].map(text => ({ kind: 'heading' as const, text })) };
+        expect(endMatches(end, observation).matched).toBe(true);
+        expect(endMatches(end, { ...observation, headings: ['Saved'] }).matched).toBe(false);
+    });
+});
+
+describe('secret values', () => {
+    it('keeps accidental conversions opaque and redacts encoded appearances', async () => {
+        const { secret, reveal, createRedactor } = await import('../src/secrets.ts');
+        const raw = 'test-secret-<&"é';
+        const handle = secret(raw);
+        expect(String(handle)).toBe('{secret}');
+        expect(JSON.stringify(handle)).toBe('"{secret}"');
+        expect(`${handle}`).toBe('{secret}');
+        expect(reveal(handle)).toBe(raw);
+        const redact = createRedactor([handle]);
+        for (const encoded of [raw, encodeURIComponent(raw), JSON.stringify(raw).slice(1, -1), Buffer.from(raw).toString('base64'), raw.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('"', '&quot;')]) {
+            expect(redact.text(encoded)).toBe('{secret}');
+        }
+        expect(() => secret('short')).toThrow('6');
+    });
+});
+
+it('guards the redacted artifact boundary and its narrowly scoped filesystem owners (FW01)', async () => {
+    const { artifactBoundaryViolations: scan } = await import('./support/artifact-boundary.ts');
+    expect(scan('report.ts', "import { writeFile as save } from 'node:fs/promises'; async function report() { await save('result.json', raw); }")).toHaveLength(1);
+    expect(scan('cli.ts', "import { writeFile } from 'node:fs/promises'; async function runPasses() { await writeFile('server.log', raw); }")).toHaveLength(1);
+    expect(scan('report.ts', "import * as fs from 'node:fs/promises'; fs.writeFile('report.md', raw);")).toHaveLength(1);
+    expect(scan('cli.ts', "import { writeFile } from 'node:fs/promises'; async function initCommand() { await writeFile('config.ts', template); }")).toEqual([]);
+    const files = readdirSync(join(ROOT, 'src')).filter(name => name.endsWith('.ts'));
+    expect(files.flatMap(name => scan(name, readFileSync(join(ROOT, 'src', name), 'utf8')))).toEqual([]);
+});
+
+describe('paired calibration', () => {
+    it('detects repeated correctness regressions even when aggregate metrics improve', async () => {
+        const { comparePairs } = await import('../scripts/calibration-stats.ts');
+        const baseline = { matched: { save: true }, metrics: { jev: 10, llm: 0, cost: 0.1, duration: 100, healed: 0, rerouted: 0 } };
+        const candidate = { matched: { save: false }, metrics: { ...baseline.metrics, jev: 1 } };
+        const result = comparePairs(Array.from({ length: 6 }, () => ({ baseline, candidate })));
+        expect(result.regression).toBe(true);
+        expect(result.flips).toEqual([{ id: 'save', b: 6, c: 0 }]);
+    });
+
+    it('keeps identical paired metrics at zero and excludes unsupported tests', async () => {
+        const { comparePairs, applicableTests } = await import('../scripts/calibration-stats.ts');
+        const sample = { matched: { save: true }, metrics: { jev: 10, llm: 0, cost: 0.1, duration: 100, healed: 0, rerouted: 0 } };
+        const result = comparePairs(Array.from({ length: 6 }, () => ({ baseline: sample, candidate: sample })));
+        expect(result.regression).toBe(false);
+        expect(result.resolved).toBe(true);
+        expect(result.intervals.jev).toEqual({ mean: 0, low: 0, high: 0, relativeLow: 0, relativeHigh: 0 });
+        expect(applicableTests([{ id: 'old' }, { id: 'upload', requiredApis: ['file'] }], {})).toEqual({ supported: [{ id: 'old' }], unsupported: [{ id: 'upload', missing: ['file'] }] });
+    });
+});
+
+
+it('calibration removes a registered baseline after a failing checkout hook', async () => {
+    const { execFile } = await import('node:child_process');
+    const { promisify } = await import('node:util');
+    const { chmod } = await import('node:fs/promises');
+    const { removeOwnedWorktree } = await import('../scripts/calibration-ab.ts');
+    const root = await mkdtemp(join(tmpdir(), 'jevwright-hook-'));
+    const baseline = join(root, 'baseline');
+    const git = (...args: string[]) => promisify(execFile)('git', args, { cwd: root });
+    try {
+        await git('init');
+        await git('-c', 'user.name=Probe', '-c', 'user.email=probe@example.invalid', 'commit', '--allow-empty', '-m', 'probe');
+        const hook = join(root, '.git/hooks/post-checkout');
+        await writeFile(hook, '#!/bin/sh\nexit 23\n');
+        await chmod(hook, 0o755);
+        await expect(git('worktree', 'add', '--detach', baseline, 'HEAD')).rejects.toThrow();
+        expect((await git('worktree', 'list', '--porcelain')).stdout).toContain(baseline);
+        await removeOwnedWorktree(root, baseline);
+        expect((await git('worktree', 'list', '--porcelain')).stdout).not.toContain(baseline);
+    } finally { await rm(root, { recursive: true, force: true }); }
+});

@@ -29,11 +29,15 @@ export interface RecordedAction {
     append?: boolean;
 }
 
+export type Anchor = { kind: 'element'; target: TargetDescriptor } | { kind: 'heading' | 'dialog'; text: string };
+export interface StepEnd { path?: string; appeared?: Anchor[]; gone?: TargetDescriptor[] }
+
 export interface StepRecording {
     /** Hash of the step definition; a changed instruction invalidates its recording. */
     key: string;
     instruction: string;
     actions: RecordedAction[];
+    end?: StepEnd;
 }
 
 export interface TestRecording {
@@ -51,8 +55,16 @@ const recordingSchema = z.object({
     steps: z.array(z.object({
         key: z.string(),
         instruction: z.string(),
+        end: z.object({
+            path: z.string().optional(),
+            appeared: z.array(z.union([
+                z.object({ kind: z.literal('element'), target: descriptorSchema }),
+                z.object({ kind: z.enum(['heading', 'dialog']), text: z.string() }),
+            ])).optional(),
+            gone: z.array(descriptorSchema).optional(),
+        }).optional(),
         actions: z.array(z.object({
-            tool: z.enum(['click', 'type', 'press_enter', 'press_escape', 'select', 'scroll', 'wait']),
+            tool: z.enum(['click', 'type', 'press_enter', 'press_escape', 'select', 'scroll', 'wait', 'upload']),
             target: descriptorSchema.optional(),
             valueKey: z.string().optional(),
             value: z.string().optional(),
@@ -103,7 +115,7 @@ const WHEN = [
  * generated ids (8+ characters mixing letters and digits). Row labels and short numbers ("Order #1001") still
  * tell rows apart.
  */
-function stable(text: string | undefined): string {
+export function stable(text: string | undefined): string {
     const timeless = WHEN.reduce((current, pattern) => current.replace(pattern, '<when>'), (text ?? '').replace(/\bhttps?:\/\/\S+/g, '<url>'));
     return timeless.replace(/\b(?=[\w-]*\d)(?=[\w-]*[a-z])[\w-]{8,}\b/gi, '<id>');
 }
@@ -112,41 +124,64 @@ function stable(text: string | undefined): string {
  * Find the recorded element on a fresh observation. Exact identity first; then role+name with the
  * same count of look-alikes, so the k-th stays the k-th only while none were added or removed.
  */
-export function resolveTarget(target: TargetDescriptor, observation: Observation): PageElement | undefined {
-    const actionable = observation.elements.filter(element => (element.ref || element.reveal) && !element.disabled);
+export function resolveTarget(target: TargetDescriptor, observation: Observation, allowDisabled = false): PageElement | undefined {
+    return resolveTargetMatch(target, observation, allowDisabled).element;
+}
+
+/** Unique means exact full identity, not a fallback or an nth among duplicates. */
+export function resolveTargetMatch(target: TargetDescriptor, observation: Observation, allowDisabled = false): { element?: PageElement; unique: boolean } {
+    const actionable = observation.elements.filter(element => allowDisabled || ((element.ref || element.reveal) && !element.disabled));
     const exact = actionable.filter(element => sameIdentity(element, target));
-    if (exact.length > target.nth) { return exact[target.nth]; }
+    if (exact.length > target.nth) { return { element: exact[target.nth], unique: exact.length === 1 && target.nth === 0 }; }
     const named = actionable.filter(element => element.role === target.role && element.name === target.name && target.name !== '');
-    if (named.length === 1 && target.nth === 0) { return named[0]; }
+    if (named.length === 1 && target.nth === 0) { return { element: named[0], unique: false }; }
     const near = target.near ? actionable.filter(element => element.role === target.role && element.near === target.near) : [];
-    if (near.length === 1 && target.nth === 0) { return near[0]; }
-    return undefined;
+    if (near.length === 1 && target.nth === 0) { return { element: near[0], unique: false }; }
+    return { unique: false };
 }
 
 export function createRecordingStore(directory: string | undefined) {
-    const path = (test: string) => join(directory!, `${test}.json`);
+    const path = (test: string, device = 'desktop') => join(directory!, `${test}${device === 'desktop' ? '' : `.${device}`}.json`);
     return {
         enabled: Boolean(directory),
-        async load(test: string): Promise<TestRecording | undefined> {
+        async load(test: string, device = 'desktop'): Promise<TestRecording | undefined> {
             if (!directory) { return undefined; }
             try {
-                return recordingSchema.parse(JSON.parse(await readFile(path(test), 'utf8')));
+                return recordingSchema.parse(JSON.parse(await readFile(path(test, device), 'utf8')));
             } catch (error) {
                 if ((error as NodeJS.ErrnoException).code === 'ENOENT') { return undefined; }
                 const problem = error instanceof z.ZodError
                     ? error.issues.slice(0, 3).map(issue => `${issue.path.join('.') || 'file'}: ${issue.message}`).join('; ')
                     : error instanceof Error ? error.message : String(error);
-                throw new Error(`Invalid recording ${relative(process.cwd(), path(test))} (${problem})`);
+                throw new Error(`Invalid recording ${relative(process.cwd(), path(test, device))} (${problem})`);
             }
         },
         /** Atomic write; steps keep definition order. */
-        async save(recording: TestRecording): Promise<void> {
+        async save(recording: TestRecording, device = 'desktop'): Promise<void> {
             if (!directory) { return; }
-            await mkdir(dirname(path(recording.test)), { recursive: true });
-            const temporary = `${path(recording.test)}.${process.pid}.tmp`;
+            await mkdir(dirname(path(recording.test, device)), { recursive: true });
+            const temporary = `${path(recording.test, device)}.${process.pid}.tmp`;
             await writeFile(temporary, `${JSON.stringify(recording, null, 2)}\n`);
-            await rename(temporary, path(recording.test));
+            await rename(temporary, path(recording.test, device));
         },
     };
 }
 export type RecordingStore = ReturnType<typeof createRecordingStore>;
+
+/** Compare the replay recipe, not timestamps or observed end states. */
+export function changedActionSteps(previous: TestRecording | undefined, steps: StepRecording[]): number[] {
+    return steps.flatMap((step, index) => {
+        const old = previous?.steps.find(entry => entry.key === step.key);
+        return old && actionSignature(old.actions) === actionSignature(step.actions) ? [] : [index + 1];
+    });
+}
+
+export function learnedRecording(previous: TestRecording | undefined, steps: StepRecording[]): boolean {
+    return changedActionSteps(previous, steps).length > 0 || steps.some(step => step.end !== undefined && previous?.steps.find(entry => entry.key === step.key)?.end === undefined);
+}
+
+function actionSignature(actions: RecordedAction[]): string {
+    return JSON.stringify(actions.map(action => [action.tool,
+        action.target ? [action.target.role, action.target.name, stable(action.target.near), stable(action.target.context), action.target.nth] : null,
+        action.valueKey ?? null, action.value ?? null, action.template ?? null, action.double ?? false, action.append ?? false]));
+}

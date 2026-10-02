@@ -161,9 +161,10 @@ jevwright <command> [options]
 | Code | Meaning |
 | --- | --- |
 | `0` | No test failed: each passed, or was flaky, known or skipped (`skip`). |
-| `1` | A test failed. This includes tests the cost budget kept from running and, in replay, steps without a recording. |
+| `1` | A test failed. This includes budget failures, missing replay targets, expectation failures, and mixed failures. |
 | `2` | A usage, config or setup error, including an app that does not answer at the base URL; the message says what to fix. |
 | `3` | An internal error. Please [report it](https://github.com/Ice-Hazymoon/jevwright/issues). |
+| `4` | A standalone replay failed only because steps lack recordings. Record them in auto mode. The replay pass of `--new` still returns 1. |
 | `130` | Interrupted. |
 
 ## Recordings
@@ -226,3 +227,43 @@ Every run writes `junit.xml`, one suite per module (`default` when omitted). Pro
 failures use `<failure>`; environment and model failures use `<error>`. Known issues and explicit skips
 use `<skipped>`. Flaky tests stay passed in JUnit and carry their retry evidence in `<system-out>`.
 The JSON and HTML reports retain the complete attempt history.
+
+### Declaring secrets
+
+```ts
+import { act, reveal, secret, verify } from '@hazymoon/jevwright';
+
+const accessKey = secret(process.env.TEST_ACCESS_KEY!);
+// Inside a test:
+// secrets: { accessKey },
+// steps: () => [
+//     act('Enter {accessKey} in the API key field'),
+//     verify('key persisted', ({ secrets }) => storedKey === reveal(secrets.accessKey!)),
+// ],
+```
+
+Secrets need at least six Unicode code points. Duplicate keys across `data` and `secrets`, non-handle
+secret values, and `check` assertions that reference a secret key are authoring errors. Definitions that
+need their fixture are checked when that fixture has been created, before steps execute.
+
+## Files, devices and downloads
+
+Declare upload inputs with `files: { avatar: file('fixtures/avatar.png') }`, then write
+`act('Upload {avatar} with Upload avatar')`. The model sees the filename, never the local path.
+Paths resolve under the configuration directory (programmatic `rootDir`, default current directory).
+Missing files and symlinks outside that root fail before browser launch. Native file inputs and
+visible buttons that open a file chooser are supported. A chooser must appear within five seconds.
+
+`--device mobile` overrides test `device`, then config `device`, then legacy `viewport`.
+Mobile uses 390×844, touch, DPR 3 and a mobile Chrome user agent. Custom devices accept `viewport`,
+`isMobile`, `hasTouch` and `userAgent`. Desktop recordings keep `<id>.json`; mobile uses
+`<id>.mobile.json`, and custom devices use a stable settings hash. Touch clicks use tap; hover
+reveal remains available. The runner returns to the most recent live page when a popup closes.
+
+`act('Export CSV', { expect: { download: { filename: /\.csv$/ } } })` waits for a matching download.
+A later `verify` reads `downloads`, an array of `{ filename, path, bytes }`; file contents are
+available only to trusted test code. Untrusted suggested names never determine output paths.
+Undeclared downloads are cancelled. Downloads larger than 20 MiB are deleted and fail the expectation.
+Transfers have a 30-second limit. Blob/data downloads are allowed; network downloads use the origin proxy.
+Fixture-dependent step declarations provisionally allow downloads in the context, but cancel every
+download outside a declared step. Downloaded files are test data; do not export production secrets.

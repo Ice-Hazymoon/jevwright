@@ -176,7 +176,7 @@ Replay skips `check` steps, since they need a model. A step without a recording 
 | `Nothing answers at http://…` | Start the app, correct `baseURL`, or give the config a `setup` function that starts it. |
 | `Playwright's Chromium is not installed` | Run `npx playwright install chromium` (in CI, add `--with-deps`). |
 | `No model key found` | Set `OPENROUTER_API_KEY` or `VERCEL_AI_GATEWAY_API_KEY`, or pass `--env-file`. `--mode replay` and `--dry-run` need no key. |
-| A replay fails with "no recording" | The step was never recorded, or was reworded since. Run the test once in auto mode (`npx jevwright run --test <id>`) and commit its recording. |
+| Replay exits with code 4 (only missing recordings) | The step was never recorded, or was reworded since. Run the test once in auto mode (`npx jevwright run --test <id>`) and commit its recording. |
 | Every test fails with "Start page did not become ready" | Open the start page yourself and read `server.log`. Check that a `ready` hook does not wait for something that never appears. |
 | A request the app needs is blocked | `run.json` lists `blockedRequests`. If the origin is part of your app, add it to `allowedOrigins`. |
 | `check` steps show as skipped | Replay mode makes no model calls. Run in auto mode, with a key, to judge them. |
@@ -184,23 +184,25 @@ Replay skips `check` steps, since they need a model. A step without a recording 
 
 Anything else, or an engine that gets a well-worded step wrong: [open an issue](https://github.com/Ice-Hazymoon/jevwright/issues) with the run's `report.md`.
 
+Replay reports also show mismatched recorded end states. Confirm them with an auto run; a mismatch
+can be a product regression or a stale target and does not establish either on its own.
+
 ## Limitations
 
 - The engine can:
   - click, type, press Enter or Escape, and pick from a select;
+  - upload declared files and verify declared downloads;
+  - follow popups and return after they close;
   - scroll and wait;
   - hover to reveal controls;
   - double-click to probe duplicate submissions.
 - It cannot:
-  - upload files;
   - drag;
   - draw on a canvas;
-  - use the clipboard;
-  - download files;
-  - open several tabs.
+  - use the clipboard.
 
   When one of these is only a precondition, do it in a `fixture` or `run` step. When it is the behavior under test, use a scripted Playwright test.
-- The viewport is desktop only; it defaults to 1280×900 and has no touch support.
+- Desktop defaults to 1280×900. Use `device: "mobile"` for touch and a mobile user agent, or provide a custom device.
 - `check` is a model judgment. Exact values (money, multilingual text, line breaks) belong in `verify`.
 - Chromium only.
 
