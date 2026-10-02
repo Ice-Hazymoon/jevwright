@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.5.0
+
+- Skip the second check judgment when the observed page has not changed; uncertain first judgments still use the helper.
+- Six paired real-model runs preserved 66/66 expected outcomes and reduced Jev calls by four per pair (95% interval [-4,-4]).
+
+
+## 0.4.0
+
+- Add root-scoped uploads, mobile/touch device contexts and separate device recordings.
+- Add declared downloads with completion and size checks, secret withholding after verification, and popup close recovery.
+
+
 ## 0.3.0
 
 - Add opaque secrets, restricted field input, model and artifact redaction, and fail-closed trace cleanup.

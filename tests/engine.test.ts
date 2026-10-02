@@ -880,3 +880,28 @@ describe('reviewed replay boundaries', () => {
         expect(JSON.parse(await readFile(join(recordingsDir, 'profile-save.json'), 'utf8')).steps.length).toBeGreaterThan(0);
     });
 });
+
+describe('unchanged check observations', () => {
+    it('skips a second certain verdict only when the observed page stayed unchanged', async () => {
+        for (const changes of [false, true]) {
+            let checks = 0;
+            const models = scriptedModels(view => {
+                if (view.claim) { checks++; return checks > 1 ? { holds: 0.99, support: 'supports' } : { holds: 0.01, support: 'contradicts' }; }
+                return {};
+            });
+            const test: TestSpec<void> = { id: changes ? 'check-changed' : 'check-unchanged', title: 'Check delayed text', risk: 'Repeated verdict changes certainty', start: '/profile',
+                steps: () => [verify('start delayed render', async ({ page }) => { if (changes) { await page.evaluate(() => { setTimeout(() => { const p = document.createElement('p'); p.textContent = 'Saved marker'; document.body.append(p); }, 700); }); } return true; }), check('The saved marker is visible')],
+            };
+            const result = await runSuite([test], { baseURL: app.origin, outputDir: join(root, 'check-dedup'), models: models.settings, retries: 0, log: () => undefined });
+            expect(checks).toBe(changes ? 2 : 1);
+            expect(result.results[0]?.status).toBe(changes ? 'passed' : 'failed');
+        }
+    });
+    it('sends an unchanged uncertain first judgment to the helper', async () => {
+        const models = scriptedModels(() => ({ holds: 0.45, support: 'supports' }), () => ({ verdict: 'true', reason: 'Trusted evidence supports it' }));
+        const result = await runSuite([{ id: 'check-uncertain', title: 'Adjudicate uncertain check', risk: 'Repeated uncertainty', start: '/profile', steps: () => [check('The profile is visible')] }], { baseURL: app.origin, outputDir: join(root, 'check-dedup'), models: models.settings, retries: 0, log: () => undefined });
+        expect(result.results[0]?.status, result.results[0]?.summary).toBe('passed');
+        expect(result.totals.models.jevCalls).toBe(1);
+        expect(result.totals.models.llmCalls).toBe(1);
+    });
+});

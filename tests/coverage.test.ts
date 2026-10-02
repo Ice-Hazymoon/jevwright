@@ -2,7 +2,7 @@ import { mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/prom
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { act, file, run, runSuite, verify, type TestSpec } from '../src/index.ts';
+import { act, check, file, run, runSuite, secret, verify, type TestSpec } from '../src/index.ts';
 import { resolveFiles } from '../src/files.ts';
 import { startFixtureApp } from './fixtures/app.ts';
 import { is, scriptedModels } from './support/scripted-models.ts';
@@ -16,8 +16,8 @@ const options = () => ({ baseURL: app.origin, rootDir: root, outputDir: join(roo
 
 describe('action coverage', () => {
     it('records upload file keys and replays three times without treating files as missing values', async () => {
-        const spec: TestSpec = { ...base, files: { avatar: file('avatar.txt') }, steps: () => [act('Upload {avatar} with Upload avatar'), verify('content', async ({ page }) => (await page.locator('output').textContent())?.includes('avatar content') === true)] };
-        const models = scriptedModels(view => view.text.includes('Uploaded avatar.txt') ? { done: 0.95 } : { tool: 'upload', target: is('button', 'Upload avatar'), value: 'avatar' });
+        const spec: TestSpec = { ...base, files: { avatar: file('avatar.txt') }, steps: () => [act('Upload {avatar} with Upload avatar'), check('Uploaded file is {avatar}'), verify('content', async ({ page }) => (await page.locator('output').textContent())?.includes('avatar content') === true)] };
+        const models = scriptedModels(view => view.claim ? { holds: 0.99, support: 'supports' } : view.text.includes('Uploaded avatar.txt') ? { done: 0.95 } : { tool: 'upload', target: is('button', 'Upload avatar'), value: 'avatar' });
         const first = await runSuite([spec], { ...options(), models: models.settings });
         expect(first.results[0]?.status, first.results[0]?.summary).toBe('passed');
         const recording = await readFile(join(root, 'recordings/coverage.json'), 'utf8');
@@ -82,4 +82,30 @@ describe('action coverage', () => {
         expect(summary.results[0]?.status, summary.results[0]?.summary).toBe('passed');
         expect(summary.results[0]?.attempts[0]?.events).toContain('tab closed');
     });
+});
+
+
+it('waits for all downloads and rejects a late oversized second file', async () => {
+    const spec: TestSpec = { ...base, id: 'late-large', start: '/downloads', fixture: async ({ context }) => {
+        context.on('page', page => page.on('download', download => { if (download.suggestedFilename() === 'large.csv') { const save = download.saveAs.bind(download); download.saveAs = async path => { await new Promise(resolve => setTimeout(resolve, 1500)); return save(path); }; } }));
+    }, ready: async ({ page }) => page.evaluate(() => { const button = document.createElement('button'); button.textContent = 'Export both'; button.onclick = () => { document.getElementById('csv')!.click(); document.getElementById('large')!.click(); }; document.body.append(button); }), steps: () => [act('Export both', { expect: { download: { filename: /csv/ } } })] };
+    const models = scriptedModels(view => view.history.length ? { done: 0.95 } : { tool: 'click', target: is('button', 'Export both') });
+    const result = (await runSuite([spec], { ...options(), models: models.settings })).results[0]!;
+    expect(result.status, result.summary).toBe('failed');
+    expect(result.attempts[0]?.steps[0]?.failure).toBe('expectation');
+    expect(result.summary).toContain('20 MiB');
+});
+
+it('enables fixture-dependent downloads and withholds secret files after raw verification', async () => {
+    const raw = 'download-private-token';
+    const spec: TestSpec<boolean> = { ...base, id: 'private-download', start: '/downloads', secrets: { token: secret(raw) }, fixture: async () => true,
+        ready: async ({ page }) => page.evaluate(value => { document.getElementById('csv')!.onclick = () => { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([value])); a.download = 'private.csv'; a.click(); }; }, raw),
+        steps: enabled => enabled ? [act('Export CSV', { expect: { download: {} } }), verify('raw content', async ({ downloads }) => await readFile(downloads[0]!.path, 'utf8') === raw)] : [],
+    };
+    const models = scriptedModels(view => view.history.length ? { done: 0.95 } : { tool: 'click', target: is('button', 'Export CSV') });
+    const result = (await runSuite([spec], { ...options(), models: models.settings })).results[0]!;
+    expect(result.status, result.summary).toBe('passed');
+    const download = result.attempts[0]!.steps[0]!.downloads![0]!;
+    expect(download.withheld).toBe(true);
+    await expect(readFile(download.path)).rejects.toMatchObject({ code: 'ENOENT' });
 });

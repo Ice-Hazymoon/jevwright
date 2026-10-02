@@ -1,5 +1,5 @@
 import { realpath, stat } from 'node:fs/promises';
-import { basename, isAbsolute, relative, resolve } from 'node:path';
+import { basename, isAbsolute, relative, resolve, sep } from 'node:path';
 import { JevwrightError } from './errors.ts';
 
 const paths = new WeakMap<FileRef, string>();
@@ -18,7 +18,7 @@ export async function resolveFiles(files: Readonly<Record<string, FileRef>> = {}
         if (declared === undefined) { throw new JevwrightError(`files.${key} must be a file() handle`); }
         const path = await realpath(resolve(root, declared)).catch(() => { throw new JevwrightError(`files.${key} does not exist`); });
         const inside = relative(root, path);
-        if (inside === '..' || inside.startsWith('../') || isAbsolute(inside) || !(await stat(path)).isFile()) { throw new JevwrightError(`files.${key} must be a regular file inside rootDir`); }
+        if (inside.split(sep)[0] === '..' || isAbsolute(inside) || !(await stat(path)).isFile()) { throw new JevwrightError(`files.${key} must be a regular file inside rootDir`); }
         result[key] = { path, name: basename(path) };
     }
     return result;
