@@ -700,3 +700,46 @@ describe('recorded end states', () => {
         expect(endMatches(end, { ...observation, headings: ['Saved'] }).matched).toBe(false);
     });
 });
+
+describe('paired calibration', () => {
+    it('detects repeated correctness regressions even when aggregate metrics improve', async () => {
+        const { comparePairs } = await import('../scripts/calibration-stats.ts');
+        const baseline = { matched: { save: true }, metrics: { jev: 10, llm: 0, cost: 0.1, duration: 100, healed: 0, rerouted: 0 } };
+        const candidate = { matched: { save: false }, metrics: { ...baseline.metrics, jev: 1 } };
+        const result = comparePairs(Array.from({ length: 6 }, () => ({ baseline, candidate })));
+        expect(result.regression).toBe(true);
+        expect(result.flips).toEqual([{ id: 'save', b: 6, c: 0 }]);
+    });
+
+    it('keeps identical paired metrics at zero and excludes unsupported tests', async () => {
+        const { comparePairs, applicableTests } = await import('../scripts/calibration-stats.ts');
+        const sample = { matched: { save: true }, metrics: { jev: 10, llm: 0, cost: 0.1, duration: 100, healed: 0, rerouted: 0 } };
+        const result = comparePairs(Array.from({ length: 6 }, () => ({ baseline: sample, candidate: sample })));
+        expect(result.regression).toBe(false);
+        expect(result.resolved).toBe(true);
+        expect(result.intervals.jev).toEqual({ mean: 0, low: 0, high: 0, relativeLow: 0, relativeHigh: 0 });
+        expect(applicableTests([{ id: 'old' }, { id: 'upload', requiredApis: ['file'] }], {})).toEqual({ supported: [{ id: 'old' }], unsupported: [{ id: 'upload', missing: ['file'] }] });
+    });
+});
+
+
+it('calibration removes a registered baseline after a failing checkout hook', async () => {
+    const { execFile } = await import('node:child_process');
+    const { promisify } = await import('node:util');
+    const { chmod } = await import('node:fs/promises');
+    const { removeOwnedWorktree } = await import('../scripts/calibration-ab.ts');
+    const root = await mkdtemp(join(tmpdir(), 'jevwright-hook-'));
+    const baseline = join(root, 'baseline');
+    const git = (...args: string[]) => promisify(execFile)('git', args, { cwd: root });
+    try {
+        await git('init');
+        await git('-c', 'user.name=Probe', '-c', 'user.email=probe@example.invalid', 'commit', '--allow-empty', '-m', 'probe');
+        const hook = join(root, '.git/hooks/post-checkout');
+        await writeFile(hook, '#!/bin/sh\nexit 23\n');
+        await chmod(hook, 0o755);
+        await expect(git('worktree', 'add', '--detach', baseline, 'HEAD')).rejects.toThrow();
+        expect((await git('worktree', 'list', '--porcelain')).stdout).toContain(baseline);
+        await removeOwnedWorktree(root, baseline);
+        expect((await git('worktree', 'list', '--porcelain')).stdout).not.toContain(baseline);
+    } finally { await rm(root, { recursive: true, force: true }); }
+});
