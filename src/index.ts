@@ -13,3 +13,6 @@ export { runSuite } from './suite.ts';
 export type { RunManifest, RunMode, RunSummary, SuiteOptions, TestResult, TestStatus } from './suite.ts';
 export type { AttemptResult, Cause, StepFailure, StepResult } from './test-runner.ts';
 export { VERSION } from './version.ts';
+
+export type { Anchor, StepEnd, StepRecording, TargetDescriptor, TestRecording } from './recording.ts';
+export type { EndCheck } from './end-state.ts';

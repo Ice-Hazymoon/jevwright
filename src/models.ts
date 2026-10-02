@@ -88,6 +88,7 @@ export interface RunBudget {
     /** Adds a call's cost; 0 when the gateway reported none. */
     charge: (usd: number) => void;
     reached: () => boolean;
+    remaining: () => number;
 }
 
 export function createRunBudget(capUsd: number): RunBudget {
@@ -96,6 +97,7 @@ export function createRunBudget(capUsd: number): RunBudget {
         capUsd,
         charge(usd) { spent += usd; },
         reached: () => spent >= capUsd,
+        remaining: () => Math.max(0, capUsd - spent),
     };
 }
 

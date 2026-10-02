@@ -105,12 +105,31 @@ With a `reference`, the judge compares the page with your trusted data.
 
 ## Recordings and healing
 
-After each successful step, the engine stores the path as semantic targets: role, name, nearby text, row, and which of several same-named controls it was. Values from `data` are stored as their keys.
+Successful act steps record semantic targets and an optional end state: a normalized changed path,
+up to four appeared anchors and up to two disappeared controls. Toasts, numeric names and unstable
+names are excluded; typing-only steps record no anchors. A `likely-done` step records no end state.
 
-When a run replays a step:
-- The engine finds each target again on the current page.
-- If a target is missing, the step is **healed**: grounded with AI from that point, and in auto mode the recording is updated.
-- In replay mode, a missing target fails the step as `agent`. So does a step with no recording at all: a new test, or a step reworded since it was recorded. It is not retried.
+Replay first checks a declared expectation. Otherwise, recorded end states must match the path,
+at least half of the appeared anchors, and every disappeared control. The engine polls for up to
+five seconds. An empty end state provides no additional evidence and is labeled in the report.
+
+- In auto mode a missing target or mismatched end state triggers AI healing from the current page.
+  Healing must perform a new successful action before it may replace a mismatched end state.
+- In replay mode a missing target fails as `agent`; a failed declared expectation fails as `product`.
+  A mismatched end state is annotated and execution continues, leaving the verdict to later checks.
+  Even a passing test retains that annotation so its recording can be reviewed.
+- End state mismatch alone does not establish a product defect. Failed healing can be attributed
+  to `product` only when every recorded target matched a unique full identity and the action review
+  supports the intended control with probability at least 0.75 (or an expectation failed).
+- Legacy recordings without end states still replay. Auto may backfill an end state only if a later
+  verify or write/URL expectation passes and the whole attempt passes. Invariants alone do not qualify.
+- Recording writes require a changed action recipe or a newly added end state. Unchanged replay and
+  unchanged AI paths do not rewrite the file.
+
+After a product failure involving replay, auto may use one fresh AI retry. It needs at least 20% of
+the run budget left; otherwise the report records why it stayed with replay. A fresh pass remains
+`flaky`, and a different route is only an annotation, not proof that the recording was stale. If the
+fresh retry fails because the agent could not drive the page, the prior replay cause is retained.
 
 ## Failure attribution
 

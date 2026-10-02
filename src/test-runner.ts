@@ -1,3 +1,4 @@
+import type { EndCheck } from './end-state.ts';
 import type { ActFailure, ActionRecord, Round } from './act.ts';
 import type { ModelCall, Models, ModelSettings, ModelUsage, RunBudget } from './models.ts';
 import type { Issue } from './monitor.ts';
@@ -37,6 +38,9 @@ export interface StepResult {
     /** Why a product-looking failure here was attributed to the agent instead. */
     misstep?: string;
     replayMiss?: string;
+    end?: EndCheck;
+    endMismatch?: true;
+    replayOnTarget?: true;
     screenshot?: string;
     /** What kept the page from settling when a wait hit its cap (slow-step diagnostics). */
     busy?: string[];
@@ -64,6 +68,7 @@ export interface InvariantResult {
 export interface AttemptResult {
     id: string;
     attempt: number;
+    fresh?: true;
     status: 'passed' | 'failed';
     /** Stopped by Ctrl-C; the test is reported as skipped. */
     cancelled?: true;
@@ -128,6 +133,8 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
     const data: Values = spec.data ?? {};
     const viewport = options.viewport ?? { width: 1280, height: 900 };
     const newRecording: StepRecording[] = [];
+    const pendingEnds: Array<{ entry: StepRecording; index: number; end: NonNullable<StepRecording['end']> }> = [];
+    const deterministicChecks: number[] = [];
     const counts = { total: 0, replayed: 0, healed: 0, ai: 0 };
     let page: Page | undefined;
     let trace: string | undefined;
@@ -242,6 +249,7 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
             result.durationMs = Math.round(performance.now() - stepStarted);
             result.screenshot = await screenshot(page, directory, index);
             steps.push(result);
+            if (result.status === 'passed' && (step.kind === 'verify' || (step.kind === 'act' && (step.expect?.write || step.expect?.url)))) { deterministicChecks.push(index); }
             options.log(`     ${STEP_MARK[result.status]} ${result.source ? `[${result.source}] ` : ''}${result.durationMs}ms${result.error ? ` — ${result.error}` : ''}`);
             if (result.status === 'failed') {
                 failedStep = index;
@@ -319,9 +327,19 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
         if (summary !== 'Run cancelled') { summary = `Run cancelled (${summary})`; }
     }
     const status = cause ? 'failed' : 'passed';
+    if (status === 'passed') {
+        for (const pending of pendingEnds) {
+            if (deterministicChecks.some(index => index > pending.index)) { pending.entry.end = pending.end; }
+        }
+    }
+    const mismatches = steps.filter(step => step.endMismatch || (step.source === 'replay' && step.failure === 'expectation'));
+    if (mismatches.length) {
+        summary += `. ${mismatches.map(step => `step ${step.index + 1}'s replay missed its recorded end state`).join('; ')}; ${status === 'passed' ? 'refresh the recording with an auto run' : 'confirm with an auto run'}`;
+    }
     const result: AttemptResult = {
         id: spec.id,
         attempt: options.attempt,
+        ...(options.fresh ? { fresh: true as const } : {}),
         status,
         ...(cancelled ? { cancelled: true } : {}),
         ...(cause ? { cause } : {}),
@@ -380,6 +398,9 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
                 result.source = outcome.source;
                 result.actions = outcome.actions;
                 result.rounds = outcome.rounds;
+                result.end = outcome.end;
+                if (outcome.endMismatch) { result.endMismatch = true; }
+                if (outcome.replayOnTarget) { result.replayOnTarget = true; }
                 if (outcome.replayMiss) { result.replayMiss = outcome.replayMiss; }
                 if (outcome.status === 'likely-done') { result.likely = true; }
                 if (outcome.status === 'failed') {
@@ -387,7 +408,12 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
                     result.failure = outcome.failure;
                     result.error = outcome.reason;
                 } else {
-                    newRecording.push({ key, instruction: step.instruction, actions: outcome.source === 'replay' && recorded ? recorded.actions : outcome.recording as RecordedAction[] });
+                    const entry: StepRecording = { key, instruction: step.instruction, actions: outcome.source === 'replay' && recorded ? recorded.actions : outcome.recording as RecordedAction[] };
+                    if (outcome.recordedEnd !== undefined) {
+                        if (outcome.source === 'replay' && recorded?.end === undefined) { pendingEnds.push({ entry, index, end: outcome.recordedEnd }); }
+                        else { entry.end = outcome.recordedEnd; }
+                    }
+                    newRecording.push(entry);
                 }
                 if (outcome.rounds.some(round => (round.anomaly ?? 0) >= 0.8)) {
                     monitor.report({ kind: 'semantic', severity: 'low', message: `Jev flagged broken-looking content on ${shortUrl(page!.url())}` });
@@ -481,6 +507,7 @@ class AttemptError extends Error {
 /** Separate "the product misbehaved" from "the agent could not drive the UI". */
 function attribute(step: StepResult): { cause: Cause; summary: string } {
     const at = `step ${step.index + 1} (${step.label})`;
+    if (step.replayOnTarget) { return { cause: 'product', summary: `Expected effect missing at ${at}: ${step.error}` }; }
     switch (step.failure) {
         case 'assertion':
             return { cause: 'product', summary: `${step.kind === 'check' ? 'UI check' : 'Business verification'} failed at ${at}: ${step.error}` };

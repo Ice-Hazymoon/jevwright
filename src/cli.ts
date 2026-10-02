@@ -53,7 +53,7 @@ Global options:
   -v, --version        Show the version
 
 Exit codes: 0 no test failed, 1 a test failed, 2 usage, config or setup error, 3 internal error,
-            130 interrupted.
+            4 replay failed only because recordings are missing, 130 interrupted.
 Docs: https://github.com/Ice-Hazymoon/jevwright#readme
 `;
 
@@ -183,7 +183,7 @@ async function runPasses(tests: LoadedConfig['config']['tests'], passes: readonl
         if (app.serverLog) { await writeFile(join(summary.directory, 'server.log'), await app.serverLog()).catch(() => undefined); }
         io.stdout(summaryLine(summary, passes.length > 1 ? `pass ${index + 1}/${passes.length} (${pass.mode}${pass.record ? ', recording' : ''}): ` : '', io.cwd));
         if (options.signal?.aborted) { return 130; }
-        if (summary.totals.failed > 0) { return 1; }
+        if (summary.totals.failed > 0) { return runFailureExitCode(summary, passes.length === 1); }
     }
     return 0;
 }
@@ -416,4 +416,12 @@ Next:
   4. npx jevwright run --test profile-save --new
 `);
     return 0;
+}
+
+/** Missing recordings alone are a maintenance outcome; missing targets can be real regressions. */
+export function runFailureExitCode(summary: RunSummary, standalone = true): number {
+    const failed = summary.results.filter(result => result.status === 'failed');
+    if (!failed.length) { return 0; }
+    return standalone && summary.manifest.mode === 'replay' && failed.every(result => result.attempts.length > 0 && result.attempts.every(attempt => attempt.steps.some(step => step.failure === 'not-recorded') && attempt.steps.filter(step => step.status === 'failed').every(step => step.failure === 'not-recorded')))
+        ? 4 : 1;
 }

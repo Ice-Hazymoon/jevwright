@@ -1,9 +1,11 @@
+import type { View } from './support/scripted-models.ts';
 import type { TestSpec } from '../src/index.ts';
 import type { RunSummary, SuiteOptions } from '../src/suite.ts';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { runFailureExitCode } from '../src/cli.ts';
 import { act, check, reload, runSuite, verify } from '../src/index.ts';
 import { startFixtureApp } from './fixtures/app.ts';
 import { fixturePolicy } from './support/fixture-policy.ts';
@@ -700,5 +702,154 @@ describe('run budget', () => {
         const [result] = (await run).results;
         expect(result!.status, result!.summary).toBe('passed');
         expect(calls).toHaveLength(0);
+    });
+});
+
+describe('replay effects', () => {
+    it('attributes a failed replay expectation to the product', async () => {
+        const recordingsDir = join(root, 'replay-expectation');
+        const initial = await suite([profileTest()], { recordingsDir }).run;
+        expect(initial.totals.passed).toBe(1);
+        const replay = await suite([profileTest('/profile?bug=500')], { recordingsDir, mode: 'replay' }).run;
+        expect(replay.results[0]?.cause).toBe('product');
+        expect(runFailureExitCode(replay)).toBe(1);
+        expect(replay.results[0]?.attempts[0]?.steps.find(step => step.status === 'failed')?.failure).toBe('expectation');
+    });
+});
+
+describe('recorded effects and fresh retries', () => {
+    it('keeps an unmatched end state when healing performs no new action', async () => {
+        const recordingsDir = join(root, 'end-mismatch');
+        const spec = { ...profileTest(), steps: () => [act('Change Nickname to {nickname} and Bio to {bio}'), act('Save the profile'), verify('saved', () => true)] };
+        expect((await suite([spec], { recordingsDir }).run).totals.passed).toBe(1);
+        const path = join(recordingsDir, 'profile-save.json');
+        const recording = JSON.parse(await readFile(path, 'utf8'));
+        recording.steps[1].end = { appeared: [{ kind: 'heading', text: 'Recorded completion' }] };
+        await writeFile(path, JSON.stringify(recording));
+        const before = await readFile(path, 'utf8');
+        const summary = await suite([spec], { recordingsDir, policy: view => view.step === 'Save the profile' ? { done: 0.99, tool: 'none' } : fixturePolicy(view) }).run;
+        expect(summary.results[0]?.status).toBe('passed');
+        expect(summary.results[0]?.attempts[0]?.steps[1]?.endMismatch).toBe(true);
+        expect(summary.results[0]?.attempts[0]?.steps[1]?.source).toBe('replay');
+        expect(summary.results[0]?.recordingUpdated).toBe(false);
+        expect(await readFile(path, 'utf8')).toBe(before);
+        const replay = await suite([spec], { recordingsDir, mode: 'replay' }).run;
+        expect(replay.results[0]?.summary).toContain("step 2's replay missed its recorded end state");
+        expect(replay.results[0]?.attempts[0]?.steps[1]?.endMismatch).toBe(true);
+    });
+
+    it('backfills legacy ends only when a later deterministic check passed, and then stops rewriting', async () => {
+        const recordingsDir = join(root, 'legacy-end');
+        const spec = profileTest();
+        await suite([spec], { recordingsDir }).run;
+        const path = join(recordingsDir, 'profile-save.json');
+        const recording = JSON.parse(await readFile(path, 'utf8'));
+        for (const step of recording.steps) { delete step.end; }
+        await writeFile(path, JSON.stringify(recording));
+        expect((await suite([spec], { recordingsDir }).run).results[0]?.recordingUpdated).toBe(true);
+        const backfilled = await readFile(path, 'utf8');
+        expect(JSON.parse(backfilled).steps.every((step: { end?: unknown }) => step.end !== undefined)).toBe(true);
+        expect((await suite([spec], { recordingsDir }).run).results[0]?.recordingUpdated).toBe(false);
+        expect(await readFile(path, 'utf8')).toBe(backfilled);
+        for (const step of recording.steps) { delete step.end; }
+        await writeFile(path, JSON.stringify(recording));
+        const unchecked = { ...spec, steps: () => [act('Change Nickname to {nickname} and Bio to {bio}'), act('Save the profile')], invariants: [{ name: 'always', check: () => true }] };
+        expect((await suite([unchecked], { recordingsDir }).run).results[0]?.recordingUpdated).toBe(false);
+        expect(await readFile(path, 'utf8')).toBe(JSON.stringify(recording));
+    });
+
+    it('uses fresh grounding after replay wrote the wrong field without washing away the first failure', async () => {
+        const recordingsDir = join(root, 'fresh-retry');
+        const spec = profileTest();
+        await suite([spec], { recordingsDir }).run;
+        const path = join(recordingsDir, 'profile-save.json');
+        const recording = JSON.parse(await readFile(path, 'utf8'));
+        const actions = recording.steps[0].actions;
+        [actions[0].target, actions[1].target] = [actions[1].target, actions[0].target];
+        await writeFile(path, JSON.stringify(recording));
+        const summary = await suite([spec], { recordingsDir, retries: 1 }).run;
+        const result = summary.results[0]!;
+        expect(result.status).toBe('flaky');
+        expect(result.attempts[0]?.cause).toBe('product');
+        expect(result.attempts[1]?.fresh).toBe(true);
+        expect(result.rerouted?.steps).toEqual([1]);
+        expect(result.recordingUpdated).toBe(true);
+    });
+});
+
+
+function effectTest(start = '/effects'): TestSpec<void> {
+    return { id: 'choose-entry', title: 'Choose the entry dated 2026-01-01', risk: 'The wrong dated row is selected', start,
+        steps: () => [act('Choose the entry dated 2026-01-01', { maxActions: 2 }), verify('Alpha selected', async ({ page }) => page.getByRole('heading', { name: 'Alpha chosen', exact: true }).isVisible())] };
+}
+const effectPolicy = (view: View) => view.text.includes('Alpha chosen') ? { done: 0.99, tool: 'none' } : { tool: 'click', target: (element: { name?: string; in?: string }) => element.name === 'Choose' && Boolean(element.in?.includes('2026-01-01')) };
+
+describe('end state attribution', () => {
+    it('heals a duplicate control that changed row order, while replay exposes the mismatch', async () => {
+        const recordingsDir = join(root, 'swapped-effects');
+        const seed = (await suite([effectTest()], { recordingsDir, policy: effectPolicy }).run).results[0]!;
+        expect(seed.status, seed.summary).toBe('passed');
+        const replay = (await suite([effectTest('/effects?bug=swapped')], { recordingsDir, mode: 'replay' }).run).results[0]!;
+        expect(replay.status).toBe('failed');
+        expect(replay.cause).toBe('product');
+        expect(replay.summary).toContain("step 1's replay missed its recorded end state");
+        const healed = (await suite([effectTest('/effects?bug=swapped')], { recordingsDir, policy: effectPolicy }).run).results[0]!;
+        expect(healed.status).toBe('passed');
+        expect(healed.attempts[0]?.steps[0]?.source).toBe('healed');
+        expect(healed.recordingUpdated).toBe(true);
+    });
+
+    it('keeps failed duplicate-control healing attributed to the agent', async () => {
+        const recordingsDir = join(root, 'ambiguous-effects');
+        const seed = (await suite([effectTest()], { recordingsDir, policy: effectPolicy }).run).results[0]!;
+        expect(seed.status, seed.summary).toBe('passed');
+        const result = (await suite([effectTest('/effects?bug=swapped')], { recordingsDir, policy: () => ({ tool: 'none', done: 0 }) }).run).results[0]!;
+        expect(result.status).toBe('failed');
+        expect(result.cause).toBe('agent');
+    });
+
+    it('attributes a uniquely identified control with no effect to the product', async () => {
+        const recordingsDir = join(root, 'unique-effects');
+        const seed = (await suite([effectTest('/effects?single=1')], { recordingsDir, policy: effectPolicy }).run).results[0]!;
+        expect(seed.status, seed.summary).toBe('passed');
+        const result = (await suite([effectTest('/effects?single=1&bug=no-effect')], { recordingsDir, policy: () => ({ tool: 'none', done: 0 }) }).run).results[0]!;
+        expect(result.status).toBe('failed');
+        expect(result.cause).toBe('product');
+        expect(result.summary).toContain('the recorded control was used and the step still had no effect');
+    });
+});
+
+
+describe('replay exit codes', () => {
+    it('uses 4 only for standalone replay failures entirely caused by missing recordings', async () => {
+        const missing = { ...profileTest(), id: 'never-recorded-exit-code' };
+        const summary = await suite([missing], { mode: 'replay' }).run;
+        expect(summary.results[0]?.attempts[0]?.steps[0]?.failure).toBe('not-recorded');
+        expect(runFailureExitCode(summary)).toBe(4);
+        expect(runFailureExitCode(summary, false)).toBe(1);
+        const broken = { ...missing, id: 'broken-without-recording', start: '/broken' };
+        const mixed = await suite([missing, broken], { mode: 'replay' }).run;
+        expect(runFailureExitCode(mixed)).toBe(1);
+    });
+});
+
+describe('fresh retry limits', () => {
+    it('retains the replay cause when fresh driving fails, and skips fresh when the budget is low', async () => {
+        const recordingsDir = join(root, 'fresh-limits');
+        const spec = profileTest();
+        const seed = (await suite([spec], { recordingsDir }).run).results[0]!;
+        expect(seed.status, seed.summary).toBe('passed');
+        const path = join(recordingsDir, 'profile-save.json');
+        const recording = JSON.parse(await readFile(path, 'utf8'));
+        const actions = recording.steps[0].actions;
+        [actions[0].target, actions[1].target] = [actions[1].target, actions[0].target];
+        await writeFile(path, JSON.stringify(recording));
+        const freshFailed = (await suite([spec], { recordingsDir, retries: 1, policy: view => view.step ? { tool: 'none', done: 0 } : fixturePolicy(view) }).run).results[0]!;
+        expect(freshFailed.attempts[0]?.cause).toBe('product');
+        expect(freshFailed.attempts[1]?.cause).toBe('agent');
+        expect(freshFailed.cause).toBe('product');
+        const limited = (await suite([spec], { recordingsDir, retries: 1, maxCostUsd: 1, costPerCall: 0.45 }).run).results[0]!;
+        expect(limited.freshRetrySkipped).toBe('fresh retry skipped: run budget');
+        expect(limited.attempts[1]?.fresh).toBeUndefined();
     });
 });

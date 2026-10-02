@@ -161,9 +161,10 @@ jevwright <command> [options]
 | Code | Meaning |
 | --- | --- |
 | `0` | No test failed: each passed, or was flaky, known or skipped (`skip`). |
-| `1` | A test failed. This includes tests the cost budget kept from running and, in replay, steps without a recording. |
+| `1` | A test failed. This includes budget failures, missing replay targets, expectation failures, and mixed failures. |
 | `2` | A usage, config or setup error, including an app that does not answer at the base URL; the message says what to fix. |
 | `3` | An internal error. Please [report it](https://github.com/Ice-Hazymoon/jevwright/issues). |
+| `4` | A standalone replay failed only because steps lack recordings. Record them in auto mode. The replay pass of `--new` still returns 1. |
 | `130` | Interrupted. |
 
 ## Recordings

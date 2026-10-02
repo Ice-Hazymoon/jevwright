@@ -57,6 +57,15 @@ function escapeHtml(text: string): string {
 function pages(state: FixtureState, url: URL): string | undefined {
     const bug = url.searchParams.get('bug');
     switch (url.pathname) {
+        case '/effects': {
+            const entries = [{ date: '2026-01-01', name: 'Alpha' }, { date: '2026-02-02', name: 'Beta' }];
+            if (url.searchParams.has('single')) { entries.splice(1); }
+            if (bug === 'swapped') { entries.reverse(); }
+            return layout('Recorded effects', `<table><tbody>${entries.map(entry => `<tr><td>Entry ${entry.date}</td><td><button data-name="${entry.name}">Choose</button></td></tr>`).join('')}</tbody></table><h2 id="choice">No selection</h2>`, `
+for (const button of document.querySelectorAll('button[data-name]')) button.addEventListener('click', () => {
+  ${bug === 'no-effect' ? 'return;' : "document.getElementById('choice').textContent = button.dataset.name + ' chosen';"}
+});`);
+        }
         case '/profile':
             return layout('Profile', `
 <form id="f"><label for="nick">Nickname</label><input id="nick" name="nick" value="${escapeHtml(state.profile.nickname)}">

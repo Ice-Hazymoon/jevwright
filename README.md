@@ -175,13 +175,16 @@ Replay skips `check` steps, since they need a model. A step without a recording 
 | `Nothing answers at http://…` | Start the app, correct `baseURL`, or give the config a `setup` function that starts it. |
 | `Playwright's Chromium is not installed` | Run `npx playwright install chromium` (in CI, add `--with-deps`). |
 | `No model key found` | Set `OPENROUTER_API_KEY` or `VERCEL_AI_GATEWAY_API_KEY`, or pass `--env-file`. `--mode replay` and `--dry-run` need no key. |
-| A replay fails with "no recording" | The step was never recorded, or was reworded since. Run the test once in auto mode (`npx jevwright run --test <id>`) and commit its recording. |
+| Replay exits with code 4 (only missing recordings) | The step was never recorded, or was reworded since. Run the test once in auto mode (`npx jevwright run --test <id>`) and commit its recording. |
 | Every test fails with "Start page did not become ready" | Open the start page yourself and read `server.log`. Check that a `ready` hook does not wait for something that never appears. |
 | A request the app needs is blocked | `run.json` lists `blockedRequests`. If the origin is part of your app, add it to `allowedOrigins`. |
 | `check` steps show as skipped | Replay mode makes no model calls. Run in auto mode, with a key, to judge them. |
 | `env` is `unknown` in fixtures | Declare its type once through `Register`; see [Starting the app per run](https://github.com/Ice-Hazymoon/jevwright/blob/main/docs/configuration.md#starting-the-app-per-run). |
 
 Anything else, or an engine that gets a well-worded step wrong: [open an issue](https://github.com/Ice-Hazymoon/jevwright/issues) with the run's `report.md`.
+
+Replay reports also show mismatched recorded end states. Confirm them with an auto run; a mismatch
+can be a product regression or a stale target and does not establish either on its own.
 
 ## Limitations
 

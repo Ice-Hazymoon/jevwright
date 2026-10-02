@@ -3,14 +3,17 @@ import type { Answer, ChoiceAnswer, Models, Question } from './models.ts';
 import type { Monitor } from './monitor.ts';
 import type { Observation, PageElement } from './observe.ts';
 import type { RecordedAction, StepRecording } from './recording.ts';
+import type { EndCheck } from './end-state.ts';
 import type { Expectation, Values, WriteRecord } from './spec.ts';
 import type { Page } from 'playwright';
 import { z } from 'zod';
 import { actionError, perform, settle } from './browser.ts';
+import { endMatches, recordEnd } from './end-state.ts';
+import { actedOnTarget } from './judge.ts';
 import { choiceOf, probabilityOf, ranked } from './models.ts';
 import { matchesWrite } from './monitor.ts';
 import { describeElement, observe } from './observe.ts';
-import { describeTarget, resolveTarget } from './recording.ts';
+import { describeTarget, resolveTargetMatch } from './recording.ts';
 import { templateKeys, writeRules } from './spec.ts';
 
 export interface ActionRecord {
@@ -54,6 +57,10 @@ export interface ActResult {
     /** Replayable recipe of the actions that completed the step. */
     recording: RecordedAction[];
     replayMiss?: string;
+    end?: EndCheck;
+    recordedEnd?: import('./recording.ts').StepEnd;
+    endMismatch?: true;
+    replayOnTarget?: true;
 }
 
 export interface ActInput {
@@ -101,37 +108,79 @@ export async function runAct(input: ActInput): Promise<ActResult> {
     const actions: ActionRecord[] = [];
     const rounds: Round[] = [];
     const recording: RecordedAction[] = [];
-    let replayMiss: string | undefined;
-    // Notices already on the page when the step began; they are not caused by this step's actions.
     const start: StepStart = {};
+    let replayMiss: string | undefined;
+    let end: EndCheck = { checked: false };
+    let mismatch = false;
+    let unique = false;
+    const finish = async (result: Pick<ActResult, 'status' | 'source' | 'failure' | 'reason' | 'endMismatch' | 'replayOnTarget'>): Promise<ActResult> => {
+        const recordedEnd = result.endMismatch ? input.recorded?.end
+            : result.status === 'done' && start.observation
+                ? result.source === 'replay' && input.recorded?.end !== undefined ? input.recorded.end : recordEnd(start.observation, await observe(input.page), recording)
+                : undefined;
+        return { ...result, actions, rounds, recording, end: { ...end, recorded: recordedEnd !== undefined && Boolean(recordedEnd.path || recordedEnd.appeared?.length || recordedEnd.gone?.length) }, ...(recordedEnd !== undefined ? { recordedEnd } : {}), ...(replayMiss ? { replayMiss } : {}) };
+    };
     if (input.recorded?.actions.length) {
         const replay = await replaySteps(input, input.recorded.actions, actions, recording, start);
+        unique = replay.unique === true;
         if (replay.ok) {
             const expectation = await awaitExpectation(input, true);
-            if (expectation.ok) { return { status: 'done', source: 'replay', actions, rounds, recording }; }
-            replayMiss = `expectation after replay: ${expectation.reason}`;
-        } else {
-            replayMiss = replay.reason;
-        }
+            if (!expectation.ok) {
+                replayMiss = `expectation after replay: ${expectation.reason}`;
+                if (!input.models) { return finish({ status: 'failed', source: 'replay', failure: 'expectation', reason: replayMiss }); }
+            } else if (input.expect?.write || input.expect?.url || input.recorded.end === undefined) {
+                return finish({ status: 'done', source: 'replay' });
+            } else {
+                end = await awaitEnd(input, input.recorded.end);
+                if (end.matched) { return finish({ status: 'done', source: 'replay' }); }
+                mismatch = true;
+                replayMiss = `recorded end state missing: ${end.missing?.join(', ')}`;
+                if (!input.models) { return finish({ status: 'done', source: 'replay', endMismatch: true }); }
+                input.events.push('replayed actions ran but the recorded effect did not appear');
+            }
+        } else { replayMiss = replay.reason; }
         input.log?.(`    replay miss: ${replayMiss}`);
         if (!input.models) {
-            return { status: 'failed', source: 'replay', failure: 'not-found', reason: `Recorded path no longer applies (${replayMiss}); no model configured to heal it`, actions, rounds, recording, replayMiss };
+            return finish({ status: 'failed', source: 'replay', failure: 'not-found', reason: `Recorded path no longer applies (${replayMiss}); no model configured to heal it` });
         }
     }
-    if (!input.models) {
-        return { status: 'failed', source: 'ai', failure: 'model', reason: 'No recording for this step and no model configured', actions, rounds, recording };
-    }
+    if (!input.models) { return finish({ status: 'failed', source: 'ai', failure: 'model', reason: 'No recording for this step and no model configured' }); }
     const result = await decideLoop(input, input.models, actions, rounds, recording, start);
-    return { ...result, source: replayMiss ? 'healed' : 'ai', actions, rounds, recording, ...(replayMiss ? { replayMiss } : {}) };
+    if (mismatch && result.status !== 'failed' && !actions.some(action => action.ok && action.source !== 'replay')) {
+        return finish({ status: 'done', source: 'replay', endMismatch: true });
+    }
+    if (mismatch && result.status === 'failed') {
+        if (result.failure === 'expectation') { return finish({ ...result, source: 'healed', replayOnTarget: true }); }
+        if (unique && ['stuck', 'max-actions', 'not-found', 'ambiguous'].includes(result.failure ?? '')) {
+            const history = actions.filter(action => action.source === 'replay' && action.ok).map(action => ({ action: action.tool, ...(action.element ? { element: action.element } : {}) }));
+            const probability = await actedOnTarget(input.models, [{ step: input.instruction, history }], input.signal, 0).catch(() => []);
+            if ((probability[0] ?? 0) >= 0.75) {
+                return finish({ ...result, source: 'healed', replayOnTarget: true, reason: 'the recorded control was used and the step still had no effect' });
+            }
+        }
+    }
+    return finish({ ...result, source: replayMiss ? 'healed' : 'ai' });
+}
+
+async function awaitEnd(input: ActInput, end: import('./recording.ts').StepEnd): Promise<EndCheck> {
+    const deadline = performance.now() + 5000;
+    for (;;) {
+        input.signal.throwIfAborted();
+        const result = endMatches(end, await observe(input.page));
+        if (result.matched || performance.now() >= deadline) { return result; }
+        await input.page.waitForTimeout(Math.min(500, Math.max(0, deadline - performance.now())));
+    }
 }
 
 interface StepStart {
+    observation?: Observation;
     notices?: string[];
     /** Value keys already shown when the step began: they name what to act on, not what to enter. */
     shown?: ReadonlySet<string>;
 }
 
-async function replaySteps(input: ActInput, recorded: RecordedAction[], actions: ActionRecord[], recording: RecordedAction[], start: StepStart): Promise<{ ok: boolean; reason?: string }> {
+async function replaySteps(input: ActInput, recorded: RecordedAction[], actions: ActionRecord[], recording: RecordedAction[], start: StepStart): Promise<{ ok: boolean; reason?: string; unique?: boolean }> {
+    let unique = recorded.some(action => action.target);
     for (const action of recorded) {
         input.signal.throwIfAborted();
         let element: PageElement | undefined;
@@ -141,8 +190,11 @@ async function replaySteps(input: ActInput, recorded: RecordedAction[], actions:
             if (attempt) { await input.page.waitForTimeout(600); }
             await settle(input.page, input.monitor);
             observation = await observe(input.page);
+            start.observation ??= observation;
             start.notices ??= observation.notices;
-            element = action.target ? resolveTarget(action.target, observation) : undefined;
+            const match = action.target ? resolveTargetMatch(action.target, observation) : undefined;
+            element = match?.element;
+            if (element && !match?.unique) { unique = false; }
             if (!action.target) { break; }
         }
         if (action.target && !element) {
@@ -163,7 +215,7 @@ async function replaySteps(input: ActInput, recorded: RecordedAction[], actions:
         }
     }
     await settle(input.page, input.monitor);
-    return { ok: true };
+    return { ok: true, unique };
 }
 
 interface Decision {
@@ -193,6 +245,7 @@ async function decideLoop(input: ActInput, models: Models, actions: ActionRecord
         input.signal.throwIfAborted();
         await settle(input.page, input.monitor);
         const observation = await observe(input.page);
+        start.observation ??= observation;
         start.notices ??= observation.notices;
         const stale = start.notices.filter(notice => observation.notices.includes(notice));
         history.push(...input.events.splice(0).map(event => ({ event })));

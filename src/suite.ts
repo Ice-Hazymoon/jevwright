@@ -12,7 +12,7 @@ import { launchBrowser } from './browser.ts';
 import { JevwrightError } from './errors.ts';
 import { addUsage, createRunBudget, emptyUsage, modelIds, runBudgetMessage } from './models.ts';
 import { assertReachable, checkedOrigin } from './origin.ts';
-import { createRecordingStore } from './recording.ts';
+import { changedActionSteps, createRecordingStore, learnedRecording } from './recording.ts';
 import { writeReports } from './report.ts';
 import { assertValidTests } from './select.ts';
 import { runTestAttempt } from './test-runner.ts';
@@ -37,6 +37,8 @@ export interface TestResult {
     models: ModelUsage;
     durationMs: number;
     recordingUpdated: boolean;
+    rerouted?: { steps: number[] };
+    freshRetrySkipped?: string;
     skipReason?: string;
     knownIssue?: string;
 }
@@ -205,27 +207,43 @@ export async function runSuite(specs: ReadonlyArray<TestSpec<unknown>>, options:
         if (spec.skip) { return skipped(spec, spec.skip); }
         let recording: TestRecording | undefined;
         try {
-            recording = mode === 'ai' ? undefined : await store.load(spec.id);
+            recording = await store.load(spec.id);
         } catch (error) {
             return notRun(spec, 'environment', `${error instanceof Error ? error.message : String(error)}. Fix or delete the file; the next auto run records the test again`);
         }
         const attempts: AttemptResult[] = [];
         let recordingUpdated = false;
+        let freshUsed = false;
+        let freshRetrySkipped: string | undefined;
+        let rerouted: { steps: number[] } | undefined;
         const maxAttempts = 1 + Math.max(0, manifest.retries);
         for (let attempt = 1; attempt <= maxAttempts; attempt++) {
             if (signal.aborted) { break; }
-            const { result, saved } = await runAttempt(spec, recording, attempt);
+            const previous = attempts.at(-1);
+            const canFresh = mode === 'auto' && !freshUsed && previous?.cause === 'product' && previous.steps.some(step => step.source === 'replay');
+            const affordable = !runBudget || runBudget.remaining() >= runBudget.capUsd * 0.2;
+            if (canFresh && !affordable) { freshRetrySkipped = 'fresh retry skipped: run budget'; }
+            const fresh = mode === 'ai' || (canFresh && affordable);
+            if (fresh && mode === 'auto') { freshUsed = true; }
+            const { result, saved, changed } = await runAttempt(spec, recording, attempt, fresh);
+            if (fresh && mode === 'auto' && result.status === 'passed' && changed.length) {
+                const acts = result.steps.filter(step => step.kind === 'act');
+                rerouted = { steps: changed.map(index => acts[index - 1]!.index + 1) };
+            }
             attempts.push(result);
             recordingUpdated ||= saved;
             if (isFinalAttempt(result, spec, runBudget)) { break; }
         }
         // Cancelled while the recording loaded, before any attempt started.
         if (!attempts.length) { return skipped(spec, 'Run cancelled before this test started'); }
-        return testResult(spec, attempts, recordingUpdated);
+        const result = testResult(spec, attempts, recordingUpdated);
+        if (rerouted) { result.rerouted = rerouted; result.summary += `; attempt ${attempts.length} took a different path at step ${rerouted.steps.join(', ')}${recordingUpdated ? '; the recording was updated' : '; recording updates were disabled'}`; }
+        if (freshRetrySkipped) { result.freshRetrySkipped = freshRetrySkipped; result.summary += `; ${freshRetrySkipped}`; }
+        return result;
     }
 
     /** One logged attempt; whatever it learned (AI or healed steps) is saved to the recording. */
-    async function runAttempt(spec: TestSpec<unknown>, recording: TestRecording | undefined, attempt: number): Promise<{ result: AttemptResult; saved: boolean }> {
+    async function runAttempt(spec: TestSpec<unknown>, recording: TestRecording | undefined, attempt: number, fresh: boolean): Promise<{ result: AttemptResult; saved: boolean; changed: number[] }> {
         log(`▶ ${spec.id}${attempt > 1 ? ` (attempt ${attempt})` : ''}`);
         const { result, recording: steps } = await runTestAttempt(spec, {
             browser,
@@ -239,7 +257,7 @@ export async function runSuite(specs: ReadonlyArray<TestSpec<unknown>>, options:
             models,
             runBudget,
             recording,
-            fresh: mode === 'ai',
+            fresh,
             probe: options.probe,
             dryRun: options.dryRun,
             translationKeys,
@@ -250,11 +268,12 @@ export async function runSuite(specs: ReadonlyArray<TestSpec<unknown>>, options:
             log: line => log(`[${spec.id}] ${line}`),
         });
         log(`${result.status === 'passed' ? '✓' : '✗'} ${spec.id} ${result.status}${result.cause ? ` (${result.cause})` : ''} ${(result.durationMs / 1000).toFixed(1)}s — ${result.summary}`);
-        const learned = result.recording.ai + result.recording.healed > 0;
+        const changed = steps ? changedActionSteps(recording, steps) : [];
+        const learned = steps && learnedRecording(recording, steps);
         const keep = options.updateRecordings ?? mode !== 'replay';
-        if (!steps || !learned || options.dryRun || !keep || !store.enabled) { return { result, saved: false }; }
+        if (!steps || !learned || options.dryRun || !keep || !store.enabled) { return { result, saved: false, changed }; }
         await store.save({ version: 1, test: spec.id, updatedAt: new Date().toISOString(), steps });
-        return { result, saved: true };
+        return { result, saved: true, changed };
     }
 }
 
@@ -263,6 +282,10 @@ function testResult(spec: TestSpec<unknown>, attempts: AttemptResult[], recordin
     const last = attempts.at(-1)!;
     const failures = attempts.filter(attempt => attempt.status === 'failed' && !isCancelled(attempt));
     const status = finalStatus(last, failures, spec);
+    const lastFailure = failures.at(-1) ?? last;
+    const attributed = lastFailure.fresh && lastFailure.cause === 'agent'
+        ? failures.findLast(attempt => !attempt.fresh && attempt.steps.some(step => step.source === 'replay')) ?? lastFailure
+        : lastFailure;
     const usage = emptyUsage();
     for (const attempt of attempts) { addUsage(usage, attempt.models); }
     return {
@@ -272,7 +295,7 @@ function testResult(spec: TestSpec<unknown>, attempts: AttemptResult[], recordin
         risk: spec.risk,
         tags: spec.tags ?? [],
         status,
-        ...(status === 'passed' || status === 'skipped' ? {} : { cause: (failures.at(-1) ?? last).cause }),
+        ...(status === 'passed' || status === 'skipped' ? {} : { cause: attributed.cause }),
         ...(status === 'skipped' ? { skipReason: last.summary } : {}),
         summary: status === 'flaky' ? `Passed on attempt ${attempts.length} after: ${failures[0]!.summary}` : last.summary,
         ...(failures.length ? { reproduced: `${failures.length}/${attempts.length}` } : {}),

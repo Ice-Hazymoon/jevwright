@@ -689,3 +689,14 @@ describe('package', () => {
         expect(leaks).toEqual([]);
     });
 });
+
+describe('recorded end states', () => {
+    it('normalizes dynamic paths and requires half the appeared anchors', async () => {
+        const { endMatches, normalizedPath } = await import('../src/end-state.ts');
+        expect(normalizedPath('/items/123/ab12cd34')).toBe('/items/:id/:id');
+        const observation: Observation = { url: 'http://localhost/items/456/ef56gh78', title: '', notices: [], headings: ['Saved', 'Ready'], text: '', elements: [], omitted: 0, signature: '' };
+        const end = { path: '/items/:id/:id', appeared: ['Saved', 'Ready', 'Done', 'Complete'].map(text => ({ kind: 'heading' as const, text })) };
+        expect(endMatches(end, observation).matched).toBe(true);
+        expect(endMatches(end, { ...observation, headings: ['Saved'] }).matched).toBe(false);
+    });
+});

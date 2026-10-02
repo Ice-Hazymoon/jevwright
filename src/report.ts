@@ -44,6 +44,13 @@ export function markdownReport(summary: RunSummary): string {
     lines.push(...resolvedIssuesSection(results));
     lines.push(...issuesTableSection(results));
     lines.push(...testsTableSection(results));
+    for (const result of results) {
+        for (const attempt of result.attempts) {
+            for (const step of attempt.steps.filter(entry => entry.kind === 'act')) {
+                lines.push(`- ${result.id}, attempt ${attempt.attempt}, step ${step.index + 1}: ${step.end?.recorded === false ? 'no end state recorded' : step.end?.checked ? `end state ${step.end.matched ? 'matched' : 'mismatched'}${step.end.missing?.length ? ` (${step.end.missing.join(', ')})` : ''}` : 'no end state checked'}${step.endMismatch ? '; endMismatch — confirm with an auto run' : ''}`);
+            }
+        }
+    }
     return `${lines.join('\n')}\n`;
 }
 
@@ -245,6 +252,8 @@ function stepView(attempt, step) {
   const head = el('div', {}, el('span', { class: 'label s-' + step.status }, icon(step.status) + ' ' + (step.index + 1) + '. ' + step.label), step.source ? el('span', { class: 'tag' }, step.source) : null, step.likely ? el('span', { class: 'tag' }, 'likely') : null, el('span', { class: 'tag' }, secs(step.durationMs)), el('span', { class: 'tag' }, step.url));
   const body = [head];
   if (step.error) body.push(el('div', { class: 'err' }, step.error));
+  if (step.end) body.push(el('div', { class: 'small' }, step.end.recorded === false ? 'No end state recorded' : step.end.checked ? 'End state: ' + (step.end.matched ? 'matched' : 'mismatched — ' + (step.end.missing || []).join(', ')) : 'No end state checked'));
+  if (step.endMismatch) body.push(el('div', { class: 'err' }, 'Replay missed its recorded end state; confirm with an auto run'));
   if (step.replayMiss) body.push(el('div', { class: 'small' }, 'Recording no longer matched: ' + step.replayMiss));
   if (step.actions && step.actions.length) body.push(el('div', { class: 'small' }, 'Actions: ' + step.actions.map(a => (a.ok ? '' : '✗ ') + a.tool + (a.element ? ' ' + a.element : '') + (a.value ? ' ← ' + a.value : '') + ' [' + a.source + ']' + (a.error ? ' (' + a.error + ')' : '')).join(' → ')));
   if (step.rounds && step.rounds.length) body.push(el('details', {}, el('summary', { class: 'small' }, step.rounds.length + ' decision rounds'), el('pre', {}, step.rounds.map(r => 'r' + r.round + ' ' + r.source + ': ' + r.tool + (r.pTool !== undefined ? '(' + r.pTool + ')' : '') + (r.target ? ' → ' + r.target + ' (' + r.pTarget + ')' : '') + (r.value ? ' value=' + r.value : '') + (r.done !== undefined ? ' done=' + r.done : '') + (r.confirm !== undefined ? ' confirm=' + r.confirm : '') + (r.error !== undefined ? ' error=' + r.error : '') + (r.note ? ' — ' + r.note : '') + (r.candidates ? '\\n    candidates: ' + r.candidates.map(c => c.element + ' ' + c.p).join(' | ') : '')).join('\\n'))));
