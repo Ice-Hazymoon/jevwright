@@ -3,6 +3,8 @@ import type { RunSummary, TestResult } from './suite.ts';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 
+import { junitReport } from './junit.ts';
+
 const CAUSE_LABEL: Record<string, string> = {
     product: 'Suspected product defect',
     agent: 'Agent could not drive the UI',
@@ -12,6 +14,7 @@ const CAUSE_LABEL: Record<string, string> = {
 };
 
 export async function writeReports(summary: RunSummary): Promise<void> {
+    await writeFile(join(summary.directory, 'junit.xml'), junitReport(summary));
     await writeFile(join(summary.directory, 'summary.json'), `${JSON.stringify(summary, null, 2)}\n`);
     await writeFile(join(summary.directory, 'report.md'), markdownReport(summary));
     await writeFile(join(summary.directory, 'report.html'), await htmlReport(summary));
@@ -149,7 +152,7 @@ function collectIssues(results: TestResult[]): IssueRow[] {
 
 /** The run's own command narrowed to one test. */
 export function reproduceCommand(command: string, id: string): string {
-    return `${command.replace(/\s--(?:test|module|tag)(?:=|\s+)\S+/g, '')} --test ${id}`;
+    return `${command.replace(/\s--(?:test|module|tag|shard)(?:=|\s+)\S+/g, '').replace(/\s--last-failed\b/g, '')} --test ${id}`;
 }
 
 function escapeCell(text: string): string {

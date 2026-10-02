@@ -118,7 +118,7 @@ jevwright <command> [options]
 | `run [filters]` | Run tests. |
 | `list [filters]` | List the selected tests; starts nothing and needs no key. |
 | `init` | Create `jevwright.config.ts` and `jevwright/example.ts`, and add `.jevwright/` to `.gitignore` if the project has one. Never overwrites. |
-| `report <run-dir>` | Rebuild `report.md` and `report.html` from a run's `summary.json`. |
+| `report <run-dir>` | Rebuild `report.md`, `report.html` and `junit.xml` from a run's `summary.json`. |
 | `serve [run-dir]` | Serve a run's HTML report on 127.0.0.1 and print its URL, which carries a random access token (default: the latest run). |
 
 **Filters** narrow the selection; each takes a comma-separated list.
@@ -210,3 +210,19 @@ Differences from the CLI:
 - `runSuite` neither calls `setup` nor loads `--env-file`; pass `baseURL` and `env` yourself.
 
 `models.models` takes AI SDK evaluation and language models to use instead of a gateway, for example the SDK's mock models in your own tests. It is experimental: it relies on the AI SDK's experimental evaluation API, whose shape may change in a minor release.
+
+
+### CI selection and JUnit
+
+`--shard i/n` partitions selected tests using SHA-1(test id) modulo n, after the ordinary filters.
+For example, `--shard 2/3` runs the second of three disjoint partitions. Adding a test does not move
+existing tests. An empty partition exits successfully without starting the app.
+
+`--last-failed` intersects that selection with the failed and flaky ids in the most recently finished
+run. Running and partially published directories are ignored. No completed run is a usage error
+(exit 2); a completed run with no failed or flaky tests selects nothing.
+
+Every run writes `junit.xml`, one suite per module (`default` when omitted). Product, agent and timeout
+failures use `<failure>`; environment and model failures use `<error>`. Known issues and explicit skips
+use `<skipped>`. Flaky tests stay passed in JUnit and carry their retry evidence in `<system-out>`.
+The JSON and HTML reports retain the complete attempt history.

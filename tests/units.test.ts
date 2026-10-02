@@ -689,3 +689,75 @@ describe('package', () => {
         expect(leaks).toEqual([]);
     });
 });
+
+describe('stable CI selection', () => {
+    it('partitions ids without moving existing tests when another is added', async () => {
+        const { selectTests } = await import('../src/select.ts');
+        const tests = Array.from({ length: 20 }, (_, index) => ({ id: `case-${index}`, title: 'case', risk: 'case', start: '/', steps: () => [] }));
+        const shards = [1, 2, 3].map(index => selectTests(tests, { shard: `${index}/3` }).map(test => test.id));
+        expect(shards.flat().toSorted()).toEqual(tests.map(test => test.id).toSorted());
+        expect(new Set(shards.flat()).size).toBe(20);
+        expect(() => selectTests(tests, { shard: '' })).toThrow('--shard');
+        const extended = [...tests, { ...tests[0]!, id: 'new-case' }];
+        expect([1, 2, 3].map(index => selectTests(extended, { shard: `${index}/3` }).filter(test => test.id !== 'new-case').map(test => test.id))).toEqual(shards);
+    });
+});
+
+describe('CI reports', () => {
+    it('reads failed and flaky ids only from the latest completed publication', async () => {
+        const { lastFailedIds } = await import('../src/last-failed.ts');
+        const directory = await mkdtemp(join(tmpdir(), 'jevwright-last-failed-'));
+        try {
+            await expect(lastFailedIds(directory)).rejects.toThrow('No completed run');
+            const completed = join(directory, 'older-name');
+            const running = join(directory, 'newer-name');
+            await mkdir(completed);
+            await mkdir(running);
+            const manifest = { finishedAt: '2026-01-01T00:00:00.000Z' };
+            await writeFile(join(completed, 'run.json'), JSON.stringify(manifest));
+            await writeFile(join(completed, 'summary.json'), JSON.stringify({ manifest, results: [{ id: 'failed-case', status: 'failed' }, { id: 'flaky-case', status: 'flaky' }, { id: 'passed-case', status: 'passed' }] }));
+            await writeFile(join(running, 'run.json'), JSON.stringify({ startedAt: '2026-01-02T00:00:00.000Z' }));
+            await writeFile(join(running, 'summary.json'), JSON.stringify({ manifest: {}, results: [{ id: 'still-running', status: 'failed' }] }));
+            expect([...await lastFailedIds(directory)]).toEqual(['failed-case', 'flaky-case']);
+        } finally { await rm(directory, { recursive: true, force: true }); }
+    });
+
+    it('produces parseable JUnit with failures, errors, known issues and flaky notes', async () => {
+        const { junitReport } = await import('../src/junit.ts');
+        const { emptyUsage } = await import('../src/models.ts');
+        const base = { id: 'plain', title: 'Example', risk: 'Example', tags: [], summary: 'quote " < & \u0001', attempts: [], issues: [], models: emptyUsage(), durationMs: 1200, recordingUpdated: false };
+        const results: import('../src/suite.ts').TestResult[] = [
+            { ...base, id: 'pass', status: 'passed' }, { ...base, id: 'flaky', status: 'flaky', reproduced: '1/2' },
+            { ...base, id: 'defect', status: 'failed', cause: 'product' }, { ...base, id: 'infra', status: 'failed', cause: 'environment' },
+            { ...base, id: 'model', status: 'failed', cause: 'model' }, { ...base, id: 'known', status: 'known', knownIssue: 'tracked issue' },
+            { ...base, id: 'skip', status: 'skipped', skipReason: 'explicit skip' },
+        ];
+        const summary: import('../src/suite.ts').RunSummary = {
+            manifest: { runId: 'fixture', engine: 'fixture', startedAt: '2026-01-01T00:00:00Z', mode: 'auto', git: null, models: null, origin: app.origin, concurrency: 1, retries: 1, tests: results.map(result => result.id), command: 'jevwright run --shard 1/3' },
+            results, directory: '.', totals: { tests: 7, passed: 1, flaky: 1, failed: 3, known: 1, skipped: 1, issues: 0, models: emptyUsage(), durationMs: 8400 },
+        };
+        const page = await browser.newPage();
+        try {
+            const parsed = await page.evaluate(xml => {
+                const document = new DOMParser().parseFromString(xml, 'application/xml');
+                return { errors: document.querySelectorAll('parsererror').length, cases: document.querySelectorAll('testcase').length, failures: document.querySelectorAll('failure').length, infrastructure: document.querySelectorAll('error').length, skipped: document.querySelectorAll('skipped').length, note: document.querySelector('system-out')?.textContent, message: document.querySelector('failure')?.getAttribute('message'), classname: document.querySelector('testcase')?.getAttribute('classname') };
+            }, junitReport(summary));
+            expect(parsed).toEqual({ errors: 0, cases: 7, failures: 1, infrastructure: 2, skipped: 2, note: 'Flaky: failed 1/2 attempts; quote " < & \u0001'.replace('\u0001', '\uFFFD'), message: 'quote " < & \uFFFD', classname: 'default' });
+        } finally { await page.close(); }
+    });
+});
+
+
+it('rebuilds JUnit through the report command and removes stale selection from reproduce commands', async () => {
+    const { writeReports, reproduceCommand } = await import('../src/report.ts');
+    const { emptyUsage } = await import('../src/models.ts');
+    const directory = await mkdtemp(join(tmpdir(), 'jevwright-rebuild-'));
+    const summary: import('../src/suite.ts').RunSummary = { manifest: { runId: 'rebuild', engine: 'fixture', startedAt: '2026-01-01T00:00:00Z', mode: 'replay', git: null, models: null, origin: app.origin, concurrency: 1, retries: 0, tests: [] }, results: [], directory, totals: { tests: 0, passed: 0, failed: 0, flaky: 0, known: 0, skipped: 0, issues: 0, models: emptyUsage(), durationMs: 0 } };
+    try {
+        await writeReports(summary);
+        await rm(join(directory, 'junit.xml'));
+        expect(await cli(directory, ['report', directory])).toMatchObject({ code: 0 });
+        expect(readFileSync(join(directory, 'junit.xml'), 'utf8')).toContain('<testsuites tests="0">');
+        expect(reproduceCommand('jevwright run --last-failed --shard 1/3 --tag smoke', 'chosen')).toBe('jevwright run --test chosen');
+    } finally { await rm(directory, { recursive: true, force: true }); }
+});

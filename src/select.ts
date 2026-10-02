@@ -1,4 +1,5 @@
 import type { TestSpec } from './spec.ts';
+import { createHash } from 'node:crypto';
 import { JevwrightError } from './errors.ts';
 import { templateKeys } from './spec.ts';
 
@@ -10,6 +11,8 @@ export interface TestFilter {
     module?: string;
     /** Tags; a test needs any one of them. */
     tag?: string;
+    /** Stable SHA-1 partition, numbered from 1, e.g. 2/3. */
+    shard?: string;
 }
 
 const list = (value: string | undefined) => value?.split(',').map(item => item.trim()).filter(Boolean) ?? [];
@@ -26,7 +29,12 @@ export function selectTests<T extends TestSpec<unknown>>(tests: readonly T[], fi
         && (!modules.length || modules.includes(test.module ?? ''))
         && (!tags.length || tags.some(tag => test.tags?.includes(tag))));
     if (!selected.length) { throw new JevwrightError('No tests match the selection. Run `jevwright list` to see what is defined.'); }
-    return selected;
+    if (filter.shard === undefined) { return selected; }
+    const match = /^([1-9]\d*)\/([1-9]\d*)$/.exec(filter.shard);
+    const index = Number(match?.[1]);
+    const count = Number(match?.[2]);
+    if (!Number.isSafeInteger(index) || !Number.isSafeInteger(count) || index > count) { throw new JevwrightError('--shard must be i/n with 1 <= i <= n'); }
+    return selected.filter(test => BigInt(`0x${createHash('sha1').update(test.id).digest('hex')}`) % BigInt(count) === BigInt(index - 1));
 }
 
 const ID = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;

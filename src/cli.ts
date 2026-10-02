@@ -6,6 +6,7 @@ import { basename, join, relative, resolve } from 'node:path';
 import { parseArgs, parseEnv } from 'node:util';
 import { loadConfig } from './config.ts';
 import { JevwrightError } from './errors.ts';
+import { lastFailedIds } from './last-failed.ts';
 import { gatewayFromEnv } from './models.ts';
 import { checkedOrigin } from './origin.ts';
 import { loadSummary, writeReports } from './report.ts';
@@ -23,13 +24,15 @@ Commands:
   run [filters]        Run tests. Default mode "auto" replays recordings and heals stale steps with AI
   list [filters]       List the selected tests; starts nothing and needs no key
   init                 Create jevwright.config.ts and an example test
-  report <run-dir>     Rebuild report.md and report.html from a run's summary.json
+  report <run-dir>     Rebuild report.md, report.html and junit.xml from a run's summary.json
   serve [run-dir]      Serve a run's HTML report on 127.0.0.1 and print its URL (default: the latest run)
 
 Filters:
   --test <ids>         Comma-separated test ids; "prefix*" matches by prefix
   --module <names>     Comma-separated modules
   --tag <names>        Comma-separated tags
+  --shard <i/n>        Select a stable hash partition (also supported by list)
+  --last-failed        Select failed and flaky tests from the latest completed run
 
 Run options:
   --mode <mode>        auto (default) | replay: recordings only, no model calls, checks skipped
@@ -61,6 +64,8 @@ const OPTIONS = {
     'test': { type: 'string' },
     'module': { type: 'string' },
     'tag': { type: 'string' },
+    'shard': { type: 'string' },
+    'last-failed': { type: 'boolean' },
     'mode': { type: 'string' },
     'new': { type: 'boolean' },
     'retries': { type: 'string' },
@@ -127,7 +132,7 @@ function loadEnvFile(file: string, env: CliIO['env']): void {
 
 async function listCommand(flags: Flags, io: CliIO): Promise<number> {
     const loaded = await loadConfig({ cwd: io.cwd, path: flags.config });
-    const tests = selectTests(loaded.config.tests, flags);
+    const tests = await selectedTests(loaded, flags);
     const rows = tests.map(test => [test.id, test.module ?? '', (test.tags ?? []).join(','), test.title]);
     // Only columns some test fills, each as wide as its longest cell.
     const widths = [0, 1, 2].map(column => Math.max(...rows.map(row => row[column]!.length)));
@@ -143,7 +148,8 @@ interface Pass { mode: RunMode; retries: number; record: boolean }
 async function runCommand(flags: Flags, io: CliIO): Promise<number> {
     const loaded = await loadConfig({ cwd: io.cwd, path: flags.config });
     const passes = passesFor(flags, parseMode(flags.mode), loaded.config.retries ?? 1);
-    const tests = selectTests(loaded.config.tests, flags);
+    const tests = await selectedTests(loaded, flags);
+    if (!tests.length) { io.stdout('0 tests selected\n'); return 0; }
     const models = requiredModels(loaded, flags, passes, io.env);
     const log = (line: string) => io.stderr(`${line}\n`);
     const controller = new AbortController();
@@ -317,10 +323,11 @@ function parseCost(raw: string | undefined): number | undefined {
 /** The flags that shape a run, so a report's reproduce command runs the same way (minus the selection). */
 function reproducibleArgs(flags: Flags): string {
     const parts: string[] = [];
-    for (const name of ['test', 'module', 'tag', 'mode', 'config', 'base-url', 'env-file'] as const) {
+    for (const name of ['test', 'module', 'tag', 'shard', 'mode', 'config', 'base-url', 'env-file'] as const) {
         if (flags[name]) { parts.push(`--${name} ${flags[name]}`); }
     }
     if (flags['dry-run']) { parts.push('--dry-run'); }
+    if (flags['last-failed']) { parts.push('--last-failed'); }
     return parts.join(' ');
 }
 
@@ -416,4 +423,11 @@ Next:
   4. npx jevwright run --test profile-save --new
 `);
     return 0;
+}
+
+async function selectedTests(loaded: LoadedConfig, flags: Flags) {
+    const tests = selectTests(loaded.config.tests, flags);
+    if (!flags['last-failed']) { return tests; }
+    const ids = await lastFailedIds(loaded.outputDir);
+    return tests.filter(test => ids.has(test.id));
 }

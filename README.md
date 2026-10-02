@@ -119,6 +119,7 @@ Each run writes a directory under `.jevwright/runs/`:
 | File | What it holds |
 | --- | --- |
 | `report.html` | Step timeline with screenshots, Jev's decisions and candidates, requests, evidence |
+| `junit.xml` | CI test results grouped by module; flaky evidence remains in system-out |
 | `report.md` | Failures grouped by cause, each with a command that reproduces it |
 | `summary.json`, `run.json` | Results and the run manifest: git commit, mode, models, command |
 | `<test>/attempt-N/` | Per-step screenshots, `result.json`, and `trace.zip` (`npx playwright show-trace`) |
