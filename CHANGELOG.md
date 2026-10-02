@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.0
+
+- Record visible action end states and check them during replay, preserving deterministic failure attribution and healing stale paths in auto mode.
+- Retry replay-backed product failures once with fresh AI grounding when the budget allows; retain flaky status and report changed paths.
+- Return exit code 4 only for standalone replay failures caused solely by missing recordings. AI mode can replace malformed recordings.
+
+## 0.1.1
+
+- Add paired maintainer calibration against a Git revision, with separate warmup recordings, correctness regression gates, bootstrap intervals and interrupted-run cleanup.
+
 ## 0.1.0
 
 First release.
