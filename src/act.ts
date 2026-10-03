@@ -690,6 +690,7 @@ function round2(value: number): number {
 function decisionState(input: ActInput, observation: Observation, history: Array<Record<string, string>>, change: Record<string, unknown> | undefined, stale: string[]): Record<string, unknown> {
     const values = Object.keys(input.values).length ? modelValues(input) : undefined;
     const entered = modelEnteredValues(input, observation);
+    const supplied = Object.fromEntries(history.filter(entry => !entry.error && (entry.action === 'type' || entry.action === 'select') && entry.value && Object.hasOwn(input.values, entry.value)).map(entry => [modelValueKey(input, entry.value!), entry.element ?? entry.action!]));
     const pageValues = pageValueChoices(observation, input.redact);
     return {
         task: {
@@ -705,6 +706,7 @@ function decisionState(input: ActInput, observation: Observation, history: Array
             ...(change && Object.keys(change).length ? { last_change: change } : {}),
             ...(stale.length ? { shown_before_step: stale } : {}),
             ...(Object.keys(entered).length ? { values_entered: entered } : {}),
+            ...(Object.keys(supplied).length ? { values_supplied: supplied } : {}),
         },
         page: pageState(observation),
     };
@@ -765,7 +767,7 @@ function decisionQuestions(input: ActInput, observation: Observation, afterActio
     const hasValues = Object.keys(input.values).length > 0;
     const pageValues = pageValueChoices(observation, input.redact);
     const later = input.next ? ' Work that belongs to `task.next_step` is a later step and not required here.' : '';
-    const withValues = hasValues ? ', with the given `task.values` (`task.values_entered`, when present, lists the ones code confirmed are exactly in a field)' : '';
+    const withValues = hasValues ? ', with the given `task.values` (`task.values_entered` lists exact current field matches; `task.values_supplied` lists supplied keys successfully typed or selected earlier, even if submission removed those fields; secret text is hidden by design)' : '';
     const actionable = observation.elements.filter(element => (element.ref || element.reveal) && !element.disabled);
     const tools: Partial<Record<Tool | 'none', string>> = { click: TOOLS.click };
     if (observation.canGoBack) { tools.back = TOOLS.back; }
@@ -884,7 +886,7 @@ async function confirmDone(input: ActInput, models: Models, observation: Observa
     delete questions.remaining;
     delete questions.error;
     delete questions.anomaly;
-    questions.complete = { type: 'choice', instructions: 'Identify the action stage of task.step from page and task.history. Judge actions the user requested, rather than whether a later content assertion passes. When task.next_step is provided, it belongs to a separate later step: preparing its dialog or controls can finish the current step without doing that later action.', criteria: {
+    questions.complete = { type: 'choice', instructions: 'Identify the action stage of task.step from page and task.history. Judge actions the user requested, rather than whether a later content assertion passes. task.values_supplied establishes earlier successful entry of supplied keys, including secrets whose characters are deliberately hidden. Do not require those fields to remain visible after submission. When task.next_step is provided, it belongs to a separate later step: preparing its dialog or controls can finish the current step without doing that later action.', criteria: {
         achieved: 'All requested user actions are finished. A request only to edit, select or open ends with that action. Prerequisites performed implicitly by a tool count: clicking can scroll a control into view; do not demand a separate scroll after its requested result is achieved. Saving, booking or submitting also requires the final commit action when the page provides one. Opening a view is finished once it is opened, even if product content is empty or loading.',
         pending: 'A required user action remains. Selecting a value prepares a transaction but does not finalize it. A badge, item title or saved button cannot establish that a requested destination view was opened. Inspect the current view and history for every clause.',
     } };

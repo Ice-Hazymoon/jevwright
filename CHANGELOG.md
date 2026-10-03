@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Preserve code-observed page transitions during action-stage completion review, including submissions that replace their form.
+- Preserve code-observed page transitions during action-stage completion review, including submissions that replace their form; retain supplied-value evidence separately from current field matches.
 
 - Respect an explicit next-step boundary when the scoped action-stage choice favors completion, avoiding rejection of an already opened confirmation dialog at borderline confidence. Later assertions and invariants still decide outcomes.
 

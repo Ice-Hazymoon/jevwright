@@ -25,6 +25,7 @@ export interface View {
     shownBefore: string[];
     /** Value keys the engine confirmed are exactly in a field, with that field. */
     entered: Record<string, string>;
+    supplied: Record<string, string>;
     dialog?: string;
     elements: ViewElement[];
 }
@@ -181,6 +182,7 @@ function toView(state: Record<string, unknown>): View {
         notices: (page.notices ?? []) as string[],
         shownBefore: (task.shown_before_step ?? []) as string[],
         entered: (task.values_entered ?? {}) as Record<string, string>,
+        supplied: (task.values_supplied ?? {}) as Record<string, string>,
         change: task.last_change as Record<string, unknown> | undefined,
         ...(typeof page.dialog === 'string' ? { dialog: page.dialog } : {}),
         elements: (page.elements ?? []) as ViewElement[],

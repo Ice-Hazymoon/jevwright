@@ -1312,3 +1312,15 @@ it('reviews a submitted form with the same code-observed transition as the actio
     expect(result.status, result.summary).toBe('passed');
     expect(result.attempts[0]!.steps[0]!.actions?.map(action => action.tool)).toEqual(['type', 'type', 'click']);
 });
+
+
+it('retains successful supplied-value evidence after submission removes credential fields', async () => {
+    const spec: TestSpec<void> = { id: 'submitted-secret-evidence', title: 'Submit supplied credentials', risk: 'Masked input evidence is lost when fields disappear', start: '/credential-form', data: { account: 'marble@example.test' }, secrets: { password: secret('Private-Key-7312') }, steps: () => [act('Sign in using account {account} with password {password}'), verify('account opened', async ({ page }) => page.getByRole('heading', { name: 'Signed in as marble@example.test', exact: true }).isVisible())] };
+    const result = (await suite([spec], { mode: 'ai', policy: view => {
+        if (!view.text.includes('Signed in as')) { return fixturePolicy(view); }
+        const supplied = view.supplied.account?.includes('Account email') && view.supplied.password?.includes('Password');
+        return { done: 0.52, remaining: 0.72, achieved: supplied ? 0.99 : 0.46, navigation: 0.05, tool: 'none' };
+    }, helper: () => ({ outcome: 'step_already_done', tool: null, element: null, value_key: null, text: null, reason: 'Input and submission are finished' }) }).run).results[0]!;
+    expect(result.status, result.summary).toBe('passed');
+    expect(result.attempts[0]!.steps[0]!.actions?.map(action => action.tool)).toEqual(['type', 'type', 'click']);
+});
