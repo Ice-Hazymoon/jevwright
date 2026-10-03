@@ -221,10 +221,10 @@ A failed test is retried (`retries`, default 1):
 
 ### Secret values
 
-Use `secret(value)` in `TestSpec.secrets`, separate from ordinary string `data`. Handles stringify as
+Use `secret(value, { purpose: 'password' | 'any' })` in `TestSpec.secrets`, separate from ordinary string `data`. The default purpose is `'password'`: code permits only `type=password` or `autocomplete=current-password/new-password` editable fields. Use `'any'` for API keys and other editable fields. This is an intentional breaking change before 1.0. Handles stringify as
 `{secret}`. Only trusted test code can call `reveal(handle)`; `RunContext.secrets` exposes the handles.
 An action references a secret by `{key}`. Models receive that placeholder and `<secret value>`, while
-code fills the original value into an enabled editable field. When a step supplies several values including a secret, Jev matches the value to the selected field in a separate request before typing. Select actions and semantic `check`
+code fills the original value only into an enabled editable field that satisfies its declared purpose. Replay applies the current handle purpose; recordings do not store secret values or relax purpose checks. When a step supplies several values including a secret, Jev matches the value to the selected field in a separate request before typing. Incompatible secrets are omitted from that field-specific value choice. The browser checks the actual field again immediately before input, including after semantic relocation. Select actions and semantic `check`
 assertions cannot consume secrets; verify exact values with `verify` and `reveal` instead.
 
 Model payloads, progress logs and text artifacts redact the full secret, URI encoding (including browser

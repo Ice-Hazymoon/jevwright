@@ -57,6 +57,8 @@ function escapeHtml(text: string): string {
 function pages(state: FixtureState, url: URL): string | undefined {
     const bug = url.searchParams.get('bug');
     switch (url.pathname) {
+        case '/integration-secrets':
+            return layout('Credential purposes', '<label>Email<input id="email" type="email"></label><label>Password<input id="password" type="password"></label><label>New credential<input id="credential" autocomplete="new-password"></label><div role="textbox" aria-label="API key" contenteditable="true"></div>');
         case '/integration-static':
             return layout('Stable surface', '<p>Processing fee</p><div class="ui-spinner">Decoration</div><div role="progressbar" aria-valuenow="75">75%</div><button><span>Save</span></button><button>Cancel</button>' + Array.from({ length: 120 }, (_, i) => '<table><tr><td>Entry ' + i + '</td><td>Amount ' + i + '</td></tr></table>').join(''));
         case '/integration-pointer':

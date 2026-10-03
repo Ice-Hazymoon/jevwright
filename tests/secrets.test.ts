@@ -25,7 +25,7 @@ let root: string;
 beforeAll(async () => { app = await startFixtureApp(); root = await mkdtemp(join(tmpdir(), 'jevwright-secrets-')); });
 afterAll(async () => { await app.close(); await rm(root, { recursive: true, force: true }); });
 const plaintext = `Api<&"'\\Key/Ω-42`;
-const handle = secret(plaintext);
+const handle = secret(plaintext, { purpose: 'any' });
 function spec(): TestSpec<void> {
     return { id: 'secret-entry', title: 'Save API key', risk: 'Secrets leak from browser tests', start: '/secret', secrets: { apiKey: handle }, ignoreConsole: [/Echo key/], steps: () => [
         act('Enter {apiKey} in API key'),
@@ -221,7 +221,7 @@ it('redacts the actual CLI server log and regenerated JUnit output', async () =>
 it('keeps model protocol identities intact when secrets match schema words', async () => {
     const { createModels } = await import('../src/models.ts');
     const scripted = scriptedModels(() => ({ tool: 'click', target: is('button', 'Save') }));
-    const model = createModels(scripted.settings, undefined, createRedactor(['choice', 'target', 'elements'].map(secret)));
+    const model = createModels(scripted.settings, undefined, createRedactor(['choice', 'target', 'elements'].map(value => secret(value))));
     const result = await model.judge({ task: { step: 'Save' }, page: { elements: [{ i: 0, role: 'button', name: 'Save' }] }, reference: { status: 'choice' } }, { target: { type: 'choice', instructions: 'Choose the target element', criteria: { 0: null } } }, AbortSignal.timeout(5000), 'test');
     expect(result.target).toMatchObject({ type: 'choice', choice: '0' });
     expect(scripted.calls[0]?.view.elements[0]?.name).toBe('Save');

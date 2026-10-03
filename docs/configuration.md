@@ -236,7 +236,7 @@ Differences from the CLI:
 ```ts
 import { act, reveal, secret, verify } from '@hazymoon/jevwright';
 
-const accessKey = secret(process.env.TEST_ACCESS_KEY!);
+const accessKey = secret(process.env.TEST_ACCESS_KEY!, { purpose: 'any' });
 // Inside a test:
 // secrets: { accessKey },
 // steps: () => [
@@ -245,7 +245,7 @@ const accessKey = secret(process.env.TEST_ACCESS_KEY!);
 // ],
 ```
 
-Secrets need at least six Unicode code points. Duplicate keys across `data` and `secrets`, non-handle
+Secrets default to password purpose. Only `type=password` or `autocomplete=current-password/new-password` fields accept them. For API keys, use `secret(value, { purpose: 'any' })`, which permits any enabled editable field. This intentionally changes the default before 1.0. Secrets need at least six Unicode code points. Duplicate keys across `data` and `secrets`, non-handle
 secret values, and `check` assertions that reference a secret key are authoring errors. Definitions that
 need their fixture are checked when that fixture has been created, before steps execute.
 

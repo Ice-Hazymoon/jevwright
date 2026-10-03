@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Breaking before 1.0: `secret(value)` now defaults to password purpose and can enter only password fields or current/new-password autocomplete fields. Use `secret(value, { purpose: 'any' })` for API keys and other editable fields. Code guards both observed and actual targets, including replay; field-specific model value choices exclude incompatible secrets.
+
 - Avoid treating ordinary processing text, decorative spinners and determinate progress as loading; report busy separately and keep bounded busy waits outside the action budget.
 - Limit plain-text targets to pointer/hover/context signals or instruction-named text, excluding control descendants and large-table text.
 - Select scroll search spans from the original instruction with model judgments; fail missing searches explicitly and share a bounded search budget within each step.

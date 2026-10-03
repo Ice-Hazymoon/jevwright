@@ -10,7 +10,7 @@ export type { ModelCall, ModelProvider, ModelSettings, ModelUsage } from './mode
 export type { Issue, IssueKind } from './monitor.ts';
 export type { Anchor, StepEnd, StepRecording, TargetDescriptor, TestRecording } from './recording.ts';
 export { reveal, secret } from './secrets.ts';
-export type { Secret } from './secrets.ts';
+export type { Secret, SecretPurpose } from './secrets.ts';
 export { selectTests } from './select.ts';
 export type { TestFilter } from './select.ts';
 

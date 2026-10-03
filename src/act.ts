@@ -87,6 +87,7 @@ export interface ActInput {
     /** Data values referenced by this step. */
     values: Values;
     secretKeys?: ReadonlySet<string>;
+    secretPurposes?: Readonly<Record<string, import('./secrets.ts').SecretPurpose>>;
     redact?: Redactor;
     onSecretInput?: () => void;
     previous?: string;
@@ -245,7 +246,7 @@ async function replaySteps(input: ActInput, recorded: RecordedAction[], actions:
         try {
             const sensitive = secretInput(input, action.valueKey, action.tool, element);
             if (action.template && templateKeys(action.template).some(key => input.secretKeys?.has(key))) { throw new Error('Secret input requires a single valueKey'); }
-            await performFresh(input, { hasTouch: input.hasTouch, filePath: uploadPath(input, action.tool, action.valueKey), filePaths: uploadPaths(input, action.fileKeys), sensitive, tool: action.tool, ref: element?.ref, locate: element && observation ? locateOf(element, observation) : undefined, value, double: action.double, scrollText: action.scrollText, scrollDirection: action.scrollDirection, searchBudgetMs: Math.max(0, 30000 - searchSpentMs), destinationRef: action.destination && observation ? resolveTargetMatch(action.destination, observation).element?.ref : undefined, ...(action.append ? { append: true } : {}) }, action.target, action.destination);
+            await performFresh(input, { hasTouch: input.hasTouch, filePath: uploadPath(input, action.tool, action.valueKey), filePaths: uploadPaths(input, action.fileKeys), sensitive, secretPurpose: action.valueKey ? input.secretPurposes?.[action.valueKey] ?? 'password' : undefined, tool: action.tool, ref: element?.ref, locate: element && observation ? locateOf(element, observation) : undefined, value, double: action.double, scrollText: action.scrollText, scrollDirection: action.scrollDirection, searchBudgetMs: Math.max(0, 30000 - searchSpentMs), destinationRef: action.destination && observation ? resolveTargetMatch(action.destination, observation).element?.ref : undefined, ...(action.append ? { append: true } : {}) }, action.target, action.destination);
             actions.push({ tool: action.tool, element: element ? describeElement(element) : undefined, ...(action.destination ? { destination: describeElement(action.destination) } : {}), value: recordedLabel(action, value), source: 'replay', ok: true, durationMs: Math.round(performance.now() - started) });
             if (action.tool === 'scroll' && action.scrollText) { searchSpentMs += performance.now() - started; }
             if (action.tool !== 'wait') { recording.push(action); }
@@ -509,10 +510,10 @@ async function decideLoop(input: ActInput, models: Models, actions: ActionRecord
             continue;
         }
         // Independent value selection needs the actual field when public and secret entries share a step.
-        if (next.source === 'jev' && next.tool === 'type' && next.target && next.valueKey !== undefined && input.secretKeys?.size && Object.keys(input.values).length > 1) {
+        if (next.source === 'jev' && next.tool === 'type' && next.target && next.valueKey !== undefined && input.secretKeys?.size && Object.keys(modelValues(input, next.target)).length > 0) {
             try {
-                const grounded = await models.judge({ task: { step: input.instruction, values: modelValues(input), values_entered: modelEnteredValues(input, observation) }, field: input.redact?.text(describeElement(next.target)) ?? describeElement(next.target) }, {
-                    value: { type: 'choice', instructions: 'Which supplied task.values entry belongs in THIS field? Match the key purpose to the field label. Text appearing elsewhere on the page does not mean it is already entered. A secret belongs only in the field that requests it.', criteria: modelValues(input) },
+                const grounded = await models.judge({ task: { step: input.instruction, values: modelValues(input, next.target), values_entered: modelEnteredValues(input, observation) }, field: input.redact?.text(describeElement(next.target)) ?? describeElement(next.target) }, {
+                    value: { type: 'choice', instructions: 'Which supplied task.values entry belongs in THIS field? Match the key purpose to the field label. Text appearing elsewhere on the page does not mean it is already entered. A secret belongs only in the field that requests it.', criteria: modelValues(input, next.target) },
                 }, input.signal, 'value');
                 const valueKey = originalValueKey(input, choiceOf(grounded.value)?.choice);
                 if (valueKey === undefined) { throw new Error('No authorized value selected for the field'); }
@@ -540,6 +541,7 @@ async function performDecision(input: ActInput, next: Decision, observation: Obs
     try {
         call.filePath = uploadPath(input, call.tool, next.valueKey);
         call.sensitive = secretInput(input, next.valueKey, call.tool, next.target);
+        call.secretPurpose = next.valueKey ? input.secretPurposes?.[next.valueKey] ?? 'password' : undefined;
         call.filePaths = call.tool === 'upload' ? uploadPaths(input, next.fileKeys) : undefined;
         call.destinationRef = next.destination?.ref;
         call.scrollText = next.scrollText; call.scrollDirection = next.scrollDirection; call.searchBudgetMs = searchBudgetMs; call.signal = input.signal;
@@ -747,6 +749,8 @@ export function pageState(observation: Observation, options: { values?: boolean 
             ...(element.content ? { content: element.content } : {}),
             ...(element.draggable ? { draggable: true } : {}),
             ...(element.nativeSelect ? { native_select: true } : {}),
+            ...(element.inputType ? { input_type: element.inputType } : {}),
+            ...(element.autocomplete ? { autocomplete: element.autocomplete } : {}),
             ...(element.scroll ? { scroll: element.scroll } : {}),
         })),
         ...(observation.busy ? { loading: true } : {}),
@@ -1047,13 +1051,18 @@ function locateOf(element: PageElement, observation: Observation): ToolCall['loc
 
 export type { ChoiceAnswer };
 
-function modelValues(input: ActInput): Values {
-    return Object.fromEntries([...Object.entries(input.values).map(([key, value]) => [modelValueKey(input, key), input.secretKeys?.has(key) ? '<secret value>' : input.redact?.text(value) ?? value]), ...Object.entries(input.files ?? {}).map(([key, file]) => [modelValueKey(input, key), `File: ${input.redact?.text(file.name) ?? file.name}`])]);
+function modelValues(input: ActInput, field?: PageElement): Values {
+    return Object.fromEntries([...Object.entries(input.values).filter(([key]) => !field || !input.secretKeys?.has(key) || acceptsSecret(input, key, field)).map(([key, value]) => [modelValueKey(input, key), input.secretKeys?.has(key) ? '<secret value>' : input.redact?.text(value) ?? value]), ...Object.entries(input.files ?? {}).map(([key, file]) => [modelValueKey(input, key), `File: ${input.redact?.text(file.name) ?? file.name}`])]);
+}
+
+function acceptsSecret(input: ActInput, key: string, field: PageElement): boolean {
+    return input.secretPurposes?.[key] === 'any' || field.inputType === 'password' || /(?:^|\s)(?:current|new)-password(?:\s|$)/i.test(field.autocomplete ?? '');
 }
 
 function secretInput(input: ActInput, key: string | undefined, tool: Tool, element?: PageElement): boolean {
     if (!key || !input.secretKeys?.has(key)) { return false; }
     if (tool !== 'type' || !element || element.disabled || !FIELD_ROLES.has(element.role)) { throw new Error('Secret input requires an enabled editable field and the type tool'); }
+    if (!acceptsSecret(input, key, element)) { throw new Error('Secret password purpose requires a password or password-autocomplete field'); }
     input.onSecretInput?.();
     return true;
 }

@@ -180,6 +180,7 @@ Replay skips `check` steps, since they need a model. A step without a recording 
 | Every test fails with "Start page did not become ready" | Open the start page yourself and read `server.log`. Check that a `ready` hook does not wait for something that never appears. |
 | A request the app needs is blocked | `run.json` lists `blockedRequests`. If the origin is part of your app, add it to `allowedOrigins`. |
 | Replay says “需要模型重新读取页面值” | The recorded page-value source is missing or ambiguous. Run in auto mode to read the current value and refresh its source. |
+| Secret input fails with a password-purpose message | Use a password field, or declare `secret(value, { purpose: 'any' })` for an API key or another editable field. |
 | `check` steps show as skipped | Replay mode makes no model calls. Run in auto mode, with a key, to judge them. |
 | `env` is `unknown` in fixtures | Declare its type once through `Register`; see [Starting the app per run](https://github.com/Ice-Hazymoon/jevwright/blob/main/docs/configuration.md#starting-the-app-per-run). |
 

@@ -11,6 +11,7 @@ import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import * as candidate from '../src/index.ts';
 import { addUsage, emptyUsage } from '../src/models.ts';
+import { secretPurpose } from '../src/secrets.ts';
 import { applicableTests, comparePairs, metricNames } from './calibration-stats.ts';
 
 interface Options {
@@ -94,7 +95,7 @@ export async function runCalibrationAB(tests: CalibrationTest[], app: Awaited<Re
             options.signal.throwIfAborted();
             const engine = side === 'baseline' ? baseline : candidate;
             // Secret handles belong to their engine module; each side needs its own opaque handles.
-            const selected = side === 'baseline' ? common.map(test => ({ ...test, ...(test.secrets ? { secrets: Object.fromEntries(Object.entries(test.secrets).map(([key, value]) => [key, baseline.secret(candidate.reveal(value))])) } : {}) })) : tests;
+            const selected = side === 'baseline' ? common.map(test => ({ ...test, ...(test.secrets ? { secrets: Object.fromEntries(Object.entries(test.secrets).map(([key, value]) => [key, baseline.secret(candidate.reveal(value), { purpose: secretPurpose(value) })])) } : {}) })) : tests;
             const summary = await engine.runSuite(selected, {
                 baseURL: app.origin,
                 outputDir: join(output, side),

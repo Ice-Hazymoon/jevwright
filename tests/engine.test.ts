@@ -997,7 +997,7 @@ describe('unchanged check observations', () => {
 });
 
 it('waits for deferred controls before accepting a no-action plan', async () => {
-    const spec: TestSpec = { id: 'deferred-controls', title: 'Open a deferred workspace', risk: 'Controls are declared absent before loading finishes', start: '/reach-loading', steps: () => [act('Wait for the workspace, then open it'), verify('workspace opened', ({ page }) => page.locator('#status').textContent().then(text => text === 'Workspace ready'))] };
+    const spec: TestSpec<void> = { id: 'deferred-controls', title: 'Open a deferred workspace', risk: 'Controls are declared absent before loading finishes', start: '/reach-loading', steps: () => [act('Wait for the workspace, then open it'), verify('workspace opened', ({ page }) => page.locator('#status').textContent().then(text => text === 'Workspace ready'))] };
     const result = await runSuite([spec], { baseURL: app.origin, outputDir: join(root, 'deferred'), retries: 0, models: scriptedModels(deferredPolicy).settings, log: () => undefined });
     expect(result.results[0]?.status, result.results[0]?.summary).toBe('passed');
 });
@@ -1252,5 +1252,28 @@ describe('page value sources', () => {
         expect(describePageValue(page, 'Secret River', redact)).toBeUndefined();
         expect(pageValueChoices(page, redact)).not.toContain('Secret River');
         expect(describePageValue(observation('{secret}'), '{secret}', redact)).toBeUndefined();
+    });
+});
+
+
+describe('integration secret purposes', () => {
+    it('rejects a default password secret in a public field even when both models choose it', async () => {
+        const spec: TestSpec<void> = { id: 'password-in-public-field', title: 'Credential guard', risk: 'A password reaches the public field', start: '/integration-secrets', secrets: { password: secret('Protected-5921') }, steps: () => [act('Enter {password} in Email', { maxActions: 2 })] };
+        const result = (await suite([spec], { mode: 'ai', policy: () => ({ tool: 'type', target: element => element.name === 'Email', value: 'password' }), helper: view => ({ outcome: 'act', tool: 'type', element: view.elements.find(element => element.name === 'Email')!.i, value_key: 'password', text: null, reason: 'Use the secret in Email' }) }).run).results[0]!;
+        expect(result.cause, result.summary).toBe('agent');
+        expect(result.attempts[0]!.steps[0]!.actions?.some(action => action.ok && action.tool === 'type')).toBe(false);
+        expect(result.attempts[0]!.steps[0]!.actions?.[0]?.error).toMatch(/password.*purpose|purpose.*password/i);
+    });
+    it('does not offer a password secret to the value model for an unrelated field', async () => {
+        const spec: TestSpec<void> = { id: 'purpose-value-options', title: 'Credential matching', risk: 'The model can select a password for Email', start: '/integration-secrets', data: { email: 'person@example.test' }, secrets: { password: secret('Protected-5921') }, steps: () => [act('Enter email {email} and password {password}', { maxActions: 1 })] };
+        const test = suite([spec], { mode: 'ai', policy: view => ({ tool: 'type', target: element => element.name === 'Email', value: view.field ? 'email' : 'password' }) });
+        await test.run;
+        const selected = test.calls.find(call => call.view.field?.includes('Email'))!;
+        expect(selected.view.values).toEqual({ email: 'person@example.test' });
+    });
+    it.each(['Password', 'New credential', 'API key'])('allows the declared purpose in %s', async name => {
+        const spec: TestSpec<void> = { id: `purpose-${name.toLowerCase().replaceAll(' ', '-')}`, title: 'Valid secret purpose', risk: 'An authorized credential is blocked', start: '/integration-secrets', secrets: { credential: secret('Protected-5921', { purpose: name === 'API key' ? 'any' : 'password' }) }, steps: () => [act('Enter {credential} in ' + name), verify('entered', async ({ page }) => name === 'API key' ? (await page.getByRole('textbox', { name, exact: true }).textContent()) === 'Protected-5921' : (await page.getByRole('textbox', { name, exact: true }).inputValue()) === 'Protected-5921')] };
+        const result = (await suite([spec], { mode: 'ai', policy: view => view.history.some(entry => entry.action === 'type' && !entry.error) ? { done: 0.99 } : { tool: 'type', target: element => element.name === name, value: 'credential' } }).run).results[0]!;
+        expect(result.status, result.summary).toBe('passed');
     });
 });

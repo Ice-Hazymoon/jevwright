@@ -19,7 +19,7 @@ import { createModels, emptyUsage, ModelError } from './models.ts';
 import { createMonitor } from './monitor.ts';
 import { observe, shortUrl } from './observe.ts';
 import { stepKey } from './recording.ts';
-import { createRedactor, forResults, reveal } from './secrets.ts';
+import { createRedactor, forResults, reveal, secretPurpose } from './secrets.ts';
 import { secretCheckProblems } from './select.ts';
 import { describeStep, fillTemplate, templateKeys, writeRules } from './spec.ts';
 
@@ -452,6 +452,7 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
                     instruction: fillTemplate(step.instruction, displayData, secrets),
                     values: stepValues,
                     secretKeys,
+                    secretPurposes: Object.fromEntries(Object.entries(secrets).map(([key, handle]) => [key, secretPurpose(handle)])),
                     redact,
                     onSecretInput: () => { screenshotsWithheld = true; },
                     previous: previousLabel,

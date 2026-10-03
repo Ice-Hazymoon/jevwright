@@ -169,6 +169,7 @@ export interface ToolCall {
     append?: boolean;
     /** Fill atomically so trace snapshots cannot capture partial secret keystrokes. */
     sensitive?: boolean;
+    secretPurpose?: import('./secrets.ts').SecretPurpose;
     filePath?: string;
     filePaths?: string[];
     destinationRef?: string;
@@ -251,7 +252,9 @@ export async function perform(page: Page, call: ToolCall): Promise<void> {
             const locator = target();
             if (call.sensitive) {
                 if (!await locator.isEditable({ timeout })) { throw new Error('Secret input needs an enabled editable field'); }
-                await locator.fill(call.append ? `${await locator.inputValue()}${call.value}` : call.value, { timeout });
+                if ((call.secretPurpose ?? 'password') === 'password' && !await locator.evaluate(element => (element instanceof HTMLInputElement && element.type === 'password') || /(?:^|\s)(?:current|new)-password(?:\s|$)/i.test(element.getAttribute('autocomplete') ?? ''))) { throw new Error('Secret password purpose requires a password or password-autocomplete field'); }
+                const existing = call.append ? await locator.inputValue().catch(() => locator.textContent().then(text => text ?? '')) : '';
+                await locator.fill(`${existing}${call.value}`, { timeout });
                 return;
             }
             if (call.append) {

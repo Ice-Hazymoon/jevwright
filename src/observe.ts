@@ -129,7 +129,13 @@ export async function observe(page: Page, options: ObserveOptions = {}): Promise
         const snapshot: AriaNode[] = []; collect(roots, item => item.ref === element.ref, snapshot);
         const box = node?.box ?? snapshot[0]?.box;
         const detail = box ? surface.details.find(detail => sameBox(detail.box, box)) : undefined;
-        if (!detail) { continue; }
+        if (!detail) {
+            if (element.ref && TEXT_FIELDS.has(element.role)) {
+                const metadata = await domLocator(page, element.ref).evaluate(node => ({ inputType: node instanceof HTMLInputElement ? node.type : undefined, autocomplete: node.getAttribute('autocomplete') ?? undefined })).catch(() => undefined);
+                if (metadata) { Object.assign(element, metadata); }
+            }
+            continue;
+        }
         if (detail.context && element.ref?.startsWith('dom:')) { element.context = detail.context; }
         if (detail.content) { element.content = clipProtected(detail.content, 160, options.redact); }
         if (detail.near) { element.near = clipProtected(detail.near, LIMITS.near, options.redact); }

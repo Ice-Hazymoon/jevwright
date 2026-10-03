@@ -1,6 +1,8 @@
 import { JevwrightError } from './errors.ts';
 
 const contents = new WeakMap<object, string>();
+export type SecretPurpose = 'password' | 'any';
+const purposes = new WeakMap<object, SecretPurpose>();
 class SecretValue {
     toString(): string { return '{secret}'; }
     toJSON(): string { return '{secret}'; }
@@ -8,11 +10,19 @@ class SecretValue {
 }
 export type Secret = SecretValue;
 
-export function secret(value: string): Secret {
+export function secret(value: string, options: { purpose?: SecretPurpose } = {}): Secret {
+    const purpose = options.purpose ?? 'password';
+    if (purpose !== 'password' && purpose !== 'any') { throw new JevwrightError('Secret purpose must be password or any'); }
     if (typeof value !== 'string' || [...value].length < 6) { throw new JevwrightError('A secret must contain at least 6 Unicode code points'); }
     const handle = Object.freeze(new SecretValue());
     contents.set(handle, value);
+    purposes.set(handle, purpose);
     return handle;
+}
+
+export function secretPurpose(handle: Secret): SecretPurpose {
+    if (!contents.has(handle)) { throw new JevwrightError('Expected a secret() handle'); }
+    return purposes.get(handle) ?? 'password';
 }
 
 /** Trusted test code must explicitly reveal a secret to read it. */
