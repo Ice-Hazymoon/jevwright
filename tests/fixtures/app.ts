@@ -57,6 +57,18 @@ function escapeHtml(text: string): string {
 function pages(state: FixtureState, url: URL): string | undefined {
     const bug = url.searchParams.get('bug');
     switch (url.pathname) {
+        case '/page-entry': {
+            const token = url.searchParams.get('token') ?? 'AR-7285';
+            return layout('Access request', `<p>${bug === 'relabeled' ? 'Current token' : 'Access token'}: ${escapeHtml(token)}; enter it below.</p><label>Token<input id="token"></label><button id="apply">Apply token</button>`, `
+document.getElementById('apply').onclick = () => toast(document.getElementById('token').value === ${JSON.stringify(token)} ? 'Access accepted' : 'Could not apply token');`);
+        }
+        case '/collection':
+            return layout('Reading list', '<button id="save">Save essay</button><button id="tab" role="tab" aria-selected="false">Reading list (0)</button><section id="content"><h2>Catalog</h2><p>An essay</p></section>', `
+document.getElementById('save').onclick = async () => { await send('/api/profile', { nickname: 'Essay', bio: 'Reading list' }); document.getElementById('save').textContent = 'Saved'; document.getElementById('tab').textContent = 'Reading list (1)'; };
+document.getElementById('tab').onclick = () => { document.getElementById('tab').setAttribute('aria-selected', 'true'); document.getElementById('content').innerHTML = ${JSON.stringify(bug === 'empty' ? '<h2>Reading list</h2><p>No essays</p>' : '<h2>Reading list</h2><p>An essay</p>')}; };`);
+        case '/required-form':
+            return layout('Delivery', '<label>Destination<input id="destination"></label><button id="send">Confirm delivery</button>', `
+document.getElementById('send').onclick = () => { const notice = document.createElement('div'); notice.setAttribute('role', 'alert'); notice.textContent = 'Could not confirm: destination is required'; document.body.append(notice); ${bug === 'crash' ? "throw new Error('Delivery crashed');" : ''} };`);
         case '/upload':
             return layout('Avatar', '<label for="avatar">Choose avatar</label><input id="avatar" type="file" hidden><button id="choose">Upload avatar</button><button id="nothing">No chooser</button><label>Visible file<input type="file" id="visible"></label><output id="uploaded"></output>', `
 const avatar = document.getElementById('avatar');
@@ -80,6 +92,10 @@ addEventListener('touchstart', () => document.getElementById('events').textConte
         case '/popup-child':
             return layout('Child', '<button onclick="window.close()">Close child</button>');
 
+        case '/credential-form':
+            return layout('Account sign-in', '<p>Account email: marble@example.test</p><label>Account email<input id="member"></label><label>Password<input id="phrase" type="password"></label><button id="enter">Sign in</button><h2 id="result"></h2>', `
+document.getElementById('enter').onclick = () => { if (document.getElementById('member').value === 'marble@example.test' && document.getElementById('phrase').value === 'Private-Key-7312') { document.querySelector('main').innerHTML = '<h1>Signed in as marble@example.test</h1>'; } else { document.getElementById('result').textContent = 'Credentials rejected'; } };
+`);
         case '/secret':
             return layout('API key', '<label>API key<input id="key"></label><button id="hint">Show hint</button><p id="help"></p><button id="save">Save key</button><button id="echo" hidden></button><output id="result"></output>', `
 document.getElementById('hint').onclick = () => { document.getElementById('help').textContent = 'Enter the API key'; };

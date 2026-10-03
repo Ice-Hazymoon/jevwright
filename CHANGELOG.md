@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Allow Jev and the helper to enter exact observed page values, excluding declared secrets; record their sources and read the current values on replay.
+- Review all clauses and action stages before accepting step completion, including submission, confirmation and destination navigation; propose remaining actions and reject unrelated targets.
+- Match mixed public and secret input values to the selected field before typing.
+- Attribute action-triggered validation errors to the agent unless a declared request or monitor provides deterministic failure evidence.
+- Require checks and adjudication to use direct evidence from the asserted content; indirect summaries cannot override missing content.
+
 ## 0.6.0
 
 - Generate redacted JUnit reports, stable SHA-1 shards and last-failed selection from completed runs.

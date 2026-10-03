@@ -93,7 +93,9 @@ export async function runCalibrationAB(tests: CalibrationTest[], app: Awaited<Re
         const run = async (side: 'baseline' | 'candidate', mode: 'ai' | 'auto') => {
             options.signal.throwIfAborted();
             const engine = side === 'baseline' ? baseline : candidate;
-            const summary = await engine.runSuite(side === 'baseline' ? common : tests, {
+            // Secret handles belong to their engine module; each side needs its own opaque handles.
+            const selected = side === 'baseline' ? common.map(test => ({ ...test, ...(test.secrets ? { secrets: Object.fromEntries(Object.entries(test.secrets).map(([key, value]) => [key, baseline.secret(candidate.reveal(value))])) } : {}) })) : tests;
+            const summary = await engine.runSuite(selected, {
                 baseURL: app.origin,
                 outputDir: join(output, side),
                 recordingsDir: join(output, `${side}-recordings`),

@@ -15,11 +15,22 @@ export interface TargetDescriptor {
     nth: number;
 }
 
+export interface PageValueDescriptor {
+    source: 'text' | 'notice' | 'name' | 'content';
+    /** Text on either side of the value; the value itself is read anew. */
+    before: string;
+    after: string;
+    /** The observed span was valid, but its context could not identify a unique replay source. */
+    requiresModel?: true;
+}
+
 export interface RecordedAction {
     tool: Tool;
     target?: TargetDescriptor;
     /** Data key whose value is typed or selected; replay reads the current data. */
     valueKey?: string;
+    /** A value read from the current observation, never a literal replay input. */
+    pageValue?: PageValueDescriptor;
     /** Literal typed/selected value when it did not come from test data. */
     value?: string;
     /** Text built from several data values, e.g. `{first}\n\n{second}`; replay fills in the current data. */
@@ -67,6 +78,7 @@ const recordingSchema = z.object({
             tool: z.enum(['click', 'type', 'press_enter', 'press_escape', 'select', 'scroll', 'wait', 'upload']),
             target: descriptorSchema.optional(),
             valueKey: z.string().optional(),
+            pageValue: z.object({ source: z.enum(['text', 'notice', 'name', 'content']), before: z.string(), after: z.string(), requiresModel: z.literal(true).optional() }).optional(),
             value: z.string().optional(),
             template: z.string().optional(),
             double: z.boolean().optional(),
@@ -186,5 +198,5 @@ export function learnedRecording(previous: TestRecording | undefined, steps: Ste
 }
 
 function actionSignature(actions: RecordedAction[]): string {
-    return JSON.stringify(actions.map(action => [action.tool, action.target ? [action.target.role, action.target.name, stable(action.target.near), stable(action.target.context), action.target.nth] : null, action.valueKey ?? null, action.value ?? null, action.template ?? null, action.double ?? false, action.append ?? false]));
+    return JSON.stringify(actions.map(action => [action.tool, action.target ? [action.target.role, action.target.name, stable(action.target.near), stable(action.target.context), action.target.nth] : null, action.valueKey ?? null, action.value ?? null, action.template ?? null, action.pageValue ?? null, action.double ?? false, action.append ?? false]));
 }

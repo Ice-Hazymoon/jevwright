@@ -306,6 +306,8 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
             if (result.status === 'failed') {
                 failedStep = index;
                 ({ cause, summary } = attribute(result));
+                const blocking = options.failOnIssues !== false && result.failure === 'error-shown' ? monitor.issues().find(issue => issue.severity === 'high' && issue.step === index) : undefined;
+                if (blocking) { cause = issueCause(blocking); summary = `${blocking.kind} during step ${index + 1}: ${blocking.message}`; }
                 if (cause === 'product' && result.failure === 'assertion') {
                     result.misstep = await misstep(index);
                     if (result.misstep) {
@@ -594,7 +596,7 @@ function attribute(step: StepResult): { cause: Cause; summary: string } {
             return { cause: rejected || step.source === 'replay' ? 'product' : 'agent', summary: `Expected effect missing at ${at}: ${step.error}` };
         }
         case 'error-shown':
-            return { cause: 'product', summary: `The page showed an error at ${at}: ${step.error}` };
+            return { cause: 'agent', summary: `The step's actions triggered an error before its goal was achieved at ${at}: ${step.error}` };
         case 'model':
             return { cause: 'model', summary: `Model service failed at ${at}: ${step.error}` };
         case 'exception':

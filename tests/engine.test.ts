@@ -6,7 +6,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runFailureExitCode } from '../src/cli.ts';
-import { act, check, reload, run, runSuite, verify } from '../src/index.ts';
+import { act, check, reload, run, runSuite, secret, verify } from '../src/index.ts';
+import { describePageValue, pageValueChoices, readPageValue } from '../src/page-values.ts';
+import { createRedactor } from '../src/secrets.ts';
 import { startFixtureApp } from './fixtures/app.ts';
 import { fixturePolicy } from './support/fixture-policy.ts';
 import { scriptedModels } from './support/scripted-models.ts';
@@ -360,7 +362,7 @@ describe('agent failures', () => {
             fixture: async () => { app.reset(); },
             // Jev cannot decide this claim, so it goes to the helper, which times out.
             steps: () => [check('The page is written in iambic pentameter')],
-        }], { mode: 'ai', retries: 0, helper: () => { throw new Error('The operation timed out.'); } });
+        }], { mode: 'ai', retries: 0, policy: () => ({ holds: 0.5, support: 'not_shown', pSupport: 0.5 }), helper: () => { throw new Error('The operation timed out.'); } });
         const [result] = (await run).results;
         expect(result!.status).toBe('failed');
         expect(result!.cause).toBe('model');
@@ -991,5 +993,259 @@ describe('unchanged check observations', () => {
         expect(result.results[0]?.status, result.results[0]?.summary).toBe('passed');
         expect(result.totals.models.jevCalls).toBe(1);
         expect(result.totals.models.llmCalls).toBe(1);
+    });
+});
+
+
+describe('page values and complete intentions', () => {
+    const tokenTest = (id: string, token: string): TestSpec<void> => ({
+        id, title: 'Apply a live page value', risk: 'A stale token is entered', start: `/page-entry?token=${token}`,
+        steps: () => [act('Enter the access token shown on the page and apply it'), verify('accepted', async ({ page }) => page.getByRole('status').textContent().then(text => text === 'Access accepted'))],
+    });
+
+    it('lets Jev enter a page value and re-reads it on replay', async () => {
+        const id = 'live-page-token';
+        const first = (await suite([tokenTest(id, 'AR-7285')], { mode: 'auto' }).run).results[0]!;
+        expect(first.status, first.summary).toBe('passed');
+        const path = join(root, 'recordings', `${id}.json`);
+        const stored = JSON.parse(await readFile(path, 'utf8'));
+        expect(stored.steps[0].actions[0].pageValue).toBeDefined();
+        expect(stored.steps[0].actions[0].value).toBeUndefined();
+        expect(JSON.stringify(stored)).not.toContain('AR-7285');
+        const replay = await suite([tokenTest(id, 'BX-9164')], { mode: 'replay' }).run;
+        expect(replay.results[0]!.status, replay.results[0]!.summary).toBe('passed');
+        expect(replay.results[0]!.attempts[0]!.steps[0]!.actions![0]!.value).toMatch(/^page:/);
+    });
+
+    it('lets the helper enter an observed span after folding whitespace', async () => {
+        const result = (await suite([tokenTest('helper-page-token', 'AR-7285')], {
+            policy: view => view.text.includes('Access accepted') ? { done: 0.98 } : { tool: 'none' },
+            helper: view => ({ outcome: 'act', tool: view.history.some(entry => entry.action === 'type') ? 'click' : 'type', element: view.elements.find(element => element.name === (view.history.some(entry => entry.action === 'type') ? 'Apply token' : 'Token'))!.i, value_key: null, text: ' \nAR-7285\t ', reason: 'Read the displayed token' }),
+        }).run).results[0]!;
+        expect(result.status, result.summary).toBe('passed');
+        expect(result.attempts[0]!.steps[0]!.actions![0]!.value).toMatch(/^page:/);
+    });
+
+    it('requires grounding after page value context changes, and heals in auto mode', async () => {
+        const spec = tokenTest('moved-page-token', 'AR-7285');
+        expect((await suite([spec], { mode: 'auto' }).run).results[0]!.status).toBe('passed');
+        const moved = { ...spec, start: '/page-entry?token=CY-1369&bug=relabeled' };
+        const replay = (await suite([moved], { mode: 'replay' }).run).results[0]!;
+        expect(replay.cause).toBe('agent');
+        expect(replay.summary).toContain('需要模型重新读取页面值');
+        expect(replay.attempts[0]!.steps[0]!.actions).toHaveLength(0);
+        const healed = (await suite([moved], { mode: 'auto' }).run).results[0]!;
+        expect(healed.status, healed.summary).toBe('passed');
+        expect(healed.attempts[0]!.steps[0]!.source).toBe('healed');
+    });
+
+    it('explains a missing page source even when the target label also changed', async () => {
+        const spec = tokenTest('missing-page-and-target', 'AR-7285');
+        expect((await suite([spec], { mode: 'auto' }).run).results[0]!.status).toBe('passed');
+        const path = join(root, 'recordings', `${spec.id}.json`);
+        const stored = JSON.parse(await readFile(path, 'utf8'));
+        stored.steps[0].actions[0].target.name = 'Missing {page value}';
+        stored.steps[0].actions[0].pageValue.before = 'Missing source';
+        await writeFile(path, JSON.stringify(stored));
+        const result = (await suite([spec], { mode: 'replay' }).run).results[0]!;
+        expect(result.cause).toBe('agent');
+        expect(result.summary).toContain('需要模型重新读取页面值');
+    });
+
+    it.each(['invented-9231', 'ar-7285', 'hidden-3179'])('rejects helper text absent from the current observation: %s', async value => {
+        const spec = tokenTest(`reject-page-${value.toLowerCase()}`, 'AR-7285');
+        if (value === 'hidden-3179') { spec.secrets = { credential: secret(value) }; spec.start = `/page-entry?token=${value}`; }
+        const result = (await suite([spec], {
+            policy: () => ({ tool: 'none' }),
+            helper: view => ({ outcome: 'act', tool: 'type', element: view.elements.find(element => element.name === 'Token')!.i, value_key: null, text: value, reason: 'Propose a text value' }),
+        }).run).results[0]!;
+        expect(result.cause).toBe('agent');
+        expect(result.attempts[0]!.steps[0]!.actions).toHaveLength(0);
+        expect(result.summary).toMatch(/not in the step or current page/);
+    });
+
+    it.each([0.2, 0.5])('keeps an explicit next-step boundary when remaining work is %s', async (remaining) => {
+        const spec: TestSpec<void> = {
+            id: 'explicit-next-boundary', title: 'Open, then confirm', risk: 'The first step performs the next step', start: '/items', fixture: async () => { app.reset(); },
+            steps: () => [act('Start archiving the Beta plan'), act('Confirm archiving in the dialog', { expect: { write: { path: /\/api\/items\/\w+\/archive/ } } }), verify('archived', () => app.state.items.find(item => item.id === 'b')?.archived === true)],
+        };
+        const result = (await suite([spec], { mode: 'ai', policy: view => view.step?.startsWith('Start archiving') && view.dialog ? { done: 0.85, remaining, complete: remaining === 0.5 ? 0.9 : 0.26 } : fixturePolicy(view) }).run).results[0]!;
+        expect(result.status, result.summary).toBe('passed');
+        expect(result.attempts[0]!.steps[0]!.actions).toHaveLength(1);
+    });
+
+    it('lets a declared single submission reach code checks despite a conflicting model outcome', async () => {
+        const spec = { ...profileTest('/profile?bug=nosave'), id: 'declared-submit-evidence' };
+        const result = (await suite([spec], { mode: 'ai', policy: view => view.step === 'Save the profile' ? { ...fixturePolicy(view), remaining: 0.95 } : fixturePolicy(view) }).run).results[0]!;
+        expect(result.cause).toBe('product');
+        expect(result.attempts[0]!.steps[1]!.status).toBe('passed');
+        expect(result.attempts[0]!.steps[3]!.failure).toBe('assertion');
+    });
+
+    it('finishes every clause even when done is confident after the first action', async () => {
+        const spec: TestSpec<void> = { id: 'complete-clauses', title: 'Save and open', risk: 'The list is not opened', start: '/collection', steps: () => [act('Save the essay, then open the reading list'), verify('list opened', async ({ page }) => page.getByRole('heading', { name: 'Reading list', exact: true }).count().then(count => count === 2))] };
+        const result = (await suite([spec]).run).results[0]!;
+        expect(result.status, result.summary).toBe('passed');
+        expect(result.attempts[0]!.steps[0]!.actions).toHaveLength(2);
+    });
+
+    it.each(['Save the essay, then open the reading list', 'Save the essay and open the reading list', 'Save the essay; open the reading list', 'Save the essay, open the reading list', '收藏文章，然后打开阅读列表'].map((instruction, index) => ({ instruction, index })))('does not let the first declared write end a compound instruction: $instruction', async ({ instruction, index }) => {
+        const spec: TestSpec<void> = {
+            id: `compound-submit-evidence-${index}`, title: 'Save and open', risk: 'A successful request hides a missing action', start: '/collection',
+            steps: () => [act(instruction, { expect: { write: { path: '/api/profile' } } }), verify('list opened', async ({ page }) => (await page.getByRole('heading', { name: 'Reading list', exact: true }).count()) === 2)],
+        };
+        const result = (await suite([spec], { policy: view => fixturePolicy({ ...view, step: 'Save the essay, then open the reading list' }) }).run).results[0]!;
+        expect(result.status, result.summary).toBe('passed');
+        expect(result.attempts[0]!.steps[0]!.actions).toHaveLength(2);
+    });
+
+    it('grounds mixed public and secret values against the selected field', async () => {
+        const spec: TestSpec<void> = {
+            id: 'mixed-credentials', title: 'Enter an account', risk: 'A secret is entered in the public member field', start: '/credential-form',
+            data: { account: 'marble@example.test' }, secrets: { password: secret('Private-Key-7312') },
+            steps: () => [act('Sign in using account {account} with password {password}'), verify('account opened', async ({ page }) => page.getByRole('heading', { name: 'Signed in as marble@example.test', exact: true }).isVisible())],
+        };
+        const result = (await suite([spec]).run).results[0]!;
+        expect(result.status, result.summary).toBe('passed');
+        expect(result.attempts[0]!.steps[0]!.actions![0]!.value).toBe('account');
+    });
+
+    it.each([{ name: 'transaction', start: '/effects?single=1&confirm=1', step: 'Finalize the choice of the entry dated 2026-01-01', target: 'Confirm choice', result: 'Alpha chosen and confirmed' }, { name: 'destination', start: '/collection', step: 'Save the essay, then open the reading list', target: 'Reading list (1)', result: 'Reading list' }].flatMap(test => ['none', 'click'].map(tool => ({ ...test, tool }))))('reviews the selected control when all completion judgments agree incorrectly: $name / $tool', async ({ name, start, step, target, result: heading, tool }) => {
+        const spec: TestSpec<void> = { id: `specific-control-${name}-${tool}`, title: 'Finish the whole step', risk: 'Global completion hides an unactivated control', start, steps: () => [act(step), verify('final action performed', async ({ page }) => name === 'transaction' ? page.getByRole('heading', { name: heading, exact: true }).isVisible() : (await page.getByRole('heading', { name: heading, exact: true }).count()) === 2)] };
+        const result = (await suite([spec], { policy: view => {
+            if (view.control) { return { needed: view.text || view.history.some(entry => entry.element?.includes(target)) ? 0.02 : 0.99 }; }
+            const ready = view.text.includes('Alpha chosen') || view.elements.some(element => element.name === 'Saved');
+            if (ready) { return { done: 0.99, achieved: 0.99, remaining: 0.02, tool, target: element => element.name === target }; }
+            return { tool: 'click', target: element => element.name === (name === 'transaction' ? 'Choose' : 'Save essay') };
+        } }).run).results[0]!;
+        expect(result.status, result.summary).toBe('passed');
+        expect(result.attempts[0]!.steps[0]!.actions).toHaveLength(2);
+    });
+
+    it('keeps a completed action when a stage review is only uncertain', async () => {
+        const spec = { ...profileTest(), steps: () => [act('Change Nickname to {nickname} and Bio to {bio}'), act('Save the profile'), verify('saved', () => app.state.requests.some(request => request.path === '/api/profile'))] };
+        const result = (await suite([spec], { policy: view => view.review && view.notices.includes('Profile saved') ? { done: 0.88, achieved: 0.42, remaining: 0.35 } : fixturePolicy(view) }).run).results[0]!;
+        expect(result.status, result.summary).toBe('passed');
+        expect(result.attempts[0]!.steps[1]!.actions).toHaveLength(1);
+    });
+
+    it('lets a content check evaluate an empty destination after all requested actions', async () => {
+        const spec: TestSpec<void> = { id: 'opened-empty-view', title: 'Save then inspect', risk: 'Empty destination content is hidden by an agent failure', start: '/collection?bug=empty', steps: () => [act('Save the essay, then open the reading list'), check('The reading list view displays the saved essay', { reference: () => ({ savedEssay: 'An essay' }) })] };
+        const result = (await suite([spec], { policy: view => view.step && !view.text.includes('Catalog') ? { done: 0.15, achieved: 0.84, remaining: 0.53, navigation: 0.25 } : fixturePolicy(view) }).run).results[0]!;
+        expect(result.cause, result.summary).toBe('product');
+        expect(result.attempts[0]!.steps[0]!.actions).toHaveLength(2);
+    });
+
+    it('asks the helper to resolve an uncertain control activation before accepting done', async () => {
+        const spec: TestSpec<void> = { id: 'uncertain-control', title: 'Finalize a choice', risk: 'An uncertain activation is mistaken for completion', start: '/effects?single=1&confirm=1', steps: () => [act('Finalize the choice of the entry dated 2026-01-01'), verify('confirmed', async ({ page }) => page.getByRole('heading', { name: 'Alpha chosen and confirmed', exact: true }).isVisible())] };
+        const result = (await suite([spec], { policy: view => {
+            if (view.control) { return { needed: 0.32 }; }
+            if (view.text.includes('Alpha chosen and confirmed')) { return { done: 0.99, achieved: 0.99 }; }
+            if (view.text.includes('Alpha chosen')) { return { done: 0.93, achieved: 0.64, remaining: 0.45, tool: 'none', target: element => element.name === 'Confirm choice' }; }
+            return { tool: 'click', target: element => element.name === 'Choose' };
+        }, helper: view => view.control ? { activation: 'activate', reason: 'The final confirmation is absent from the history' } : { outcome: 'impossible', tool: null, element: null, value_key: null, text: null, reason: 'Unexpected helper request' } }).run).results[0]!;
+        expect(result.status, result.summary).toBe('passed');
+        expect(result.attempts[0]!.steps[0]!.actions).toHaveLength(2);
+    });
+
+    it('requires destination activation even when summary-based completion judgments agree', async () => {
+        const spec: TestSpec<void> = { id: 'destination-activation', title: 'Save then inspect', risk: 'A global heading masks unopened destination content', start: '/collection', steps: () => [act('Save the essay, then open the reading list'), verify('list opened', async ({ page }) => (await page.getByRole('heading', { name: 'Reading list', exact: true }).count()) === 2)] };
+        const result = (await suite([spec], {
+            policy: view => view.text.includes('Catalog') && view.elements.some(element => element.name === 'Saved') ? { done: 0.99, achieved: 0.99, remaining: 0.02, navigation: 0.99 } : fixturePolicy(view),
+            helper: view => ({ outcome: 'act', tool: 'click', element: view.elements.find(element => element.role === 'tab')!.i, value_key: null, text: null, reason: 'The destination has not been activated' }),
+        }).run).results[0]!;
+        expect(result.status, result.summary).toBe('passed');
+        expect(result.attempts[0]!.steps[0]!.actions).toHaveLength(2);
+    });
+
+    it('rejects a stage-review action on an unrelated navigation link', async () => {
+        const spec: TestSpec<void> = {
+            id: 'unrelated-stage-action', title: 'Commit a choice', risk: 'An unrelated route is mistaken for the requested final action', start: '/effects?single=1&confirm=1',
+            steps: () => [act('Finalize the choice of the entry dated 2026-01-01'), verify('confirmed', async ({ page }) => page.getByRole('heading', { name: 'Alpha chosen and confirmed', exact: true }).isVisible())],
+        };
+        const result = (await suite([spec], { policy: view => {
+            if (view.history.some(entry => entry.element === 'link "Profile"')) { return { done: 0.99, achieved: 0.99, onTarget: 0.02 }; }
+            if (view.text.includes('Alpha chosen')) { return view.review ? { achieved: 0.02, tool: 'click', target: element => element.role === 'link' && element.name === 'Profile' } : { done: 0.98, remaining: 0.98 }; }
+            return { tool: 'click', target: element => element.name === 'Choose' };
+        } }).run).results[0]!;
+        expect(result.cause, result.summary).toBe('agent');
+        expect(result.attempts[0]!.steps[0]!.actions?.some(action => action.element === 'link "Profile"')).toBe(false);
+    });
+
+    it('distinguishes a prepared value from the committed result even when both done judgments agree', async () => {
+        const spec: TestSpec<void> = {
+            id: 'prepare-then-commit', title: 'Finalize a choice', risk: 'Selecting a value is mistaken for committing it', start: '/effects?single=1&confirm=1',
+            steps: () => [act('Finalize the choice of the entry dated 2026-01-01'), verify('confirmed', async ({ page }) => page.getByRole('heading', { name: 'Alpha chosen and confirmed', exact: true }).isVisible())],
+        };
+        const result = (await suite([spec], {
+            helper: view => ({ outcome: 'act', tool: 'click', element: view.elements.find(element => element.name === 'Confirm choice')!.i, value_key: null, text: null, reason: 'The value was prepared, but final confirmation is still needed' }),
+        }).run).results[0]!;
+        expect(result.status, result.summary).toBe('passed');
+        expect(result.attempts[0]!.steps[0]!.actions).toHaveLength(2);
+    });
+
+    it('attributes a validation error caused by premature submission to the agent', async () => {
+        const spec: TestSpec<void> = { id: 'premature-submit', title: 'Delivery', risk: 'Incomplete form', start: '/required-form', steps: () => [act('Set the destination and confirm delivery')] };
+        const result = (await suite([spec]).run).results[0]!;
+        expect(result.cause).toBe('agent');
+        expect(result.attempts[0]!.steps[0]!.failure).toBe('error-shown');
+    });
+
+    it('retains monitored product evidence when an action also shows a validation error', async () => {
+        const spec: TestSpec<void> = { id: 'submit-crash', title: 'Delivery crash', risk: 'App crashes', start: '/required-form?bug=crash', steps: () => [act('Set the destination and confirm delivery')] };
+        const result = (await suite([spec]).run).results[0]!;
+        expect(result.cause).toBe('product');
+        expect(result.summary).toMatch(/Delivery crashed/);
+    });
+
+    it('rejects a high holds score when the asserted content is not shown', async () => {
+        const spec: TestSpec<void> = { id: 'direct-content-check', title: 'Read the list', risk: 'Summary masks missing content', start: '/collection', steps: () => [run('save without opening', async ({ page }) => { await page.getByRole('button', { name: 'Save essay' }).click(); }), check('The reading list displays the saved essay')] };
+        const result = (await suite([spec], { policy: () => ({ holds: 0.98, support: 'not_shown' }) }).run).results[0]!;
+        expect(result.status).toBe('failed');
+        expect(result.cause).toBe('product');
+        expect(result.attempts[0]!.steps[1]!.evidence).toMatchObject({ verdicts: [{ passed: false, support: 'not_shown' }] });
+    });
+});
+
+
+describe('page value sources', () => {
+    const observation = (text = '') => ({ url: '/', title: '', text, notices: [], headings: [], elements: [], omitted: 0, signature: '' });
+
+    it('compares exact spans after folding whitespace without folding case', () => {
+        const page = observation('Pickup phrase: Red   River; use it.');
+        const source = describePageValue(page, 'Red\nRiver')!;
+        expect(source).toBeDefined();
+        expect(readPageValue(observation('Pickup phrase: Blue Lake; use it.'), source)).toBe('Blue Lake');
+        expect(describePageValue(page, 'red river')).toBeUndefined();
+        expect(describePageValue(page, 'invented phrase')).toBeUndefined();
+    });
+
+    it('accepts notice and element content values without joining unrelated sources', () => {
+        const page = { ...observation(), notices: ['Reference: AC-37; continue.'], elements: [{ i: 0, role: 'button', name: 'Label', content: 'Pickup: Red River; ready.' }] };
+        expect(describePageValue(page, 'AC-37')!.source).toBe('notice');
+        expect(describePageValue(page, 'Red River')!.source).toBe('content');
+        expect(describePageValue(page, 'continue. Label')).toBeUndefined();
+    });
+
+    it('allows an observed value with ambiguous context but requires a model on replay', () => {
+        const page = { ...observation(), elements: [{ i: 0, role: 'button', name: 'Alpha' }, { i: 1, role: 'button', name: 'Beta' }] };
+        const source = describePageValue(page, 'Alpha')!;
+        expect(source.requiresModel).toBe(true);
+        expect(readPageValue(page, source)).toBeUndefined();
+    });
+
+    it('cannot read values from inside a redaction marker', () => {
+        const redact = createRedactor([secret('Hidden-Key-7301')]);
+        expect(describePageValue(observation('Reference: Hidden-Key-7301; use it.'), 'secret', redact)).toBeUndefined();
+        expect(readPageValue(observation('{secret}'), { source: 'text', before: '{', after: '}' })).toBeUndefined();
+        expect(describePageValue(observation('{secret}'), '{', createRedactor([secret('secret')]))).toBeUndefined();
+    });
+
+    it('never offers normalized secret originals or redacted markers as page values', () => {
+        const redact = createRedactor([secret('Secret\tRiver')]);
+        const page = observation('Phrase: Secret River; ready.');
+        expect(describePageValue(page, 'Secret River', redact)).toBeUndefined();
+        expect(pageValueChoices(page, redact)).not.toContain('Secret River');
+        expect(describePageValue(observation('{secret}'), '{secret}', redact)).toBeUndefined();
     });
 });
