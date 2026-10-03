@@ -1020,3 +1020,10 @@ it('integration offers named static text and waits for newly appearing loading m
         expect((await observe(page)).busy).toBe(false);
     } finally { await context.close(); }
 });
+
+
+it('integration keeps noninteractive ARIA table cells out of the DOM supplement', async () => {
+    const { observation } = await open('/integration-static?aria=1');
+    expect(observation.elements.length).toBeLessThanOrEqual(6);
+    expect(observation.omitted).toBe(0);
+});

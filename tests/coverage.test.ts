@@ -294,3 +294,10 @@ it('integration keeps bounded busy waits outside the action budget', async () =>
     const result = (await runSuite([spec], { ...options(), models: models.settings })).results[0]!;
     expect(result.status, result.summary).toBe('passed');
 });
+
+it('integration searches quoted instruction text without including quotation delimiters', async () => {
+    const models = scriptedModels(view => view.notices.includes('Record opened') ? { done: 0.95 } : view.elements.some(is('button', 'Open record')) ? { tool: 'click', target: is('button', 'Open record') } : { tool: 'scroll', target: element => Boolean(element.scroll), scrollText: 'Record 154' });
+    const spec: TestSpec = { ...base, id: 'quoted-search', start: '/reach-scroll', steps: () => [act('Scroll until "Record 154" appears, then Open record'), verify('record', ({ page }) => page.locator('#status').textContent().then(text => text === 'Record opened'))] };
+    const result = (await runSuite([spec], { ...options(), models: models.settings })).results[0]!;
+    expect(result.status, result.summary).toBe('passed');
+});

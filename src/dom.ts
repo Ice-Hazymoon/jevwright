@@ -81,6 +81,7 @@ export async function readSurface(page: Page | Frame, scope?: ElementHandle<Elem
             return element.matches('section, [role=region], [role=list], [role=group]') || heading
                 ? element.getAttribute('aria-label') || (heading ? text(heading).slice(0, 80) : '') : '';
         };
+        const actionRoles = new Set(['button', 'link', 'textbox', 'searchbox', 'combobox', 'checkbox', 'radio', 'switch', 'tab', 'menuitem', 'menuitemcheckbox', 'menuitemradio', 'option', 'slider', 'spinbutton', 'treeitem', 'listbox']);
         const hoverSelectors: string[] = [];
         const rules = (items: CSSRuleList) => { for (const rule of items) {
             if (rule instanceof CSSStyleRule) { hoverSelectors.push(...rule.selectorText.split(',').filter(selector => selector.includes(':hover')).map(selector => selector.split(':hover')[0]!.trim())); }
@@ -89,7 +90,7 @@ export async function readSurface(page: Page | Frame, scope?: ElementHandle<Elem
         for (const sheet of document.styleSheets) { try { rules(sheet.cssRules); } catch { /* Cross-origin stylesheets are unreadable. */ } }
         const interactiveParent = (element: Element) => {
             for (let parent = parentOf(element); parent; parent = parentOf(parent)) {
-                if (parent.matches('button,a[href],input,select,textarea,summary,[role],[aria-label],[aria-labelledby],[contenteditable=true]')) { return true; }
+                if (parent.matches('button,a[href],input,select,textarea,summary,[aria-label],[aria-labelledby],[contenteditable=true]') || actionRoles.has(parent.getAttribute('role') ?? '')) { return true; }
             }
             return false;
         };
@@ -142,8 +143,8 @@ export async function readSurface(page: Page | Frame, scope?: ElementHandle<Elem
             scrollable ||= scrolling;
             const leaf = rendered && rendered.length <= 160 && ![...element.children].some(child => text(child)) && !interactiveParent(element) && (pointerSignal(element) || instruction.toLowerCase().includes(rendered.toLowerCase()));
             if (['dialog', 'alertdialog', 'status', 'alert', 'progressbar', 'heading'].includes(role) || element.matches('h1,h2,h3,h4,h5,h6')) { continue; }
-            if (!(nativeRole || group || element.hasAttribute('role') || scrolling || draggable || leaf)) { continue; }
-            if (leaf && !nativeRole && !group && !element.hasAttribute('role') && !scrolling && !draggable && ++textTargets > 30) { continue; }
+            if (!(nativeRole || group || actionRoles.has(role) || scrolling || draggable || leaf)) { continue; }
+            if (leaf && !nativeRole && !group && !actionRoles.has(role) && !scrolling && !draggable && ++textTargets > 30) { continue; }
             if (field && element instanceof HTMLInputElement && element.type === 'hidden') { continue; }
             const key = ids.get(element) ?? `d${++serial}`;
             ids.set(element, key); refs.set(key, element);

@@ -865,7 +865,8 @@ function resolveDecision(observation: Observation, answers: Record<string, Answe
     const words = [...input.instruction.matchAll(/\S+/g)];
     const first = words[Number(choiceOf(answers.scroll_start)?.choice)];
     const last = words[Number(choiceOf(answers.scroll_end)?.choice)];
-    const phrase = first && last && last.index! >= first.index! ? input.instruction.slice(first.index, last.index! + last[0].length).replace(/[,;]$/, '') : undefined;
+    let phrase = first && last && last.index! >= first.index! ? input.instruction.slice(first.index, last.index! + last[0].length).replace(/[,;]$/, '') : undefined;
+    if (phrase && /^(["“‘']).*["”’']$/.test(phrase)) { phrase = phrase.slice(1, -1); }
     const scrollText = probabilityOf(answers.scroll_search) >= 0.5 && phrase && input.instruction.includes(phrase) ? phrase : undefined;
     const destination = resolved === 'drag' ? observation.elements[Number(choiceOf(answers.destination)?.choice)] : undefined;
     return { tool: resolved, target: TARGETED.has(resolved as Tool) || (resolved === 'scroll' && chosen?.scroll) ? chosen : undefined, ...(destination ? { destination } : {}), ...(resolved === 'upload' && choiceOf(answers.file_group)?.choice === 'all' ? { fileKeys: Object.keys(input.files ?? {}) } : {}), ...(resolved === 'scroll' && scrollText ? { scrollText } : {}), ...(resolved === 'scroll' ? { scrollDirection: choiceOf(answers.scroll_direction)?.choice === 'up' ? 'up' as const : 'down' as const } : {}), ...(resolved === 'type' || resolved === 'select' || resolved === 'upload' ? { valueKey } : {}), source: 'jev' };

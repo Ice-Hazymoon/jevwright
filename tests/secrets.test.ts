@@ -121,7 +121,7 @@ describe('secret boundaries', () => {
 it('redacts long, whitespace-normalized and nested-JSON values before observation clipping', async () => {
     const { fixturePolicy } = await import('./support/fixture-policy.ts');
     for (const raw of [`long-credential-prefix-${'x'.repeat(350)}"tail`, 'alpha  beta', 'abc"def']) {
-        const payload = secret(raw);
+        const payload = secret(raw, { purpose: 'any' });
         const scripted = scriptedModels(fixturePolicy);
         const requests: unknown[] = [];
         const model = scripted.settings.models!.evaluation;
