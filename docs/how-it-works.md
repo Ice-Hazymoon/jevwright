@@ -34,7 +34,7 @@ A DOM supplement supplies roleless text targets, contenteditable fields, scrolli
 and visible labels that differ from accessible names. It excludes hidden, inert and clipped
 screen-reader text. Visible text with `aria-hidden` is retained; accessible names remain separate.
 Field labels come from associated labels or adjacent leaf label/span elements, rather than explanatory paragraphs.
-Noninteractive text can be hovered, right-clicked or scrolled into view.
+Noninteractive text is offered only when it has pointer, hover or context-menu signals, or its text is named in the current instruction. Control descendants are excluded. At most 30 plain-text targets are offered; suppressed text does not count as omitted controls.
 
 Some cases need special handling:
 - **Closed shadow roots**: a context init script wraps `attachShadow` and retains roots in a weak map. Their modes and the application's `shadowRoot` getters stay unchanged. A selector engine reaches observed nodes in those roots. Declarative closed roots are not captured. The wrapper and engine globals are visible to application code.
@@ -92,24 +92,21 @@ chooses the group; multiple-file groups require a `multiple` input or multiple f
 A single-file input uses the selected key. Recordings store optional `fileKeys`, never local paths.
 
 Scroll can target the page or a scrolling container. `scroll_to` brings a named text or control into
-view. A scroll search uses an explicit `until` goal or quoted phrase from the current instruction,
+view. For a scroll search, Jev selects the first and last words of the target phrase in the original instruction. Code verifies the resulting span is an instruction substring. The search
 advances by 90% of a viewport,
-and observes mounted text between moves. It stops after 500 moves, 45 seconds or five unchanged
-positions. This lets virtualized rows render and lets growing feeds load without a model call for
+and observes mounted text between moves. Searches share a 30-second budget within each step and stop after 500 moves or five unchanged positions. A missing goal fails with “not found after N viewports”. This lets virtualized rows render and lets growing feeds load without a model call for
 every viewport. Container searches inspect that container, so instructions outside it do not count as a loaded row.
 If the document cannot scroll and exactly one container can, a content target resolves to that container.
 Scroll searches and target gestures replay with semantic descriptors.
 
-Before executing a model action, the engine observes again and resolves its semantic target.
-If DOM replacement invalidates the reference before dispatch, it retries up to twice. A target
-that is still absent after three observations fails; actionability checks remain Playwright's.
+Before executing a model action, the engine uses the original connected reference. Only a stale reference triggers observation and semantic relocation, with at most two retries. Playwright still checks actionability.
 
 ## Settle
 
 Before each decision, the engine waits until the page is quiet: no data or navigation request is in flight, and there has been no DOM mutation for 350 ms.
-- Visible `aria-busy`, progressbars and loading/skeleton/spinner markers keep the page busy. The decision loop also waits while requests remain pending before treating absent controls as impossible. All waits remain bounded.
+- Visible `aria-busy`, indeterminate progressbars without `aria-valuenow`, loading text in status/live regions, and newly appearing loading markers keep the page busy. Ordinary text, determinate progress and initially present decorative markers do not. Busy has its own settle reason. Bounded busy waits use a separate counter and do not consume action rounds.
 - The app's own scripts and stylesheets count as requests, because a lazily loaded component renders nothing until its module arrives.
-- Inline-style changes, SVG attribute churn and `<head>` changes do not count as mutations, so animations do not keep a page busy forever.
+- Inline-style changes, SVG attribute churn, `<head>` changes and semantic `time`/`role=timer` updates do not count as mutations. Document and shadow observers apply the same rules and record the last genuine mutation.
 
 The wait is bounded. When it hits the bound, the report says what kept the page busy.
 
@@ -144,6 +141,8 @@ A `check` asks Jev two independent questions over the page: does the claim hold,
 With a `reference`, the judge compares the page with your trusted data.
 
 ## Recordings and healing
+
+This engine reads 0.1.x–0.6.0 recordings. New gestures and optional `fileKeys`, `scrollText` and `pageValue` fields require this Unreleased engine, or 0.7.0+ once released. Older 0.6.0 readers can reject new tools or silently discard these fields. Recordings retain schema version 1; waits are runtime timing decisions and are no longer recorded.
 
 Successful act steps record semantic targets, optional drag destinations, file-key lists and scroll searches, and an optional end state: a normalized changed path,
 up to four appeared anchors and up to two disappeared controls. Toasts, numeric names and unstable

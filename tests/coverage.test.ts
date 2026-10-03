@@ -199,7 +199,7 @@ describe('reach actions', () => {
         }
     }, 90000);
     it('scrolls a windowed container upward and records the direction', async () => {
-        const models = scriptedModels(view => view.elements.some(element => element.name === 'Record 1') ? { done: 0.95 } : { tool: 'scroll', target: element => Boolean(element.scroll), scrollText: 'Record 1', scrollDirection: 'up' });
+        const models = scriptedModels(view => /(?:^|\s)Record 1(?:\s|$)/.test(view.text) ? { done: 0.95 } : { tool: 'scroll', target: element => Boolean(element.scroll), scrollText: 'Record 1', scrollDirection: 'up' });
         const recipe = await runAndReplay('scroll-up', '/reach-scroll', 'Scroll up until Record 1 appears', models, () => [verify('top', ({ page }) => page.locator('#results').evaluate(element => element.scrollTop < 80))], { ready: ({ page }) => page.locator('#results').evaluate(element => { element.scrollTop = element.scrollHeight; }) });
         expect(recipe.steps[0].actions[0].scrollDirection).toBe('up');
     });
@@ -208,13 +208,13 @@ describe('reach actions', () => {
         const evaluate = models.settings.models!.evaluation as unknown as { doEvaluate: (...args: any[]) => Promise<any> };
         const original = evaluate.doEvaluate.bind(evaluate);
         evaluate.doEvaluate = async (...args) => {
-            if (args[0].questions.scroll_text) { expect(Object.values(args[0].questions.scroll_text.criteria).sort()).toEqual(['One viewport', 'Record 154']); }
+            if (args[0].questions.scroll_start) { expect(args[0].questions.scroll_text).toBeUndefined(); expect(Object.values(args[0].questions.scroll_start.criteria)).toContain('Record (word 9)'); }
             return original(...args);
         };
         await runAndReplay('named-search', '/reach-scroll?hint', 'Follow the archive instructions: scroll the windowed results until Record 154 appears, then Open record', models, () => [verify('record', ({ page }) => page.locator('#status').textContent().then(text => text === 'Record opened'))]);
     });
     it('scrolls the sole movable container when the model targets its content', async () => {
-        const models = scriptedModels(view => view.notices.includes('Record opened') ? { done: 0.95 } : view.elements.some(is('button', 'Open record')) ? { tool: 'click', target: is('button', 'Open record') } : { tool: 'scroll', target: element => !element.scroll && element.name?.startsWith('Record ') === true, scrollText: 'Record 154' });
+        const models = scriptedModels(view => view.notices.includes('Record opened') ? { done: 0.95 } : view.elements.some(is('button', 'Open record')) ? { tool: 'click', target: is('button', 'Open record') } : { tool: 'scroll', target: is('link', 'Profile'), scrollText: 'Record 154' });
         await runAndReplay('content-scroll', '/reach-scroll', 'Scroll until Record 154 appears, then Open record', models, () => [verify('record', ({ page }) => page.locator('#status').textContent().then(text => text === 'Record opened'))]);
     });
     it('relocates a semantic target when model latency spans DOM replacement', async () => {
@@ -247,4 +247,50 @@ it('refuses page-option selection when the option contains a declared secret', a
     expect(result.status).toBe('failed');
     expect(JSON.stringify(result)).toContain('Secret input cannot use the select tool');
     expect(JSON.stringify(result)).not.toContain('private-option-value');
+});
+
+
+it('integration reports a missing scroll search instead of succeeding silently', async () => {
+    const spec: TestSpec = { ...base, id: 'missing-scroll-search', start: '/reach-feed', steps: () => [act('Scroll until Update 90 appears', { maxActions: 2 })] };
+    const models = scriptedModels(() => ({ tool: 'scroll', target: element => Boolean(element.scroll), scrollText: 'Update 90' }));
+    const result = (await runSuite([spec], { ...options(), models: models.settings })).results[0]!;
+    expect(result.attempts[0]!.steps[0]!.actions?.[0]).toMatchObject({ ok: false, error: expect.stringMatching(/not found after \d+ viewports/) });
+});
+
+it('integration keeps a connected original ref when an identical sibling is inserted during model latency', async () => {
+    let inserted = false;
+    const models = scriptedModels(view => view.notices.includes('Summary confirmed') ? { done: 0.95 } : view.text.includes('Total 5.00') ? { tool: 'click', target: is('button', 'Finish') } : { tool: 'click', target: element => element.name === 'Choose amount' && Reflect.get(element, 'content') === '5' });
+    const evaluate = models.settings.models!.evaluation as unknown as { doEvaluate: (...args: any[]) => Promise<any> };
+    const original = evaluate.doEvaluate.bind(evaluate);
+    const spec: TestSpec = { ...base, id: 'connected-ref', start: '/reach-visual', ready: async ({ page }) => {
+        evaluate.doEvaluate = async (...args) => { const result = await original(...args); if (!inserted && args[0].questions.tool) { inserted = true; await page.locator('[data-amount="5"]').evaluate(element => { const clone = element.cloneNode(true) as HTMLElement; clone.onclick = () => { throw new Error('Wrong duplicate selected'); }; element.before(clone); }); } return result; };
+    }, steps: () => [act('Choose 5, then Finish the summary'), verify('summary', ({ page }) => page.locator('#status').textContent().then(text => text === 'Summary confirmed'))] };
+    const result = (await runSuite([spec], { ...options(), models: models.settings })).results[0]!;
+    expect(result.status, result.summary).toBe('passed');
+});
+
+
+it('integration searches a model-selected literal after until you see and preserves parentheses', async () => {
+    const models = scriptedModels(view => view.notices.includes('Record opened') ? { done: 0.95 } : view.elements.some(is('button', 'Open record')) ? { tool: 'click', target: is('button', 'Open record') } : { tool: 'scroll', target: element => Boolean(element.scroll), scrollText: 'Record 154' });
+    const spec: TestSpec = { ...base, id: 'model-search-phrase', start: '/reach-scroll', steps: () => [act('Scroll until you see Record 154 (in the list), then Open record'), verify('record', ({ page }) => page.locator('#status').textContent().then(text => text === 'Record opened'))] };
+    const result = (await runSuite([spec], { ...options(), models: models.settings })).results[0]!;
+    expect(result.status, result.summary).toBe('passed');
+    const recipe = JSON.parse(await readFile(join(root, 'recordings/model-search-phrase.json'), 'utf8'));
+    expect(recipe.steps[0].actions[0].scrollText).toBe('Record 154');
+});
+
+it('integration does not record a helper wait action', async () => {
+    const models = scriptedModels(view => view.text.includes('twice|') ? { done: 0.95 } : view.history.some(entry => entry.action === 'wait') ? { tool: 'double_click', target: is('button', 'Open twice') } : { tool: 'none' }, () => ({ outcome: 'act', tool: 'wait', element: null, value_key: null, text: null, reason: 'Wait for the next render' }));
+    const spec: TestSpec = { ...base, id: 'helper-wait', start: '/reach-actions', steps: () => [act('Open twice with a double-click'), verify('twice', ({ page }) => page.locator('#events').textContent().then(text => text?.includes('twice') === true))] };
+    const result = (await runSuite([spec], { ...options(), models: models.settings })).results[0]!;
+    expect(result.status, result.summary).toBe('passed');
+    const recipe = JSON.parse(await readFile(join(root, 'recordings/helper-wait.json'), 'utf8'));
+    expect(recipe.steps[0].actions.some((action: { tool: string }) => action.tool === 'wait')).toBe(false);
+});
+
+it('integration keeps bounded busy waits outside the action budget', async () => {
+    const models = scriptedModels(view => view.text.includes('twice|') ? { done: 0.99 } : view.history.filter(entry => entry.action === 'wait').length < 3 ? { tool: 'wait' } : { tool: 'double_click', target: is('button', 'Open twice') });
+    const spec: TestSpec = { ...base, id: 'independent-busy-waits', start: '/reach-actions', steps: () => [act('Wait for the control, then Open twice with a double-click', { maxActions: 1 }), verify('twice', ({ page }) => page.locator('#events').textContent().then(text => text?.includes('twice') === true))] };
+    const result = (await runSuite([spec], { ...options(), models: models.settings })).results[0]!;
+    expect(result.status, result.summary).toBe('passed');
 });

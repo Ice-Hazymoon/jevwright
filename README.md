@@ -195,7 +195,7 @@ can be a product regression or a stale target and does not establish either on i
   - upload declared files, including a chosen group in one multiple input, and verify declared downloads;
   - follow popups and return after they close;
   - scroll the page or a container, search for instruction text while scrolling, and bring static text into view;
-  - wait for loading indicators and refresh targets after DOM replacement;
+  - wait for transient loading signals and relocate stale targets after DOM replacement;
   - hover to reveal controls;
   - choose right-click, an 800 ms long press, double-click, drag between two semantic targets, and browser back;
   - reach script-created closed shadow roots without opening them to application code.
@@ -206,7 +206,7 @@ can be a product regression or a stale target and does not establish either on i
   When one of these is only a precondition, do it in a `fixture` or `run` step. When it is the behavior under test, use a scripted Playwright test.
 - Declarative closed shadow roots are not captured. The engine wraps `attachShadow` and keeps references to script-created roots; the roots retain their original mode.
 - Dragging covers HTML drag-and-drop and pointer gestures. Drawing, arbitrary keyboard shortcuts and precise text-range formatting still need scripted Playwright steps.
-- Scroll searches stop after 500 viewports, 45 seconds, or five unchanged positions. A missing target still fails or needs another action.
+- Scroll searches share 30 seconds per step and stop after 500 viewports or five unchanged positions. Missing goals fail explicitly.
 - Desktop defaults to 1280×900. Use `device: "mobile"` for touch and a mobile user agent, or provide a custom device.
 - Page values can be entered only when their exact text appears in the current observation. Replay re-reads them from recorded surrounding text; changed or ambiguous sources need an auto run. Declared secrets remain available only through their keys.
 - `check` requires the asserted content to be visible. A count or saved-button state cannot prove what another tab contains.

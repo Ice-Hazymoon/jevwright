@@ -22,15 +22,15 @@ export function trackRoots() {
     Element.prototype.attachShadow = function (init) {
         const root = attach.call(this, init);
         roots.set(this, root);
-        new MutationObserver(() => Reflect.set(window, '__jevwrightMutatedAt', performance.now()))
-            .observe(root, { subtree: true, childList: true, characterData: true });
+        new MutationObserver(records => (Reflect.get(window, '__jevwrightContentMutation') as ((records: MutationRecord[]) => void) | undefined)?.(records))
+            .observe(root, { subtree: true, childList: true, attributes: true, characterData: true });
         return root;
     };
 }
 
 export interface DomSurface {
     nodes: AriaNode[];
-    details: Array<{ box: NonNullable<AriaNode['box']>; content?: string; near?: string; value?: string; nativeSelect?: boolean; context?: string; draggable?: boolean; scroll?: { top: number; height: number; viewport: number } }>;
+    details: Array<{ box: NonNullable<AriaNode['box']>; content?: string; near?: string; value?: string; inputType?: string; autocomplete?: string; nativeSelect?: boolean; context?: string; draggable?: boolean; scroll?: { top: number; height: number; viewport: number } }>;
     text: string;
     dialog?: AriaNode;
     busy: boolean;
@@ -39,8 +39,8 @@ export interface DomSurface {
 }
 
 /** DOM complements the accessibility tree; leaf text also supplies hover, context-menu and scroll targets. */
-export async function readSurface(page: Page | Frame, scope?: ElementHandle<Element>): Promise<DomSurface> {
-    return page.evaluate((scope) => {
+export async function readSurface(page: Page | Frame, scope?: ElementHandle<Element>, instruction = ''): Promise<DomSurface> {
+    return page.evaluate(({ scope, instruction }) => {
         const roots = Reflect.get(window, '__jevwrightRoots') as WeakMap<Element, ShadowRoot> | undefined;
         const refs = new Map<string, Element>();
         const ids = (Reflect.get(window, '__jevwrightIds') as WeakMap<Element, string> | undefined) ?? new WeakMap<Element, string>();
@@ -75,11 +75,41 @@ export async function readSurface(page: Page | Frame, scope?: ElementHandle<Elem
             for (let parent: Element | null = element; parent; parent = parentOf(parent)) { if (parent === dialog) { return true; } }
             return false;
         };
-        const hasDrag = all.some(element => element instanceof HTMLElement && (element.draggable || /grab/.test(getComputedStyle(element).cursor)));
-        const groupName = (element: Element) => hasDrag && Number.parseFloat(getComputedStyle(element).borderTopWidth) > 0 && element.firstElementChild ? text(element.firstElementChild).slice(0, 80) : '';
+        const groupName = (element: Element) => {
+            if (element.matches('html,body,main,header,footer,nav')) { return ''; }
+            const heading = [...element.children].find(child => child.matches('h1,h2,h3,h4,h5,h6,[role=heading]'));
+            return element.matches('section, [role=region], [role=list], [role=group]') || heading
+                ? element.getAttribute('aria-label') || (heading ? text(heading).slice(0, 80) : '') : '';
+        };
+        const hoverSelectors: string[] = [];
+        const rules = (items: CSSRuleList) => { for (const rule of items) {
+            if (rule instanceof CSSStyleRule) { hoverSelectors.push(...rule.selectorText.split(',').filter(selector => selector.includes(':hover')).map(selector => selector.split(':hover')[0]!.trim())); }
+            else if ('cssRules' in rule) { rules((rule as CSSGroupingRule).cssRules); }
+        } };
+        for (const sheet of document.styleSheets) { try { rules(sheet.cssRules); } catch { /* Cross-origin stylesheets are unreadable. */ } }
+        const interactiveParent = (element: Element) => {
+            for (let parent = parentOf(element); parent; parent = parentOf(parent)) {
+                if (parent.matches('button,a[href],input,select,textarea,summary,[role],[aria-label],[aria-labelledby],[contenteditable=true]')) { return true; }
+            }
+            return false;
+        };
+        const pointerSignal = (element: Element) => {
+            for (let parent: Element | null = element; parent && parent !== document.body; parent = parentOf(parent)) {
+                if (parent instanceof HTMLElement && (parent.oncontextmenu || parent.onmouseenter || parent.onmouseover || parent.ondragover || /pointer|grab/.test(getComputedStyle(parent).cursor))) { return true; }
+                if (hoverSelectors.some(selector => { try { return parent!.matches(selector); } catch { return false; } })) { return true; }
+            }
+            return false;
+        };
+        const markers = new Set(all.filter(element => visible(element) && /(?:^|\b)(?:loading|skeleton|spinner)(?:\b|$)/i.test(`${element.getAttribute('class') ?? ''} ${element.id} ${element.getAttribute('data-state') ?? ''}`)));
+        const previousMarkers = Reflect.get(window, '__jevwrightLoadingMarkers') as Set<Element> | undefined;
+        const transient = (Reflect.get(window, '__jevwrightTransientMarkers') as Set<Element> | undefined) ?? new Set<Element>();
+        if (previousMarkers) { for (const marker of markers) { if (!previousMarkers.has(marker)) { transient.add(marker); } } }
+        for (const marker of transient) { if (!markers.has(marker)) { transient.delete(marker); } }
+        Reflect.set(window, '__jevwrightLoadingMarkers', markers); Reflect.set(window, '__jevwrightTransientMarkers', transient);
+        let textTargets = 0;
         const nodes: AriaNode[] = [];
         const details: DomSurface['details'] = [];
-        let busy = document.readyState === 'loading';
+        let busy = document.readyState === 'loading' || transient.size > 0;
         let scrollable = (document.scrollingElement?.scrollHeight ?? 0) > innerHeight;
         for (const element of all) {
             if (!visible(element) || !inScope(element)) { continue; }
@@ -107,12 +137,13 @@ export async function readSurface(page: Page | Frame, scope?: ElementHandle<Elem
                 const name = groupName(parent);
                 if (name) { context = `group "${name}"`; break; }
             }
-            details.push({ box, ...(context ? { context } : {}), ...(label && rendered && !field && !select && rendered !== label ? { content: rendered } : {}), ...(field && near && near !== name ? { near } : {}), ...(editable ? { value } : {}), ...(select ? { nativeSelect: true } : {}), ...(draggable ? { draggable: true } : {}), ...(scrolling ? { scroll: { top: element.scrollTop, height: element.scrollHeight, viewport: element.clientHeight } } : {}) });
-            if (element.getAttribute('aria-busy') === 'true' || role === 'progressbar' || /(?:^|\b)(?:loading|skeleton|spinner)(?:\b|$)/i.test(`${element.className} ${element.id} ${element.getAttribute('data-state') ?? ''} ${element.getAttribute('data-testid') ?? ''}`) || (rendered.length < 80 && /^(?:loading|saving|processing|please wait)(?:\b|…)/i.test(rendered))) { busy = true; }
+            details.push({ box, ...(context ? { context } : {}), ...(label && rendered && !field && !select && rendered !== label ? { content: rendered } : {}), ...(field && near && near !== name ? { near } : {}), ...(element instanceof HTMLInputElement ? { inputType: element.type, autocomplete: element.autocomplete } : {}), ...(editable ? { value } : {}), ...(select ? { nativeSelect: true } : {}), ...(draggable ? { draggable: true } : {}), ...(scrolling ? { scroll: { top: element.scrollTop, height: element.scrollHeight, viewport: element.clientHeight } } : {}) });
+            if (element.getAttribute('aria-busy') === 'true' || (role === 'progressbar' && !element.hasAttribute('aria-valuenow')) || ((role === 'status' || element.hasAttribute('aria-live')) && /^(?:loading|saving|processing|please wait)(?:\b|…)/i.test(rendered))) { busy = true; }
             scrollable ||= scrolling;
-            const leaf = rendered && rendered.length <= 160 && ![...element.children].some(child => text(child));
+            const leaf = rendered && rendered.length <= 160 && ![...element.children].some(child => text(child)) && !interactiveParent(element) && (pointerSignal(element) || instruction.toLowerCase().includes(rendered.toLowerCase()));
             if (['dialog', 'alertdialog', 'status', 'alert', 'progressbar', 'heading'].includes(role) || element.matches('h1,h2,h3,h4,h5,h6')) { continue; }
             if (!(nativeRole || group || element.hasAttribute('role') || scrolling || draggable || leaf)) { continue; }
+            if (leaf && !nativeRole && !group && !element.hasAttribute('role') && !scrolling && !draggable && ++textTargets > 30) { continue; }
             if (field && element instanceof HTMLInputElement && element.type === 'hidden') { continue; }
             const key = ids.get(element) ?? `d${++serial}`;
             ids.set(element, key); refs.set(key, element);
@@ -129,7 +160,7 @@ export async function readSurface(page: Page | Frame, scope?: ElementHandle<Elem
         };
         const shown = all.filter(element => visible(element) && inScope(element) && inside(element)).flatMap(element => [...element.childNodes].filter(node => node.nodeType === Node.TEXT_NODE).map(node => node.textContent ?? '')).join(' ').replace(/\s+/g, ' ').trim();
         return { nodes, details, text: shown, ...(dialog ? { dialog: { role: dialog.getAttribute('role') ?? 'dialog', name: dialog.getAttribute('aria-label') ?? text(dialog.querySelector('h1,h2,h3,[role=heading]') ?? dialog).slice(0, 120), children: [...nodes, shown] } } : {}), busy, scrollable, pageScroll: { top: document.scrollingElement?.scrollTop ?? 0, height: document.scrollingElement?.scrollHeight ?? innerHeight, viewport: innerHeight } };
-    }, scope);
+    }, { scope, instruction });
 }
 
 export function domLocator(page: Page, ref: string) {

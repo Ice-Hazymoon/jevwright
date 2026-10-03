@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Avoid treating ordinary processing text, decorative spinners and determinate progress as loading; report busy separately and keep bounded busy waits outside the action budget.
+- Limit plain-text targets to pointer/hover/context signals or instruction-named text, excluding control descendants and large-table text.
+- Select scroll search spans from the original instruction with model judgments; fail missing searches explicitly and share a bounded search budget within each step.
+- Preserve connected target references; relocate only stale targets. Derive drag context from semantic container labels and headings.
+- Split aria-controls ID lists and apply the same mutation noise rules and diagnostics inside shadow roots.
+- Keep reading recordings from 0.1.x–0.6.0. New gesture, grouped-upload, search and page-value recordings require the Unreleased engine or 0.7.0+ once released; 0.6.0 can reject new tools or silently drop optional fields. Wait actions are no longer recorded.
+
 - Observe script-created closed shadow roots, roleless text targets, contenteditable editors and scroll containers while retaining visible labels.
 - Record and replay hover, right-click, long press, double-click, drag source/destination, browser back and scroll-to-text gestures.
 - Search mounted content while scrolling; wait for deferred controls and options, and refresh semantic targets after DOM replacement.

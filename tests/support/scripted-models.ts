@@ -114,7 +114,7 @@ export function scriptedModels(policy: (view: View) => Belief, helper?: (view: V
 
 function answer(id: string, question: EvaluationQuestion, belief: Belief, view: View): Answer {
     if (question.type === 'boolean') {
-        const value = ({ done: belief.done, done_change: belief.done, complete: belief.complete ?? belief.done, remaining: belief.remaining ?? (belief.done === undefined ? 0 : 1 - belief.done), error: belief.error, anomaly: belief.anomaly, holds: belief.holds } as Record<string, number | undefined>)[id];
+        const value = ({ done: belief.done, done_change: belief.done, complete: belief.complete ?? belief.done, remaining: belief.remaining ?? (belief.done === undefined ? 0 : 1 - belief.done), error: belief.error, anomaly: belief.anomaly, holds: belief.holds, scroll_search: belief.scrollText ? 0.99 : 0.01 } as Record<string, number | undefined>)[id];
         return { type: 'boolean', probability: value ?? 0.03 };
     }
     if (question.type === 'score') { return { type: 'score', score: 0 }; }
@@ -142,6 +142,11 @@ function answer(id: string, question: EvaluationQuestion, belief: Belief, view: 
     if (id === 'option') { chosen = options.find(option => question.criteria[option] === belief.option); }
     if (id === 'file_group') { chosen = belief.fileGroup ?? 'all'; }
     if (id === 'scroll_direction') { chosen = belief.scrollDirection ?? 'down'; }
+    if (id === 'scroll_start' || id === 'scroll_end') {
+        const words = [...(view.step ?? '').matchAll(/\S+/g)]; const at = belief.scrollText ? view.step?.indexOf(belief.scrollText) ?? -1 : -1;
+        const boundary = id === 'scroll_start' ? at : at + (belief.scrollText?.length ?? 0) - 1;
+        chosen = at < 0 ? undefined : String(words.findIndex(word => word.index! <= boundary && word.index! + word[0].length > boundary));
+    }
     if (id === 'scroll_text') { chosen = options.find(option => question.criteria[option] === belief.scrollText); }
     if (id === 'value') { chosen = belief.value; }
     if (id === 'input_source') { chosen = belief.pageValue !== undefined ? 'page' : Object.keys(view.values).length ? 'step' : 'clear'; }

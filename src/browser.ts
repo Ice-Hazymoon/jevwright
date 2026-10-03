@@ -95,13 +95,16 @@ function watchMutations() {
         return `${record.type}${record.attributeName ? `:${record.attributeName}` : ''} <${tag}>`;
     };
     Reflect.set(window, '__jevwrightMutatedAt', performance.now());
-    const observer = new MutationObserver((records) => {
+    const contentMutation = (records: MutationRecord[]) => {
         const content = records.find(record => !(record.type === 'attributes' && (record.attributeName === 'style' || record.target instanceof SVGElement))
-            && !(document.head && document.head.contains(record.target)));
+            && !(document.head && document.head.contains(record.target))
+            && !((record.target instanceof Element ? record.target : record.target.parentElement)?.closest('time,[role=timer]')));
         if (!content) { return; }
         Reflect.set(window, '__jevwrightMutatedAt', performance.now());
         Reflect.set(window, '__jevwrightLastMutation', describe(content));
-    });
+    };
+    Reflect.set(window, '__jevwrightContentMutation', contentMutation);
+    const observer = new MutationObserver(contentMutation);
     const start = () => observer.observe(document, { subtree: true, childList: true, attributes: true, characterData: true });
     if (document.documentElement) { start(); } else { addEventListener('DOMContentLoaded', start); }
 }
@@ -143,8 +146,9 @@ export async function settle(page: Page, monitor: Pick<Monitor, 'pendingRequests
             state = { idle: 0, last: 'navigation' }; // Navigation in progress.
         }
         const pending = monitor.pendingRequests();
-        if (pending === 0 && state.idle >= quietMs && !(await readSurface(page)).busy) { return Date.now() - started; }
-        blocker = pending ? `${pending} request(s) in flight` : `DOM still changing (${state.last || 'unknown'})`;
+        const busy = pending === 0 && state.idle >= quietMs && (await readSurface(page)).busy;
+        if (pending === 0 && state.idle >= quietMs && !busy) { return Date.now() - started; }
+        blocker = pending ? `${pending} request(s) in flight` : busy ? 'busy: visible loading signal' : `DOM still changing (${state.last || 'unknown'})`;
         await new Promise(resolve => setTimeout(resolve, 100));
     }
     monitor.noteSettleCap?.(blocker);
@@ -171,6 +175,8 @@ export interface ToolCall {
     scrollText?: string;
     scrollDirection?: 'up' | 'down';
     hasTouch?: boolean;
+    searchBudgetMs?: number;
+    signal?: AbortSignal;
 }
 
 export async function perform(page: Page, call: ToolCall): Promise<void> {
@@ -282,7 +288,7 @@ export async function perform(page: Page, call: ToolCall): Promise<void> {
                 await locator.selectOption({ label: call.value }, { timeout }).catch(async () => locator.selectOption(call.value!, { timeout }));
             } else {
                 const controls = await locator.getAttribute('aria-controls');
-                const scope = await locator.getAttribute('role') === 'listbox' ? locator : controls ? page.locator(`[id=${JSON.stringify(controls)}]`) : page;
+                const scope = await locator.getAttribute('role') === 'listbox' ? locator : controls ? page.locator(controls.trim().split(/\s+/).map(id => `[id=${JSON.stringify(id)}]`).join(',')) : page;
                 const option = scope.getByRole('option', { name: call.value, exact: true });
                 if (!await option.count()) { throw new Error('Option is not rendered yet'); }
                 await option.click({ timeout });
@@ -358,12 +364,15 @@ export function actionError(error: unknown, redact?: Redactor): string {
 /** Search at viewport-sized intervals so windowed rows are not skipped; all searches have a time and iteration cap. */
 async function scrollPage(page: Page, call: ToolCall): Promise<void> {
     const locator = call.ref ? domLocator(page, call.ref) : undefined;
-    const deadline = Date.now() + 45000;
+    const deadline = Date.now() + Math.min(30000, call.searchBudgetMs ?? 30000);
     const direction = call.scrollDirection === 'up' ? -1 : 1;
     const phrase = call.scrollText?.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const search = phrase ? new RegExp(`(?<![\\p{L}\\p{N}_])${phrase}(?![\\p{L}\\p{N}_])`, 'u') : undefined;
     let stalled = 0;
+    let viewports = 0;
     for (let attempt = 0; attempt < (call.scrollText ? 500 : 1) && Date.now() < deadline; attempt++) {
+        call.signal?.throwIfAborted();
+        viewports++;
         if (search) {
             const scope = locator ? await locator.elementHandle({ timeout: 5000 }) : undefined;
             const text = (await readSurface(page, scope ?? undefined).finally(() => scope?.dispose())).text;
@@ -380,6 +389,7 @@ async function scrollPage(page: Page, call: ToolCall): Promise<void> {
             ? await locator.evaluate((element, direction) => { const before = element.scrollTop; element.scrollTop += direction * Math.max(100, element.clientHeight * 0.9); return { before, after: element.scrollTop }; }, direction)
             : await page.evaluate(move, direction);
         await page.waitForTimeout(delta.before === delta.after ? 500 : 40);
-        if (delta.before === delta.after) { if (++stalled >= 5) { return; } } else { stalled = 0; }
+        if (delta.before === delta.after) { if (++stalled >= 5) { break; } } else { stalled = 0; }
     }
+    if (call.scrollText) { throw new Error(`Scroll search not found after ${viewports} viewports`); }
 }

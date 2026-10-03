@@ -48,6 +48,8 @@ export interface PageElement {
     nth?: number;
     /** Visible text inside the element that its aria-label replaces in the accessible name (e.g. a card). */
     content?: string;
+    inputType?: string;
+    autocomplete?: string;
     nativeSelect?: boolean;
     draggable?: boolean;
     scroll?: { top: number; height: number; viewport: number };
@@ -89,6 +91,7 @@ const SECRET = /password|passcode|secret|token|api[\s_-]?key|otp|verification co
 export const LIMITS = { elements: 220, text: 4000, notice: 300, near: 80 };
 
 export interface ObserveOptions {
+    instruction?: string;
     redact?: Redactor;
     viewport?: { width: number; height: number };
 }
@@ -100,7 +103,7 @@ export async function observe(page: Page, options: ObserveOptions = {}): Promise
         inertBoxes(page),
     ]);
     const viewport = options.viewport ?? page.viewportSize() ?? { width: 1280, height: 900 };
-    const surface = await readSurface(page);
+    const surface = await readSurface(page, undefined, options.instruction);
     const roots = normalize(tree);
     const boxes: Box[] = [];
     collect(roots, node => { if (node.box && isElement(node)) { boxes.push(node.box); } return false; }, []);
@@ -131,6 +134,8 @@ export async function observe(page: Page, options: ObserveOptions = {}): Promise
         if (detail.content) { element.content = clipProtected(detail.content, 160, options.redact); }
         if (detail.near) { element.near = clipProtected(detail.near, LIMITS.near, options.redact); }
         if (detail.value !== undefined) { element.value = options.redact?.contains(detail.value) ? detail.value : SECRET.test(element.name) ? '••••' : clipValue(detail.value, 300); }
+        if (detail.inputType) { element.inputType = detail.inputType; }
+        if (detail.autocomplete) { element.autocomplete = detail.autocomplete; }
         if (detail.nativeSelect) { element.nativeSelect = true; }
         if (detail.draggable) { element.draggable = true; }
         if (detail.scroll) { element.scroll = detail.scroll; }
@@ -300,6 +305,10 @@ export function buildObservation(tree: unknown, page: { url: string; title: stri
         if (candidate.role === 'generic' && candidates.slice(index + 1, index + 4).some(next => next.role !== 'generic' && next.name === candidate.name)) {
             candidates.splice(index, 1);
         }
+    }
+    let textTargets = 0;
+    for (let index = 0; index < candidates.length; index++) {
+        if (!INTERACTIVE.has(candidates[index]!.role) && ++textTargets > 30) { candidates.splice(index--, 1); }
     }
     // Prefer main content and dialogs; page chrome and offscreen elements go last when trimming.
     // Controls inside an inert subtree are not offered at all, but still count toward the same-name index

@@ -57,6 +57,19 @@ function escapeHtml(text: string): string {
 function pages(state: FixtureState, url: URL): string | undefined {
     const bug = url.searchParams.get('bug');
     switch (url.pathname) {
+        case '/integration-static':
+            return layout('Stable surface', '<p>Processing fee</p><div class="ui-spinner">Decoration</div><div role="progressbar" aria-valuenow="75">75%</div><button><span>Save</span></button><button>Cancel</button>' + Array.from({ length: 120 }, (_, i) => '<table><tr><td>Entry ' + i + '</td><td>Amount ' + i + '</td></tr></table>').join(''));
+        case '/integration-pointer':
+            return layout('Pointer targets', Array.from({ length: 60 }, (_, i) => '<span style="cursor:pointer">Pointer ' + i + '</span>').join(' '));
+        case '/integration-groups':
+            return layout('Semantic groups', '<div draggable="true">Packet</div><div style="border-top:1px solid"><span>Decoration</span><button>Unrelated</button></div><section aria-label="Ready"><h2>Ready</h2><div style="cursor:grab">Draft packet</div></section>');
+        case '/integration-shadow':
+            return layout('Shadow animation', '<div id="host"></div>', `
+const root = document.getElementById('host').attachShadow({mode:'closed'}); root.innerHTML = '<div id="animated">Stable</div><time id="clock">12:00:00</time><div id="content">Initial</div>'; window.fixtureRoot = root;
+let tick = 0; setInterval(() => { tick++; root.getElementById('animated').style.transform = 'rotate(' + tick + 'deg)'; root.getElementById('clock').textContent = '12:00:' + String(tick % 60).padStart(2,'0'); }, 30);
+`);
+        case '/integration-controls':
+            return layout('Controlled lists', '<input role="combobox" aria-label="Category" aria-controls="description first second"><p id="description">Choose a category</p><div id="first" role="listbox"><div role="option">Hardware</div></div><div id="second" role="listbox"><div role="option" onclick="toast(&quot;Selected software&quot;)">Software</div></div>');
         case '/reach-observe':
             return layout('Surface controls', '<style>.menu:hover #submenu{display:block}#submenu{display:none}.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)}</style><div class="menu"><span>Workspace</span><div id="submenu"><button>Invite member</button></div></div><div id="closed"></div><div contenteditable="true" aria-label="Draft"></div><button aria-label="Discard"><span class="sr">Ignore this</span>Publish draft</button><div><span>Budget</span><input aria-label="Memo"></div><div aria-label="Activity" style="height:100px;overflow:auto"><div style="height:1200px">Earlier activity</div></div><p style="margin-top:1400px">End notes</p>', `
 const root = document.getElementById('closed').attachShadow({mode:'closed'});

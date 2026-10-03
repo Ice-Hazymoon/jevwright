@@ -901,7 +901,7 @@ describe('reach observation', () => {
         expect(observation.elements.some(element => element.name === 'Workspace' && element.ref)).toBe(true);
         expect(named(observation, 'textbox', 'Draft')).toHaveLength(1);
         expect(observation.elements.some(element => element.name === 'Activity' && Reflect.get(element, 'scroll'))).toBe(true);
-        expect(observation.elements.some(element => element.name === 'End notes' && element.ref)).toBe(true);
+        expect(observation.elements.some(element => element.name === 'End notes' && element.ref)).toBe(false);
     });
     it('keeps visible labels distinct from accessible names and excludes clipped screen-reader text', async () => {
         const { observation } = await open('/reach-observe');
@@ -943,4 +943,80 @@ it('scopes closed-root dialogs and excludes inert shadow descendants', async () 
     expect(observation.elements.some(element => element.name === 'Discard')).toBe(false);
     const inert = await open('/reach-observe', page => page.locator('#closed').evaluate(element => element.setAttribute('inert', '')));
     expect(inert.observation.elements.some(element => element.name === 'Member')).toBe(false);
+});
+
+
+describe('integration observation and timing', () => {
+    it('does not wait for static processing text, decorative spinners or determinate progress', async () => {
+        const context = await newTestContext(browser, { viewport: { width: 1280, height: 900 }, dialogs: 'accept' });
+        try {
+            const monitor = createMonitor(context, { origin: app.origin }); const page = await context.newPage();
+            await page.goto(new URL('/integration-static', app.origin).toString());
+            expect(await settle(page, monitor, { maxMs: 1400 })).toBeLessThan(1000);
+            expect((await observe(page)).busy).toBe(false);
+            expect(monitor.settleCaps).toEqual([]);
+        } finally { await context.close(); }
+    });
+    it('keeps large table text out of targets and does not duplicate button children', async () => {
+        const { observation } = await open('/integration-static');
+        expect(observation.elements.length).toBeLessThanOrEqual(6);
+        expect(observation.elements.filter(element => element.name === 'Save')).toHaveLength(1);
+        expect(observation.omitted).toBe(0);
+        expect(JSON.stringify(observation.elements).length).toBeLessThan(1800);
+    });
+    it('caps pointer text supplements without counting them as omitted controls', async () => {
+        const { observation } = await open('/integration-pointer');
+        expect(observation.elements.filter(element => element.role === 'generic').length).toBeLessThanOrEqual(30);
+        expect(observation.omitted).toBe(0);
+    });
+    it('does not turn decorative borders into recorded group context', async () => {
+        const { observation } = await open('/integration-groups');
+        expect(observation.elements.some(element => element.name === 'Decoration' && element.role === 'group')).toBe(false);
+        expect(observation.elements.find(element => element.name === 'Unrelated')?.context).toBeUndefined();
+        expect(observation.elements.find(element => element.name === 'Draft packet')?.context).toContain('Ready');
+    });
+    it('ignores shadow style and clock churn and identifies genuine shadow mutation caps', async () => {
+        const context = await newTestContext(browser, { viewport: { width: 1280, height: 900 }, dialogs: 'accept' });
+        try {
+            const monitor = createMonitor(context, { origin: app.origin }); const page = await context.newPage();
+            await page.goto(new URL('/integration-shadow', app.origin).toString());
+            expect(await settle(page, monitor, { maxMs: 1400 })).toBeLessThan(1000);
+            await page.evaluate(() => { const root = Reflect.get(window, 'fixtureRoot') as ShadowRoot; setInterval(() => { root.querySelector('#content')!.textContent = String(Math.random()); }, 30); });
+            await page.waitForTimeout(60);
+            await settle(page, monitor, { maxMs: 500 });
+            expect(monitor.settleCaps.at(-1)?.reason).toContain('content');
+        } finally { await context.close(); }
+    });
+    it('records busy as its own settle blocker', async () => {
+        const context = await newTestContext(browser, { viewport: { width: 1280, height: 900 }, dialogs: 'accept' });
+        try {
+            const monitor = createMonitor(context, { origin: app.origin }); const page = await context.newPage();
+            await page.goto(new URL('/reach-loading', app.origin).toString());
+            await settle(page, monitor, { maxMs: 700 });
+            expect(monitor.settleCaps.at(-1)?.reason).toMatch(/busy/i);
+        } finally { await context.close(); }
+    });
+    it('selects from every ID in aria-controls', async () => {
+        const context = await newTestContext(browser, { viewport: { width: 1280, height: 900 }, dialogs: 'accept' });
+        try {
+            const page = await context.newPage(); await page.goto(new URL('/integration-controls', app.origin).toString());
+            const observation = await observe(page); const target = observation.elements.find(element => element.name === 'Category')!;
+            await perform(page, { tool: 'select', ref: target.ref, value: 'Software' });
+            expect(await page.locator('#status').textContent()).toBe('Selected software');
+        } finally { await context.close(); }
+    });
+});
+
+
+it('integration offers named static text and waits for newly appearing loading markers', async () => {
+    const context = await newTestContext(browser, { viewport: { width: 1280, height: 900 }, dialogs: 'accept' });
+    try {
+        const monitor = createMonitor(context, { origin: app.origin }); const page = await context.newPage();
+        await page.goto(new URL('/reach-observe', app.origin).toString());
+        expect((await observe(page, { instruction: 'Bring End notes into view' })).elements.some(element => element.name === 'End notes' && element.ref)).toBe(true);
+        await page.evaluate(() => { const marker = document.createElement('div'); marker.className = 'loading'; marker.textContent = 'Updating'; document.body.append(marker); setTimeout(() => marker.remove(), 600); });
+        expect((await observe(page)).busy).toBe(true);
+        expect(await settle(page, monitor)).toBeGreaterThan(500);
+        expect((await observe(page)).busy).toBe(false);
+    } finally { await context.close(); }
 });
