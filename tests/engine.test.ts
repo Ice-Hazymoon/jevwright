@@ -1324,3 +1324,16 @@ it('retains successful supplied-value evidence after submission removes credenti
     expect(result.status, result.summary).toBe('passed');
     expect(result.attempts[0]!.steps[0]!.actions?.map(action => action.tool)).toEqual(['type', 'type', 'click']);
 });
+
+
+it('uses stable control identity when its nearby count changes between required activations', async () => {
+    const spec: TestSpec<void> = { id: 'changing-count-control', title: 'Increase a batch count', risk: 'A changing nearby count makes a completed increment look unperformed', start: '/integration-counter?bug=total', steps: () => [act('Increase the first batch count by two'), verify('total reflects the new count', async ({ page }) => (await page.locator('output').textContent()) === '21')] };
+    const result = (await suite([spec], { mode: 'ai', policy: view => {
+        const clicks = view.history.filter(entry => entry.action === 'click' && !entry.error).length;
+        if (view.control) { return { needed: 0.31 }; }
+        return clicks < 2 ? { done: 0.03, remaining: 0.99, tool: 'click', target: element => element.name === '+' } : { done: 0.67, remaining: 0.11, achieved: 0.93, navigation: 0, tool: 'none', target: element => element.name === '+' };
+    }, helper: view => view.control ? { activation: view.controlActivations.length === 2 ? 'finished' : 'activate', reason: 'The control must have two successful activations, even when the nearby count changes' } : { outcome: 'step_already_done', tool: null, element: null, value_key: null, text: null, reason: 'Both increments were performed' } }).run).results[0]!;
+    expect(result.cause, result.summary).toBe('product');
+    expect(result.attempts[0]!.steps[0]!.actions?.filter(action => action.ok)).toHaveLength(2);
+    expect(result.attempts[0]!.steps[1]!.failure).toBe('assertion');
+});

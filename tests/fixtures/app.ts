@@ -57,6 +57,10 @@ function escapeHtml(text: string): string {
 function pages(state: FixtureState, url: URL): string | undefined {
     const bug = url.searchParams.get('bug');
     switch (url.pathname) {
+        case '/integration-counter':
+            return layout('Batch totals', '<p>Unit price: 7</p><div><span>Documents</span><button id="minus">-</button><span id="quantity">1</span><button id="plus">+</button></div><output id="total">7</output>', `
+let quantity = 1; document.getElementById('plus').onclick = () => { quantity++; document.getElementById('quantity').textContent = String(quantity); document.getElementById('total').textContent = String(${bug ? '7' : 'quantity * 7'}); };
+`);
         case '/integration-secrets':
             return layout('Credential purposes', '<label>Email<input id="email" type="email"></label><label>Password<input id="password" type="password"></label><label>New credential<input id="credential" autocomplete="new-password"></label><div role="textbox" aria-label="API key" contenteditable="true"></div>');
         case '/integration-static':

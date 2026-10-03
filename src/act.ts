@@ -280,6 +280,7 @@ async function decideLoop(input: ActInput, models: Models, actions: ActionRecord
     const compound = /\b(?:and|then|also|afterwards)\b|然后|并且|之后|再|以及|[,，;；]/i.test(input.instruction.replace(/"(?:\\.|[^"\\])*"|“[^”]*”|‘[^’]*’/g, ''));
     const history: Array<Record<string, string>> = actions.map(action => ({ action: action.tool, ...(action.element ? { element: action.element } : {}), ...(action.value ? { value: action.value } : {}), ...(action.error ? { error: action.error } : {}) }));
     const seen = new Map<string, number>();
+    const actionTargets = new Map<ActionRecord, string>();
     let previous: Observation | undefined;
     let waits = 0;
     let busyWaits = 0;
@@ -377,9 +378,10 @@ async function decideLoop(input: ActInput, models: Models, actions: ActionRecord
         if (!input.next && !missing.length && (decision.tool === 'none' || (canFinish && decision.tool === 'click')) && candidate && (candidate.ref || candidate.reveal) && ACTIVATION_ROLES.has(candidate.role) && (target?.probabilities[String(candidate.i)] ?? 0) >= 0.5) {
             try {
                 const control = describeElement(candidate);
+                const activations = candidate.ref ? actions.filter(action => action.ok && actionTargets.get(action) === candidate.ref).map(action => ({ action: action.tool, element: action.element ?? control })) : [];
                 // Page summaries can resemble a destination or success; audit the named action against history alone.
-                const answer = await models.judge({ task: { step: input.instruction, history: history.filter(entry => entry.action && !entry.error) }, control }, {
-                    needed: { type: 'choice', instructions: 'What should the runner do with control to carry out task.step? Use the successful action history, not inferred page results. A preparatory selection is a different action from confirming it.', criteria: {
+                const answer = await models.judge({ task: { step: input.instruction, history: history.filter(entry => entry.action && !entry.error) }, control, control_activations: activations }, {
+                    needed: { type: 'choice', instructions: 'What should the runner do with control to carry out task.step? Use the successful action history, not inferred page results. control_activations identifies successful actions on this exact DOM element, even when its nearby text or count changed; count those actions toward repeated activation requests. A preparatory selection is a different action from confirming it.', criteria: {
                         activate: `Click ${control}: its action is required by task.step and has not yet been performed.`,
                         finished: `Do not click ${control}: its required action already appears in task.history, or the instruction does not require its action.`,
                     } },
@@ -391,7 +393,7 @@ async function decideLoop(input: ActInput, models: Models, actions: ActionRecord
                 let controlSource: Decision['source'] = 'jev';
                 if (needed > 0.15 && needed < 0.5 && escalations < 2) {
                     escalations++;
-                    const review = await models.generate('Review whether one observed control must be activated to carry out a UI instruction. Compare the control action with successful history. Selecting a date or editing fields prepares a transaction; it does not perform its confirmation. A requested destination must be opened through its control. Do not repeat an activation already performed, require unrelated actions, or do later steps. Judge user actions, not whether product content is correct.', JSON.stringify({ step: input.instruction, history: history.filter(entry => entry.action && !entry.error), control }), z.object({ activation: z.enum(['activate', 'finished']), reason: z.string().max(400) }), input.signal, 'control');
+                    const review = await models.generate('Review whether one observed control must be activated to carry out a UI instruction. Compare the control action with successful history. control_activations identifies actions on this exact DOM element despite changing nearby text or counts; do not treat those as different controls. Count required repeated activations. Selecting a date or editing fields prepares a transaction; it does not perform its confirmation. A requested destination must be opened through its control. Do not repeat an activation already performed, require unrelated actions, or do later steps. Judge user actions, not whether product content is correct.', JSON.stringify({ step: input.instruction, history: history.filter(entry => entry.action && !entry.error), control, control_activations: activations }), z.object({ activation: z.enum(['activate', 'finished']), reason: z.string().max(400) }), input.signal, 'control');
                     activate = review.activation === 'activate';
                     controlSource = 'llm';
                     trace.note = `Helper control review: ${review.activation}; ${review.reason}`;
@@ -525,6 +527,7 @@ async function decideLoop(input: ActInput, models: Models, actions: ActionRecord
         const record = await performDecision(input, next, observation, actions, recording, Math.max(0, 30000 - searchSpentMs));
         if (next.tool === 'scroll' && next.scrollText) { searchSpentMs += record.durationMs; }
         actions.push(record);
+        if (record.ok && next.target?.ref) { actionTargets.set(record, next.target.ref); }
         history.push({ action: record.tool, ...(record.element ? { element: record.element } : {}), ...(record.destination ? { destination: record.destination } : {}), ...(record.value ? { value: record.value } : {}), ...(record.error ? { error: record.error } : {}) });
     }
     return { status: 'failed', failure: 'max-actions', reason: `Step not complete after ${maxActions} actions${missing.length ? `: ${neverEntered(missing)}` : ''}` };

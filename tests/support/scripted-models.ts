@@ -11,6 +11,7 @@ export interface View {
     step?: string;
     field?: string;
     control?: string;
+    controlActivations: Array<Record<string, string>>;
     review?: boolean;
     change?: Record<string, unknown>;
     /** The following act step, when the engine shares it. */
@@ -99,7 +100,7 @@ export function scriptedModels(policy: (view: View) => Belief, helper?: (view: V
         doGenerate: async ({ prompt }) => {
             const text = JSON.stringify(prompt);
             const payload = JSON.parse(extractJson(text)) as Record<string, unknown>;
-            const view = toView({ task: { step: payload.step, values: payload.values, history: payload.history }, page: payload.page, claim: payload.claim, control: payload.control });
+            const view = toView({ task: { step: payload.step, values: payload.values, history: payload.history }, page: payload.page, claim: payload.claim, control: payload.control, control_activations: payload.control_activations });
             const output = helper?.(view, String(payload.why_you_are_asked ?? '')) ?? { outcome: 'impossible', tool: null, element: null, value_key: null, text: null, reason: 'scripted helper has no answer' };
             return {
                 content: [{ type: 'text', text: JSON.stringify(output) }],
@@ -175,6 +176,7 @@ function toView(state: Record<string, unknown>): View {
         ...(typeof state.control === 'string' ? { control: state.control } : {}),
         ...(typeof task.next_step === 'string' ? { next: task.next_step } : {}),
         ...(typeof state.claim === 'string' ? { claim: state.claim } : {}),
+        controlActivations: (state.control_activations ?? []) as Array<Record<string, string>>,
         values: (task.values ?? {}) as Record<string, string>,
         history: (task.history ?? []) as Array<Record<string, string>>,
         url: String(page.url ?? ''),

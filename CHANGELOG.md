@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Ground control-activation review in successful actions on the same connected DOM ref, so changing nearby counts do not trigger extra activations.
+
 - Reject a drag to the same DOM element, so a no-op pointer gesture cannot be recorded as a successful drop.
 
 - Preserve code-observed page transitions during action-stage completion review, including submissions that replace their form; retain supplied-value evidence separately from current field matches.
