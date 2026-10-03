@@ -301,3 +301,14 @@ it('integration searches quoted instruction text without including quotation del
     const result = (await runSuite([spec], { ...options(), models: models.settings })).results[0]!;
     expect(result.status, result.summary).toBe('passed');
 });
+
+
+it('rejects a drag whose source and destination are the same element', async () => {
+    const spec: TestSpec = { ...base, id: 'self-drag', start: '/reach-actions', steps: () => [act('Deliver Parcel to Receiving area'), verify('delivered', async ({ page }) => (await page.locator('output').textContent())?.includes('delivered') === true)] };
+    const models = scriptedModels(view => view.history.some(entry => entry.action === 'drag' && !entry.error) ? { done: 0.95 } : { tool: 'drag', target: is('generic', 'Parcel'), destination: is('generic', 'Parcel') });
+    const result = (await runSuite([spec], { ...options(), mode: 'ai', models: models.settings })).results[0]!;
+    expect(result.cause, result.summary).toBe('agent');
+    expect(result.attempts[0]!.steps[0]!.actions?.[0]?.ok).toBe(false);
+    expect(result.attempts[0]!.steps[0]!.actions?.[0]?.error).toMatch(/different elements/);
+    expect(result.attempts[0]!.steps).toHaveLength(1);
+});

@@ -211,7 +211,12 @@ export async function perform(page: Page, call: ToolCall): Promise<void> {
             return;
         case 'drag': {
             if (!call.destinationRef) { throw new Error('Drag needs a destination'); }
-            await target().dragTo(domLocator(page, call.destinationRef), { timeout });
+            const destination = domLocator(page, call.destinationRef);
+            const source = await target().elementHandle({ timeout });
+            try {
+                if (source && await destination.evaluate((element, source) => element === source, source, { timeout })) { throw new Error('Drag source and destination must be different elements'); }
+            } finally { await source?.dispose(); }
+            await target().dragTo(destination, { timeout });
             return;
         }
         case 'click':
