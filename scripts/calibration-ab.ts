@@ -4,7 +4,7 @@ import type { CalibrationTest } from './calibration-fixtures.ts';
 import type { Pair, Sample } from './calibration-stats.ts';
 import { execFile, spawn } from 'node:child_process';
 import { randomInt, randomUUID } from 'node:crypto';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -68,7 +68,8 @@ export async function runCalibrationAB(tests: CalibrationTest[], app: Awaited<Re
     if (tests.some(test => !['passed', 'product'].includes(test.expected))) { throw new Error('Each calibration fixture must declare expected: passed or product'); }
     const expectations = Object.fromEntries(tests.map(test => [test.id, test.expected]));
     if (!options.models) { throw new Error('A/B calibration needs a model gateway'); }
-    const temporary = await mkdtemp(join(tmpdir(), 'jevwright-ab-'));
+    // Git lists worktrees by real path; a symlinked tmpdir (macOS /var) would otherwise never match.
+    const temporary = await realpath(await mkdtemp(join(tmpdir(), 'jevwright-ab-')));
     const worktree = join(temporary, 'baseline');
     const root = resolve('.');
     const output = resolve('.jevwright/calibration', `${new Date().toISOString().replaceAll(':', '-')}-${randomUUID().slice(0, 8)}`);
@@ -161,7 +162,10 @@ export async function runCalibrationAB(tests: CalibrationTest[], app: Awaited<Re
 /** A post-checkout hook can fail after registration, so inspect Git even when add rejected. */
 export async function removeOwnedWorktree(root: string, worktree: string): Promise<void> {
     const { stdout } = await promisify(execFile)('git', ['worktree', 'list', '--porcelain', '-z'], { cwd: root });
-    if (stdout.split('\0').includes(`worktree ${worktree}`)) {
+    // Git lists the real path; a symlinked parent would hide the entry from a literal comparison.
+    const real = await realpath(worktree).catch(() => worktree);
+    const listed = stdout.split('\0');
+    if (listed.includes(`worktree ${worktree}`) || listed.includes(`worktree ${real}`)) {
         await command('git', ['worktree', 'remove', '--force', worktree], root);
     }
 }
@@ -170,6 +174,7 @@ async function cleanupCalibration(root: string, worktree: string, temporary: str
     try {
         await removeOwnedWorktree(root, worktree);
         await rm(temporary, { recursive: true, force: true });
+        await command('git', ['worktree', 'prune'], root);
     } catch (error) {
         process.stderr.write(`Calibration cleanup failed for ${worktree}: ${String(error)}\n`);
         throw runFailure === undefined ? error : new AggregateError([runFailure, error], 'Calibration and cleanup both failed');

@@ -63,12 +63,14 @@ export interface ActResult {
     recordedEnd?: import('./recording.ts').StepEnd;
     endMismatch?: true;
     replayOnTarget?: true;
+    /** Healed after a misfired replay: its actions started from a page the replay already changed. */
+    discardRecording?: true;
 }
 
 export interface ActInput {
     files?: Readonly<Record<string, import('./files.ts').ResolvedFile>>;
     hasTouch?: boolean;
-    downloadState?: () => { ok: boolean; violated?: boolean; reason?: string };
+    downloadState?: () => { ok: boolean; violated?: boolean; pending?: boolean; reason?: string };
     page: Page;
     monitor: Monitor;
     models?: Models;
@@ -122,15 +124,16 @@ export async function runAct(input: ActInput): Promise<ActResult> {
     let end: EndCheck = { checked: false };
     let mismatch = false;
     let unique = false;
-    const finish = async (result: Pick<ActResult, 'status' | 'source' | 'failure' | 'reason' | 'endMismatch' | 'replayOnTarget'>): Promise<ActResult> => {
+    const finish = async (result: Pick<ActResult, 'status' | 'source' | 'failure' | 'reason' | 'endMismatch' | 'replayOnTarget' | 'discardRecording'>): Promise<ActResult> => {
         const recordedEnd = result.endMismatch
             ? input.recorded?.end
             : result.status === 'done' && start.observation
                 ? result.source === 'replay' && input.recorded?.end !== undefined ? input.recorded.end : recordEnd(start.observation, await observe(input.page, { redact: input.redact }), recording, input.redact)
                 : undefined;
-        return { ...result, actions, rounds, recording, end: { ...end, recorded: recordedEnd !== undefined && Boolean(recordedEnd.path || recordedEnd.appeared?.length || recordedEnd.gone?.length) }, ...(recordedEnd !== undefined ? { recordedEnd } : {}), ...(replayMiss ? { replayMiss } : {}) };
+        return { ...result, actions, rounds, recording, end: { ...end, ...(result.status === 'done' ? { recorded: recordedEnd !== undefined && Boolean(recordedEnd.path || recordedEnd.appeared?.length || recordedEnd.gone?.length) } : {}) }, ...(recordedEnd !== undefined ? { recordedEnd } : {}), ...(replayMiss ? { replayMiss } : {}) };
     };
-    if (input.recorded?.actions.length) {
+    // An empty recorded path is valid: the step was already achieved when it was recorded.
+    if (input.recorded) {
         const replay = await replaySteps(input, input.recorded.actions, actions, recording, start);
         unique = replay.unique === true;
         if (replay.ok) {
@@ -159,8 +162,11 @@ export async function runAct(input: ActInput): Promise<ActResult> {
     if (mismatch && result.status !== 'failed' && !actions.some(action => action.ok && action.source !== 'replay')) {
         return finish({ status: 'done', source: 'replay', endMismatch: true });
     }
+    if (mismatch && result.status !== 'failed') {
+        // Keeping the replayed prefix would replay the misfire forever; the next auto run grounds the step from its start.
+        return finish({ ...result, source: 'healed', discardRecording: true });
+    }
     if (mismatch && result.status === 'failed') {
-        if (result.failure === 'expectation') { return finish({ ...result, source: 'healed', replayOnTarget: true }); }
         if (unique && ['stuck', 'max-actions', 'not-found', 'ambiguous'].includes(result.failure ?? '')) {
             const history = actions.filter(action => action.source === 'replay' && action.ok).map(action => ({ action: action.tool, ...(action.element ? { element: action.element } : {}) }));
             const probability = await actedOnTarget(input.models, [{ step: input.instruction, history }], input.signal, 0).catch(() => []);
@@ -775,6 +781,11 @@ async function awaitExpectation(input: ActInput, wait: boolean): Promise<Expecta
         }
         const download = expectation.download ? input.downloadState?.() ?? { ok: false, reason: 'No download handler' } : { ok: true };
         if (download.violated) { return download; }
+        if (download.pending) {
+            // A transfer under way is neither missing nor a reason to click again; the download timer bounds it.
+            await input.page.waitForTimeout(150);
+            continue;
+        }
         if (!download.ok) { missing = download.reason; }
         const urlOk = !expectation.url || expectation.url.test(new URL(input.page.url()).pathname + new URL(input.page.url()).search);
         if (!missing && !pending && urlOk) { return { ok: true }; }
@@ -848,8 +859,11 @@ function uploadPath(input: ActInput, tool: Tool, key?: string): string | undefin
         if (key && Object.hasOwn(input.files ?? {}, key)) { throw new Error('File keys require the upload tool'); }
         return undefined;
     }
-    if (!key || !Object.hasOwn(input.files ?? {}, key)) { throw new Error('Upload requires a declared file key'); }
-    return input.files![key]!.path;
+    const declared = Object.keys(input.files ?? {});
+    // With one declared file there is nothing to choose; a missing or data key still means that file.
+    const chosen = key && Object.hasOwn(input.files ?? {}, key) ? key : declared.length === 1 ? declared[0] : undefined;
+    if (!chosen) { throw new Error('Upload requires a declared file key'); }
+    return input.files![chosen]!.path;
 }
 
 /** User keys are model identities too; alias only keys containing a declared secret. */

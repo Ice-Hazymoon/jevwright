@@ -193,7 +193,7 @@ export async function perform(page: Page, call: ToolCall): Promise<void> {
         case 'upload': {
             if (!call.filePath) { throw new Error('Upload requires a declared file key'); }
             const locator = target();
-            if (await locator.evaluate(element => element instanceof HTMLInputElement && element.type === 'file')) {
+            if (await locator.evaluate(element => element instanceof HTMLInputElement && element.type === 'file', undefined, { timeout })) {
                 await locator.setInputFiles(call.filePath, { timeout });
             } else {
                 const chooser = page.waitForEvent('filechooser', { timeout }).catch(() => undefined);

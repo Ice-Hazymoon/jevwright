@@ -4,25 +4,28 @@
 
 - Generate redacted JUnit reports, stable SHA-1 shards and last-failed selection from completed runs.
 - Regenerate JUnit with the report command and keep single-test reproduction independent of shard/history filters.
-
+- Drop a step healed after a mismatched end state from the recording instead of saving the misfired replay with the fix; the next auto run records it from its start.
+- Redact browser URL spellings, overlapping secrets, `\uXXXX` and `&#x27;` escapes, embedded base64 and byte arrays; ignore folded forms shorter than six code points.
+- Rewrite every trace and skip screenshots of pages that show a secret declared anywhere in the run.
+- Treat a recorded step with no actions as recorded; scope exit code 4 to failed tests; report rerouted steps by their test step number.
+- Wait for downloads in progress, keep the timeout reason, loop flushes, and withhold non-UTF-8 downloads while secrets are active.
+- Keep the configured viewport for `--device desktop`; give upload target checks the action timeout and default to the only declared file.
+- Ignore interrupted runs for `--last-failed`, print the JUnit path from `report`, and stop calibration once each metric settles; remove calibration worktrees reached through a symlinked temporary directory.
 
 ## 0.5.0
 
 - Skip the second check judgment when the observed page has not changed; uncertain first judgments still use the helper.
 - Six paired real-model runs preserved 66/66 expected outcomes and reduced Jev calls by four per pair (95% interval [-4,-4]).
 
-
 ## 0.4.0
 
 - Add root-scoped uploads, mobile/touch device contexts and separate device recordings.
 - Add declared downloads with completion and size checks, secret withholding after verification, and popup close recovery.
 
-
 ## 0.3.0
 
 - Add opaque secrets, restricted field input, model and artifact redaction, and fail-closed trace cleanup.
 - Preserve internal result grammar and protect long, whitespace-normalized and nested JSON appearances.
-
 
 ## 0.2.0
 

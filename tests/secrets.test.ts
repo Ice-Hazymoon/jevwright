@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { redactTrace, writeArtifact } from '../src/artifacts.ts';
-import { act, check, reveal, runSuite, secret, verify } from '../src/index.ts';
+import { act, check, reveal, run, runSuite, secret, verify } from '../src/index.ts';
 import { createRedactor } from '../src/secrets.ts';
 import { assertValidTests } from '../src/select.ts';
 import { startFixtureApp } from './fixtures/app.ts';
@@ -266,4 +266,35 @@ it('aliases secret-bearing data keys for Jev and the helper and resolves their a
             if (helper) { expect(summary.totals.models.llmCalls).toBeGreaterThan(0); }
         }
     }
+});
+
+it('redacts browser URL spellings, overlapping secrets, short folds, byte arrays and embedded base64', () => {
+    const urlSecret = 'P@ss"w0rd{x}';
+    const redact = createRedactor([secret(urlSecret), secret('abcdef'), secret('defghi'), secret('      a')]);
+    const href = new URL(`http://app.invalid/keys/${urlSecret}?k=${urlSecret}#${urlSecret}`).href;
+    expect(redact.text(href)).toBe('http://app.invalid/keys/{secret}?k={secret}#{secret}');
+    expect(redact.text('abcdefghi')).toBe('{secret}');
+    expect(redact.text('banana passed')).toBe('banana passed');
+    expect(redact.value({ bytes: Buffer.from(`x${urlSecret}`) })).toEqual({ bytes: '{secret}' });
+    expect(redact.text(`it&#x27;s ${'P@ss"w0rd{x}'.replace(/[^\w ]/g, c => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`)}`)).toBe('it&#x27;s {secret}');
+    const basic = Buffer.from(`user:${urlSecret}`).toString('base64');
+    expect(redact.contains(basic)).toBe(true);
+});
+
+it('keeps another test\'s secret out of a later test\'s trace and screenshots', async () => {
+    const shared = secret('Shared-Key-9137');
+    const owner: TestSpec<void> = { id: 'secret-owner', title: 'Declares the key', risk: 'Key leaks', start: '/secret', secrets: { key: shared }, steps: () => [verify('ready', () => true)] };
+    const viewer: TestSpec<void> = { id: 'secret-viewer', title: 'Shows the key', risk: 'Key leaks', start: '/secret', steps: () => [
+        run('show the key', async ({ page }) => { await page.fill('#key', reveal(shared)); await page.click('#save'); }),
+        verify('shown', async ({ page }) => (await page.locator('output').textContent()) === reveal(shared)),
+    ] };
+    const summary = await runSuite([owner, viewer], { baseURL: app.origin, outputDir: join(root, 'cross-test'), retries: 0, mode: 'replay', log: () => undefined });
+    const result = summary.results.find(entry => entry.id === 'secret-viewer')!;
+    expect(result.status, result.summary).toBe('passed');
+    const attempt = result.attempts[0]!;
+    expect(attempt.steps.every(step => !step.screenshot)).toBe(true);
+    const entries = unzipSync(await readFile(attempt.trace!));
+    expect(Object.keys(entries).some(name => name.endsWith('.jpeg'))).toBe(false);
+    const text = Object.values(entries).map(bytes => Buffer.from(bytes).toString('utf8')).join('\n');
+    for (const form of ['Shared-Key-9137', encodeURIComponent('Shared-Key-9137')]) { expect(text).not.toContain(form); }
 });

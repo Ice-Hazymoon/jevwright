@@ -53,7 +53,7 @@ export function markdownReport(summary: RunSummary): string {
     lines.push(...testsTableSection(results));
     for (const result of results) {
         for (const attempt of result.attempts) {
-            if (attempt.screenshotsWithheld) { lines.push(`- ${result.id}: screenshots withheld after secret input`); }
+            if (attempt.screenshotsWithheld) { lines.push(`- ${result.id}: screenshots withheld: a declared secret was entered or shown`); }
             if (attempt.traceWithheld) { lines.push(`- ${result.id}: trace withheld because redaction failed`); }
             for (const step of attempt.steps.filter(entry => entry.kind === 'act')) {
                 lines.push(`- ${result.id}, attempt ${attempt.attempt}, step ${step.index + 1}: ${step.end?.recorded === false ? 'no end state recorded' : step.end?.checked ? `end state ${step.end.matched ? 'matched' : 'mismatched'}${step.end.missing?.length ? ` (${step.end.missing.join(', ')})` : ''}` : 'no end state checked'}${step.endMismatch ? '; endMismatch — confirm with an auto run' : ''}${step.notRecorded ? `; ${step.notRecorded}` : ''}`);
@@ -286,7 +286,7 @@ function render() {
     const body = el('div', { class: 'body' }, el('p', { class: 'small' }, 'Risk: ' + r.risk), r.knownIssue ? el('p', { class: 'small' }, (r.status === 'known' ? 'Known product issue: ' : 'Marked as a known issue, but it did not reproduce: ') + r.knownIssue) : null);
     if (r.issues.length) body.append(el('p', { class: 'small' }, 'Issues: ' + r.issues.map(i => i.severity + ' ' + i.kind + ': ' + i.message).join(' · ')));
     for (const a of r.attempts) {
-      body.append(el('h2', {}, 'Attempt ' + a.attempt + ' · ' + a.status + (a.cause ? ' (' + a.cause + ')' : '') + ' · ' + secs(a.durationMs)), el('p', { class: 'small' }, a.summary + (a.screenshotsWithheld ? ' · screenshots withheld after secret input' : '') + (a.traceWithheld ? ' · trace withheld: redaction failed' : '') + (a.trace ? ' · trace: ' + a.trace : '') + (a.events.length ? ' · events: ' + a.events.join('; ') : '')));
+      body.append(el('h2', {}, 'Attempt ' + a.attempt + ' · ' + a.status + (a.cause ? ' (' + a.cause + ')' : '') + ' · ' + secs(a.durationMs)), el('p', { class: 'small' }, a.summary + (a.screenshotsWithheld ? ' · screenshots withheld: a declared secret was entered or shown' : '') + (a.traceWithheld ? ' · trace withheld: redaction failed' : '') + (a.trace ? ' · trace: ' + a.trace : '') + (a.events.length ? ' · events: ' + a.events.join('; ') : '')));
       for (const s of a.steps) body.append(stepView(a, s));
       if (a.invariants.length) body.append(el('p', { class: 'small' }, 'Invariants: ' + a.invariants.map(i => (i.passed ? '✓ ' : '✗ ') + i.name + ' @' + (i.step + 1)).join(', ')));
     }

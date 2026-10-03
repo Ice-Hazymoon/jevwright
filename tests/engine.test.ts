@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runFailureExitCode } from '../src/cli.ts';
-import { act, check, reload, runSuite, verify } from '../src/index.ts';
+import { act, check, reload, run, runSuite, verify } from '../src/index.ts';
 import { startFixtureApp } from './fixtures/app.ts';
 import { fixturePolicy } from './support/fixture-policy.ts';
 import { scriptedModels } from './support/scripted-models.ts';
@@ -814,6 +814,99 @@ describe('end state attribution', () => {
         expect(result.status).toBe('failed');
         expect(result.cause).toBe('product');
         expect(result.summary).toContain('the recorded control was used and the step still had no effect');
+    });
+});
+
+describe('reviewed acceptance cases', () => {
+    const confirmTest = (start: string): TestSpec<void> => ({ id: 'choose-confirm', title: 'Choose and confirm the entry', risk: 'The choice is not confirmed', start, steps: () => [act('Choose the entry dated 2026-01-01', { maxActions: 2 }), act('Confirm the choice', { maxActions: 2 }), verify('confirmed', async ({ page }) => page.getByRole('heading', { name: 'Alpha chosen and confirmed', exact: true }).isVisible())] });
+    const confirmPolicy = (view: View) => view.step === 'Confirm the choice'
+        ? view.text.includes('confirmed') ? { done: 0.99, tool: 'none' } : { tool: 'click', target: (element: { name?: string }) => element.name === 'Confirm choice' }
+        : effectPolicy(view);
+
+    it('drops a healed path that started from a misfired replay, then records the current page from its start', async () => {
+        const recordingsDir = join(root, 'healed-discard');
+        expect((await suite([effectTest()], { recordingsDir, policy: effectPolicy }).run).results[0]?.status).toBe('passed');
+        const healed = (await suite([effectTest('/effects?bug=swapped')], { recordingsDir, policy: effectPolicy }).run).results[0]!;
+        expect(healed.status, healed.summary).toBe('passed');
+        expect(healed.attempts[0]?.steps[0]?.notRecorded).toContain('missed its end state');
+        const path = join(recordingsDir, 'choose-entry.json');
+        expect(JSON.parse(await readFile(path, 'utf8')).steps).toEqual([]);
+        const regrounded = (await suite([effectTest('/effects?bug=swapped')], { recordingsDir, policy: effectPolicy }).run).results[0]!;
+        expect(regrounded.attempts[0]?.steps[0]?.source).toBe('ai');
+        const actions = JSON.parse(await readFile(path, 'utf8')).steps[0].actions;
+        expect(actions).toHaveLength(1);
+        const replay = (await suite([effectTest('/effects?bug=swapped')], { recordingsDir, mode: 'replay' }).run).results[0]!;
+        expect(replay.status, replay.summary).toBe('passed');
+        expect(replay.attempts[0]?.steps[0]?.endMismatch).toBeUndefined();
+    });
+
+    it('charges a no-effect replay to the product when a later verify fails, and names it before a replay miss', async () => {
+        const recordingsDir = join(root, 'replay-no-effect');
+        const seed = (await suite([confirmTest('/effects?single=1&confirm=1')], { recordingsDir, policy: confirmPolicy }).run).results[0]!;
+        expect(seed.status, seed.summary).toBe('passed');
+        const verifyDir = join(root, 'replay-no-effect-verify');
+        expect((await suite([effectTest('/effects?single=1')], { recordingsDir: verifyDir, policy: effectPolicy }).run).results[0]?.status).toBe('passed');
+        const product = await suite([effectTest('/effects?single=1&bug=no-effect')], { recordingsDir: verifyDir, mode: 'replay' }).run;
+        expect(product.results[0]?.cause).toBe('product');
+        expect(product.results[0]?.summary).toContain('step 1\'s replay missed its recorded end state');
+        expect(runFailureExitCode(product)).toBe(1);
+        const missed = await suite([confirmTest('/effects?single=1&confirm=1&bug=no-effect')], { recordingsDir, mode: 'replay' }).run;
+        expect(missed.results[0]?.cause).toBe('agent');
+        expect(missed.results[0]?.attempts[0]?.steps[1]?.failure).toBe('not-found');
+        expect(missed.results[0]?.summary).toContain('step 1\'s replay missed its recorded end state');
+        expect(runFailureExitCode(missed)).toBe(1);
+    });
+
+    it('keeps a same-path intermittent failure flaky without rerouting or rewriting the recording', async () => {
+        const recordingsDir = join(root, 'same-path-flaky');
+        let attempts = 0;
+        const spec = { ...profileTest(), steps: () => [...profileTest().steps().slice(0, 2), run('count the attempt', () => { attempts++; }), verify('passes after the first try', () => attempts > 1, { timeoutMs: 300 })] };
+        expect((await suite([profileTest()], { recordingsDir }).run).results[0]?.status).toBe('passed');
+        const path = join(recordingsDir, 'profile-save.json');
+        const before = await readFile(path, 'utf8');
+        const result = (await suite([spec], { recordingsDir, retries: 1 }).run).results[0]!;
+        expect(result.status).toBe('flaky');
+        expect(result.attempts[1]?.fresh).toBe(true);
+        expect(result.rerouted).toBeUndefined();
+        expect(result.recordingUpdated).toBe(false);
+        expect(await readFile(path, 'utf8')).toBe(before);
+    });
+
+    it('replays a 0.1.0 recording without end states unchanged in replay mode', async () => {
+        const recordingsDir = join(root, 'legacy-replay');
+        await suite([profileTest()], { recordingsDir }).run;
+        const path = join(recordingsDir, 'profile-save.json');
+        const recording = JSON.parse(await readFile(path, 'utf8'));
+        for (const step of recording.steps) { delete step.end; }
+        await writeFile(path, JSON.stringify(recording));
+        const replay = (await suite([profileTest()], { recordingsDir, mode: 'replay' }).run).results[0]!;
+        expect(replay.status, replay.summary).toBe('passed');
+        expect(await readFile(path, 'utf8')).toBe(JSON.stringify(recording));
+    });
+
+    it('exits 1 when a recorded target was removed, and 4 only for a failed test that is solely unrecorded', async () => {
+        const recordingsDir = join(root, 'exit-table');
+        await suite([profileTest()], { recordingsDir }).run;
+        const removed = await suite([profileTest('/profile?bug=relabel')], { recordingsDir, mode: 'replay' }).run;
+        expect(removed.results[0]?.attempts[0]?.steps.find(step => step.status === 'failed')?.failure).toBe('not-found');
+        expect(runFailureExitCode(removed)).toBe(1);
+        const mismatchDir = join(root, 'exit-table-mismatch');
+        expect((await suite([effectTest('/effects?single=1')], { recordingsDir: mismatchDir, policy: effectPolicy }).run).results[0]?.status).toBe('passed');
+        const passingMismatch = { ...effectTest('/effects?single=1&bug=no-effect'), steps: () => [act('Choose the entry dated 2026-01-01', { maxActions: 2 })] };
+        const unrecorded = { ...profileTest(), id: 'unrecorded-beside-mismatch' };
+        const mixed = await suite([passingMismatch, unrecorded], { recordingsDir: mismatchDir, mode: 'replay' }).run;
+        expect(mixed.results[0]?.status).toBe('passed');
+        expect(mixed.results[0]?.attempts[0]?.steps[0]?.endMismatch).toBe(true);
+        expect(runFailureExitCode(mixed)).toBe(4);
+    });
+
+    it('uses at most one fresh attempt when more retries are allowed', async () => {
+        const recordingsDir = join(root, 'one-fresh');
+        await suite([profileTest()], { recordingsDir }).run;
+        const spec = { ...profileTest(), steps: () => [...profileTest().steps().slice(0, 2), verify('always fails', () => false, { timeoutMs: 300 })] };
+        const result = (await suite([spec], { recordingsDir, retries: 2 }).run).results[0]!;
+        expect(result.attempts.map(attempt => attempt.fresh === true)).toEqual([false, true, false]);
+        expect(result.cause).toBe('product');
     });
 });
 

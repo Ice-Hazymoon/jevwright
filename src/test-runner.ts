@@ -132,7 +132,7 @@ export interface AttemptOptions {
 const MISSTEP = 0.25;
 
 /** One attempt of one test. Never throws for product/agent failures; the result carries them. */
-export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptions): Promise<{ result: AttemptResult; recording?: StepRecording[] }> {
+export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptions): Promise<{ result: AttemptResult; recording?: StepRecording[]; recordedSteps?: number[] }> {
     const started = performance.now();
     const directory = join(options.directory, spec.id, `attempt-${options.attempt}`);
     await mkdir(directory, { recursive: true });
@@ -145,6 +145,10 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
     const log = (line: string) => options.log(redact.text(line));
     let screenshotsWithheld = Object.keys(secrets).length > 0;
     let traceWithheld = false;
+    /** Cleanup closes every page; those closes are not the app closing a tab. */
+    let closing = false;
+    /** A step screenshot skipped because the page showed a secret declared elsewhere in the run. */
+    let secretShown = false;
     const models: Models | undefined = options.models ? createModels(options.models, options.runBudget, redact) : undefined;
     const timeout = AbortSignal.timeout(spec.timeoutMs ?? 240_000);
     const signal = AbortSignal.any([options.signal, timeout]);
@@ -154,6 +158,8 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
     const secretKeys = new Set(Object.keys(secrets));
     const viewport = options.viewport ?? { width: 1280, height: 900 };
     const newRecording: StepRecording[] = [];
+    /** Step index of each `newRecording` entry; unrecorded steps would otherwise shift positions. */
+    const recordedSteps: number[] = [];
     const pendingEnds: Array<{ entry: StepRecording; index: number; end: NonNullable<StepRecording['end']> }> = [];
     const deterministicChecks: number[] = [];
     const counts = { total: 0, replayed: 0, healed: 0, ai: 0 };
@@ -169,11 +175,13 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
     const context = await newTestContext(options.browser, { viewport, device: options.device, acceptDownloads, onDownload: downloads.receive, baseURL: options.origin, locale: options.locale, timezone: options.timezone, dialogs: spec.dialogs ?? 'accept', onDialog: detail => events.push(`dialog ${detail}`) });
     cleanups.push(async () => context.close());
     const monitor = createMonitor(context, { redact, origin: options.origin, allowedOrigins: options.allowedOrigins, expectedHttp: spec.expectedHttp, ignoreConsole: spec.ignoreConsole, i18nKeys: options.translationKeys, expectedAborts: spec.expectedAborts });
-    await context.tracing.start({ screenshots: !secretKeys.size, snapshots: true, title: spec.id }).catch(() => undefined);
+    // Another test's secret can appear on this page too, and trace frames cannot be redacted afterwards.
+    await context.tracing.start({ screenshots: !redact.active, snapshots: true, title: spec.id }).catch(() => undefined);
     const openedPages: Page[] = [];
     context.on('page', (opened) => {
         openedPages.push(opened);
         opened.on('close', () => {
+            if (closing) { return; }
             events.push('tab closed');
             if (page === opened) { page = openedPages.findLast(candidate => !candidate.isClosed()); }
         });
@@ -234,8 +242,10 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
         }
         if (options.dryRun) {
             const observation = await observe(page, { redact });
-            await writeArtifact(join(directory, 'start-observation.json'), observation, redact);
-            await page.screenshot({ path: join(directory, 'start.jpg'), type: 'jpeg', quality: 60 }).catch(() => undefined);
+            // The signature hashes raw page content; beside redacted text it would allow guessing a short secret.
+            const { signature, ...withoutSignature } = observation;
+            await writeArtifact(join(directory, 'start-observation.json'), redact.active ? withoutSignature : { ...withoutSignature, signature }, redact);
+            if (!screenshotsWithheld && !await showsSecret(page, redact)) { await page.screenshot({ path: join(directory, 'start.jpg'), type: 'jpeg', quality: 60 }).catch(() => undefined); }
             summary = `Dry run: fixture, start page and ${spec.invariants?.length ?? 0} invariant(s) OK; ${definition.length} steps not run`;
             throw new DryRunComplete();
         }
@@ -288,7 +298,8 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
             const busy = [...new Set(monitor.settleCaps.filter(cap => cap.step === index).map(cap => cap.reason))];
             if (busy.length) { result.busy = busy.slice(0, 5); }
             result.durationMs = Math.round(performance.now() - stepStarted);
-            result.screenshot = screenshotsWithheld ? undefined : await screenshot(page, directory, index);
+            result.screenshot = screenshotsWithheld || await showsSecret(page, redact) ? undefined : await screenshot(page, directory, index);
+            if (!result.screenshot && !screenshotsWithheld && redact.active) { secretShown = true; }
             steps.push(result);
             if (result.status === 'passed' && (step.kind === 'verify' || (step.kind === 'act' && (step.expect?.write || step.expect?.url || step.expect?.download)))) { deterministicChecks.push(index); }
             log(`     ${STEP_MARK[result.status]} ${result.source ? `[${result.source}] ` : ''}${result.durationMs}ms${result.error ? ` — ${result.error}` : ''}`);
@@ -359,9 +370,10 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
         await context.tracing.stop({ path: trace }).catch(async () => {
             await rm(trace!, { force: true });
             trace = undefined;
-            if (secretKeys.size) { traceWithheld = true; }
+            if (redact.active) { traceWithheld = true; }
         });
-        if (trace && secretKeys.size && !await redactTrace(trace, redact)) { trace = undefined; traceWithheld = true; }
+        if (trace && redact.active && !await redactTrace(trace, redact)) { trace = undefined; traceWithheld = true; }
+        closing = true;
         for (const cleanup of cleanups.reverse()) {
             await Promise.race([Promise.resolve().then(cleanup), new Promise(resolve => setTimeout(resolve, 5000))]).catch((error: unknown) => events.push(`cleanup failed: ${message(error)}`));
         }
@@ -403,11 +415,11 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
         directory,
         ...(trace ? { trace } : {}),
         events,
-        ...(screenshotsWithheld ? { screenshotsWithheld: true } : {}),
+        ...(screenshotsWithheld || secretShown ? { screenshotsWithheld: true } : {}),
         ...(traceWithheld ? { traceWithheld: true } : {}),
     };
     await writeArtifact(join(directory, 'result.json'), result, forResults(redact));
-    return { result, ...(status === 'passed' && counts.total ? { recording: newRecording } : {}) };
+    return { result, ...(status === 'passed' && counts.total ? { recording: newRecording, recordedSteps } : {}) };
 
     async function runStep(step: Step<F>, index: number, result: StepResult, previousLabel: string | undefined): Promise<void> {
         switch (step.kind) {
@@ -416,7 +428,7 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
                 const stepValues = Object.fromEntries(keys.filter(key => Object.hasOwn(values, key)).map(key => [key, values[key]!]));
                 const key = stepKey(step);
                 const recorded = options.fresh ? undefined : options.recording?.steps.find(entry => entry.key === key);
-                if (!models && !recorded?.actions.length) {
+                if (!models && recorded === undefined) {
                     // Replay has no model to fall back on. A new test, or a step reworded since it was recorded.
                     result.status = 'failed';
                     result.failure = 'not-recorded';
@@ -468,7 +480,14 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
                     if (outcome.recordedEnd !== undefined) {
                         if (outcome.source === 'replay' && recorded?.end === undefined) { pendingEnds.push({ entry, index, end: outcome.recordedEnd }); } else { entry.end = outcome.recordedEnd; }
                     }
-                    if (redact.contains(JSON.stringify(entry))) { result.notRecorded = 'not recorded: target text contains a secret'; } else { newRecording.push(entry); }
+                    if (outcome.discardRecording) {
+                        result.notRecorded = 'not recorded: the replayed path missed its end state; the next auto run grounds the step from its start';
+                    } else if (redact.contains(JSON.stringify(entry))) {
+                        result.notRecorded = 'not recorded: target text contains a secret';
+                    } else {
+                        newRecording.push(entry);
+                        recordedSteps.push(index);
+                    }
                 }
                 if (outcome.rounds.some(round => (round.anomaly ?? 0) >= 0.8)) {
                     monitor.report({ kind: 'semantic', severity: 'low', message: `Jev flagged broken-looking content on ${shortUrl(page!.url())}` });
@@ -597,6 +616,14 @@ async function evaluateCheck(check: () => MaybePromise<CheckOutcome>): Promise<{
 
 function normalize(outcome: CheckOutcome): { passed: boolean; evidence?: unknown } {
     return typeof outcome === 'boolean' ? { passed: outcome } : outcome;
+}
+
+/** Pixels cannot be redacted: skip a screenshot whenever the visible text or a field value shows a declared secret. */
+async function showsSecret(page: Page, redact: Redactor): Promise<boolean> {
+    if (!redact.active) { return false; }
+    // eslint-disable-next-line unicorn/prefer-dom-node-text-content -- only rendered text reaches the pixels
+    const shown = await page.evaluate(() => [document.body?.innerText ?? '', ...[...document.querySelectorAll('input, textarea')].map(field => (field as HTMLInputElement).value)].join('\n')).catch(() => undefined);
+    return shown === undefined || redact.contains(shown);
 }
 
 async function screenshot(page: Page, directory: string, index: number): Promise<string | undefined> {

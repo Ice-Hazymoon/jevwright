@@ -168,16 +168,21 @@ export function createRecordingStore(directory: string | undefined) {
 }
 export type RecordingStore = ReturnType<typeof createRecordingStore>;
 
-/** Compare the replay recipe, not timestamps or observed end states. */
+/** Positions (0-based) of steps whose recorded recipe changed; a step with no previous entry is new, not rerouted. */
 export function changedActionSteps(previous: TestRecording | undefined, steps: StepRecording[]): number[] {
     return steps.flatMap((step, index) => {
         const old = previous?.steps.find(entry => entry.key === step.key);
-        return old && actionSignature(old.actions) === actionSignature(step.actions) ? [] : [index + 1];
+        return old && actionSignature(old.actions) !== actionSignature(step.actions) ? [index] : [];
     });
 }
 
+/** Compare the replay recipe, not timestamps; new, dropped and backfilled steps all count. */
 export function learnedRecording(previous: TestRecording | undefined, steps: StepRecording[]): boolean {
-    return changedActionSteps(previous, steps).length > 0 || steps.some(step => step.end !== undefined && previous?.steps.find(entry => entry.key === step.key)?.end === undefined);
+    const keys = new Set(steps.map(step => step.key));
+    return changedActionSteps(previous, steps).length > 0
+        || steps.some(step => !previous?.steps.some(entry => entry.key === step.key))
+        || (previous?.steps.some(entry => !keys.has(entry.key)) ?? false)
+        || steps.some(step => step.end !== undefined && previous?.steps.find(entry => entry.key === step.key)?.end === undefined);
 }
 
 function actionSignature(actions: RecordedAction[]): string {

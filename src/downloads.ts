@@ -12,6 +12,7 @@ export function createDownloads(directory: string, signal: AbortSignal, redact?:
     const errors = new Map<number, string>();
     const pending = new Set<Promise<void>>();
     const active = new Set<Download>();
+    const inFlight = new Map<number, number>();
     let step = -1;
     let expected: Expectation['download'];
     let sequence = 0;
@@ -28,6 +29,7 @@ export function createDownloads(directory: string, signal: AbortSignal, redact?:
             const number = ++sequence;
             const filename = download.suggestedFilename();
             active.add(download);
+            inFlight.set(index, (inFlight.get(index) ?? 0) + 1);
             const timer = setTimeout(() => { errors.set(index, 'Download did not finish within 30 seconds'); void download.cancel().catch(() => undefined); }, 30_000);
             const job = (async () => {
                 const folder = join(directory, 'downloads');
@@ -43,11 +45,13 @@ export function createDownloads(directory: string, signal: AbortSignal, redact?:
                     records.push(record);
                     byStep.set(index, [...(byStep.get(index) ?? []), record]);
                 } catch (error) {
-                    errors.set(index, error instanceof Error ? error.message : 'Download failed');
+                    // A timeout cancels the transfer; keep its reason instead of Playwright's generic cancel error.
+                    if (!errors.has(index)) { errors.set(index, error instanceof Error ? error.message : 'Download failed'); }
                     await rm(path, { force: true });
                 } finally {
                     clearTimeout(timer);
                     active.delete(download);
+                    inFlight.set(index, inFlight.get(index)! - 1);
                 }
             })();
             pending.add(job);
@@ -59,16 +63,21 @@ export function createDownloads(directory: string, signal: AbortSignal, redact?:
             const downloaded = byStep.get(step) ?? [];
             const pattern = expected?.filename;
             const matched = downloaded.some((record) => { if (!pattern) { return true; } pattern.lastIndex = 0; return pattern.test(record.filename); });
-            return matched ? { ok: true } : { ok: false, reason: pattern ? `No download matched ${String(pattern)}` : 'No download completed during this step' };
+            if (matched) { return { ok: true }; }
+            // Bounded by the 30 s transfer timer, so waiting on it cannot hang the step.
+            if (inFlight.get(step)) { return { ok: false, pending: true, reason: 'A download is still in progress' }; }
+            return { ok: false, reason: pattern ? `No download matched ${String(pattern)}` : 'No download completed during this step' };
         },
-        async flush() { await Promise.all(pending); },
+        /** Downloads can start while earlier ones are awaited; loop until none are left. */
+        async flush() { while (pending.size) { await Promise.all(pending); } },
         async close() {
             closing = true;
             signal.removeEventListener('abort', cancel); cancel(); await Promise.all(pending);
             if (redact?.active) {
                 for (const record of records) {
                     let withhold = true;
-                    try { withhold = redact.contains((await readFile(record.path)).toString('utf8')); } catch { /* Unreadable files cannot be verified safe. */ }
+                    // Only valid UTF-8 text can be checked; compressed or UTF-16 files could hide the secret.
+                    try { withhold = redact.contains(new TextDecoder('utf-8', { fatal: true }).decode(await readFile(record.path))); } catch { /* Unreadable or binary files cannot be verified safe. */ }
                     if (withhold) { await rm(record.path, { force: true }); record.withheld = true; }
                 }
             }

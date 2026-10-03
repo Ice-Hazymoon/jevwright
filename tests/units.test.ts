@@ -719,6 +719,12 @@ describe('cI reports', () => {
             await writeFile(join(running, 'run.json'), JSON.stringify({ startedAt: '2026-01-02T00:00:00.000Z' }));
             await writeFile(join(running, 'summary.json'), JSON.stringify({ manifest: {}, results: [{ id: 'still-running', status: 'failed' }] }));
             expect([...await lastFailedIds(directory)]).toEqual(['failed-case', 'flaky-case']);
+            const interrupted = join(directory, 'interrupted');
+            await mkdir(interrupted);
+            const cancelled = { finishedAt: '2026-01-03T00:00:00.000Z', cancelled: true };
+            await writeFile(join(interrupted, 'run.json'), JSON.stringify(cancelled));
+            await writeFile(join(interrupted, 'summary.json'), JSON.stringify({ manifest: cancelled, results: [{ id: 'unstarted', status: 'skipped' }] }));
+            expect([...await lastFailedIds(directory)]).toEqual(['failed-case', 'flaky-case']);
         } finally { await rm(directory, { recursive: true, force: true }); }
     });
 
@@ -807,6 +813,11 @@ it('guards the redacted artifact boundary and its narrowly scoped filesystem own
     expect(files.flatMap(name => scan(name, readFileSync(join(ROOT, 'src', name), 'utf8')))).toEqual([]);
 });
 
+it('keeps the configured viewport for an explicit desktop device', async () => {
+    const { resolveDevice } = await import('../src/devices.ts');
+    expect(resolveDevice('desktop', { width: 1440, height: 900 }).viewport).toEqual({ width: 1440, height: 900 });
+});
+
 describe('paired calibration', () => {
     it('detects repeated correctness regressions even when aggregate metrics improve', async () => {
         const { comparePairs } = await import('../scripts/calibration-stats.ts');
@@ -826,6 +837,36 @@ describe('paired calibration', () => {
         expect(result.intervals.jev).toEqual({ mean: 0, low: 0, high: 0, relativeLow: 0, relativeHigh: 0 });
         expect(applicableTests([{ id: 'old' }, { id: 'upload', requiredApis: ['file'] }], {})).toEqual({ supported: [{ id: 'old' }], unsupported: [{ id: 'upload', missing: ['file'] }] });
     });
+
+    it('stops once each metric is either within noise or clearly changed', async () => {
+        const { comparePairs } = await import('../scripts/calibration-stats.ts');
+        const baseline = { matched: { save: true }, metrics: { jev: 10, llm: 0, cost: 0.1, duration: 100, healed: 0, rerouted: 0 } };
+        const candidate = { matched: { save: true }, metrics: { ...baseline.metrics, jev: 6 } };
+        expect(comparePairs(Array.from({ length: 6 }, () => ({ baseline, candidate }))).resolved).toBe(true);
+    });
+});
+
+it('calibration removes a baseline registered through a symlinked parent', async () => {
+    const { execFile } = await import('node:child_process');
+    const { promisify } = await import('node:util');
+    const { symlink, realpath } = await import('node:fs/promises');
+    const { removeOwnedWorktree } = await import('../scripts/calibration-ab.ts');
+    const root = await realpath(await mkdtemp(join(tmpdir(), 'jevwright-link-')));
+    const link = `${root}-link`;
+    const git = (...args: string[]) => promisify(execFile)('git', args, { cwd: root });
+    try {
+        await git('init');
+        await git('-c', 'user.name=Probe', '-c', 'user.email=probe@example.invalid', 'commit', '--allow-empty', '-m', 'probe');
+        await symlink(root, link);
+        const baseline = join(link, 'baseline');
+        await git('worktree', 'add', '--detach', baseline, 'HEAD');
+        expect((await git('worktree', 'list', '--porcelain')).stdout).toContain(join(root, 'baseline'));
+        await removeOwnedWorktree(root, baseline);
+        expect((await git('worktree', 'list', '--porcelain')).stdout).not.toContain(join(root, 'baseline'));
+    } finally {
+        await rm(link, { force: true });
+        await rm(root, { recursive: true, force: true });
+    }
 });
 
 it('calibration removes a registered baseline after a failing checkout hook', async () => {

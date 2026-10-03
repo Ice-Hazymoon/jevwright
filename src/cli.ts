@@ -355,7 +355,7 @@ async function reportCommand(directory: string | undefined, io: CliIO): Promise<
     const dir = resolve(io.cwd, directory);
     const summary = await loadSummary(dir).catch(() => { throw new JevwrightError(`${directory} has no readable summary.json`); });
     await writeReports(summary, undefined, dir);
-    io.stdout(`${relative(io.cwd, join(dir, 'report.md'))}\n${relative(io.cwd, join(dir, 'report.html'))}\n`);
+    io.stdout(`${relative(io.cwd, join(dir, 'report.md'))}\n${relative(io.cwd, join(dir, 'report.html'))}\n${relative(io.cwd, join(dir, 'junit.xml'))}\n`);
     return 0;
 }
 
@@ -447,7 +447,7 @@ async function selectedTests(loaded: LoadedConfig, flags: Flags) {
 export function runFailureExitCode(summary: RunSummary, standalone = true): number {
     const failed = summary.results.filter(result => result.status === 'failed');
     if (!failed.length) { return 0; }
-    return standalone && summary.manifest.mode === 'replay' && !summary.results.some(result => result.attempts.some(attempt => attempt.steps.some(step => step.endMismatch))) && failed.every(result => result.attempts.length > 0 && result.attempts.every(attempt => attempt.steps.some(step => step.failure === 'not-recorded') && attempt.steps.filter(step => step.status === 'failed').every(step => step.failure === 'not-recorded')))
+    return standalone && summary.manifest.mode === 'replay' && !failed.some(result => result.attempts.some(attempt => attempt.steps.some(step => step.endMismatch))) && failed.every(result => result.attempts.length > 0 && result.attempts.every(attempt => attempt.steps.some(step => step.failure === 'not-recorded') && attempt.steps.filter(step => step.status === 'failed').every(step => step.failure === 'not-recorded')))
         ? 4
         : 1;
 }

@@ -56,6 +56,8 @@ export interface RunManifest {
     engine: string;
     startedAt: string;
     finishedAt?: string;
+    /** Interrupted: its unstarted tests are skipped, so it says nothing about which tests fail. */
+    cancelled?: true;
     git: { sha: string; dirty: boolean } | null;
     mode: RunMode;
     /** Fixtures, start pages and initial invariants only. */
@@ -209,6 +211,7 @@ export async function runSuite(specs: ReadonlyArray<TestSpec<unknown>>, options:
     } finally {
         await close();
         manifest.finishedAt = new Date().toISOString();
+        if (signal.aborted) { manifest.cancelled = true; }
         if (blocked.length) { manifest.blockedRequests = [...new Set(blocked)].slice(0, 50); }
         await writeArtifact(join(directory, 'run.json'), manifest, forResults(redact));
         await publish();
@@ -244,10 +247,7 @@ export async function runSuite(specs: ReadonlyArray<TestSpec<unknown>>, options:
             const fresh = mode === 'ai' || (canFresh && affordable);
             if (fresh && mode === 'auto') { freshUsed = true; }
             const { result, saved, changed } = await runAttempt(spec, recording, attempt, fresh);
-            if (fresh && mode === 'auto' && result.status === 'passed' && changed.length) {
-                const acts = result.steps.filter(step => step.kind === 'act');
-                rerouted = { steps: changed.map(index => acts[index - 1]!.index + 1) };
-            }
+            if (fresh && mode === 'auto' && result.status === 'passed' && changed.length) { rerouted = { steps: changed.map(index => index + 1) }; }
             attempts.push(result);
             recordingUpdated ||= saved;
             if (isFinalAttempt(result, spec, runBudget)) { break; }
@@ -263,7 +263,7 @@ export async function runSuite(specs: ReadonlyArray<TestSpec<unknown>>, options:
     /** One logged attempt; whatever it learned (AI or healed steps) is saved to the recording. */
     async function runAttempt(spec: TestSpec<unknown>, recording: TestRecording | undefined, attempt: number, fresh: boolean): Promise<{ result: AttemptResult; saved: boolean; changed: number[] }> {
         log(`▶ ${spec.id}${attempt > 1 ? ` (attempt ${attempt})` : ''}`);
-        const { result, recording: steps } = await runTestAttempt(spec, {
+        const { result, recording: steps, recordedSteps } = await runTestAttempt(spec, {
             browser,
             redact,
             origin,
@@ -289,7 +289,8 @@ export async function runSuite(specs: ReadonlyArray<TestSpec<unknown>>, options:
             log: line => log(`[${spec.id}] ${line}`),
         });
         log(`${result.status === 'passed' ? '✓' : '✗'} ${spec.id} ${result.status}${result.cause ? ` (${result.cause})` : ''} ${(result.durationMs / 1000).toFixed(1)}s — ${result.summary}`);
-        const changed = steps ? changedActionSteps(recording, steps) : [];
+        // Step indices, not recording positions: unrecorded steps leave gaps in the recording.
+        const changed = steps ? changedActionSteps(recording, steps).map(position => recordedSteps![position]!) : [];
         const learned = steps && (learnedRecording(recording, steps) || recording?.steps.some(entry => redact.contains(JSON.stringify(entry))));
         const keep = options.updateRecordings ?? mode !== 'replay';
         if (!steps || !learned || options.dryRun || !keep || !store.enabled) { return { result, saved: false, changed }; }

@@ -74,14 +74,18 @@ describe('action coverage', () => {
         const cancelled: TestSpec = { ...base, id: 'cancel', start: '/downloads', steps: () => [run('download without expectation', async ({ page }) => { const download = page.waitForEvent('download'); await page.getByRole('button', { name: 'Export CSV' }).click(); expect(await (await download).failure()).not.toBeNull(); }), verify('no saved downloads', ({ downloads }) => downloads.length === 0)] };
         expect((await runSuite([cancelled], { ...options(), mode: 'replay' })).results[0]?.status).toBe('passed');
         const popup: TestSpec = { ...base, id: 'popup', start: '/popup-parent', steps: () => [act('Open child'), act('Close child'), act('Save parent'), verify('parent saved', async ({ page }) => (await page.locator('#status').textContent()) === 'Parent saved')] };
+        const seen = new Set<string>();
         const models = scriptedModels((view) => {
+            for (const entry of view.history) { if (entry.event) { seen.add(entry.event); } }
             if (view.step === 'Open child') { return view.url.includes('popup-child') ? { done: 0.95 } : { tool: 'click', target: is('button', 'Open child') }; }
             if (view.step === 'Close child') { return view.url.includes('popup-parent') ? { done: 0.95 } : { tool: 'click', target: is('button', 'Close child') }; }
             return view.text.includes('Parent saved') ? { done: 0.95 } : { tool: 'click', target: is('button', 'Save parent') };
         });
         const summary = await runSuite([popup], { ...options(), models: models.settings });
         expect(summary.results[0]?.status, summary.results[0]?.summary).toBe('passed');
-        expect(summary.results[0]?.attempts[0]?.events).toContain('tab closed');
+        // The engine hands the app's close to the model; cleanup closing the last page is not another event.
+        expect(seen).toContain('tab closed');
+        expect(summary.results[0]!.attempts[0]!.events).not.toContain('tab closed');
     });
 });
 

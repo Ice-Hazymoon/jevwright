@@ -407,8 +407,9 @@ function clipValue(text: string, max: number): string {
 }
 
 function clipProtected(text: string, max: number, redact?: Redactor): string {
-    if (redact?.contains(text)) { return text; }
     const value = clean(text);
+    // Folding whitespace can join a secret's parts; never clip through either form.
+    if (redact?.contains(text) || redact?.contains(value)) { return value; }
     return value.length > max ? `${value.slice(0, max - 1)}…` : value;
 }
 

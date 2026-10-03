@@ -99,6 +99,7 @@ document.getElementById('echo').onclick = () => { document.getElementById('help'
             return layout('Recorded effects', `<table><tbody>${entries.map(entry => `<tr><td>Entry ${entry.date}</td><td><button data-name="${entry.name}">Choose</button></td></tr>`).join('')}</tbody></table><h2 id="choice">No selection</h2>`, `
 for (const button of document.querySelectorAll('button[data-name]')) button.addEventListener('click', () => {
   ${bug === 'no-effect' ? 'return;' : 'document.getElementById(\'choice\').textContent = button.dataset.name + \' chosen\';'}
+  ${url.searchParams.has('confirm') && bug !== 'no-effect' ? 'const c = document.createElement(\'button\'); c.textContent = \'Confirm choice\'; c.addEventListener(\'click\', () => { document.getElementById(\'choice\').textContent += \' and confirmed\'; }); document.body.append(c);' : ''}
 });`);
         }
         case '/profile':

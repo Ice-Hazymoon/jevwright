@@ -39,7 +39,7 @@ export function comparePairs(pairs: readonly Pair[]) {
         const relative = (value: number) => baseline === 0 ? value === 0 ? 0 : Math.sign(value) * Infinity : value / baseline;
         return [name, { mean: differences.reduce((a, b) => a + b, 0) / differences.length, low, high, relativeLow: relative(low), relativeHigh: relative(high) }];
     })) as Record<typeof metricNames[number], Interval>;
-    const withinNoise = Object.values(intervals).every(interval => interval.relativeLow >= -0.05 && interval.relativeHigh <= 0.05);
-    const excludesZero = Object.values(intervals).every(interval => interval.low > 0 || interval.high < 0);
-    return { flips, regression, intervals, resolved: pairs.length >= 6 && !regression && (withinNoise || excludesZero) };
+    // Each metric settles on its own: a call reduction with unchanged cost must still stop early.
+    const settled = Object.values(intervals).every(interval => (interval.relativeLow >= -0.05 && interval.relativeHigh <= 0.05) || interval.low > 0 || interval.high < 0);
+    return { flips, regression, intervals, resolved: pairs.length >= 6 && !regression && settled };
 }
