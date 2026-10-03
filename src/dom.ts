@@ -89,8 +89,9 @@ export async function readSurface(page: Page | Frame, scope?: ElementHandle<Elem
             const css = styleOf(element); const parent = parentOf(element);
             const physical = element.parentElement;
             const replaced = Boolean(physical && (shadows.has(physical) || slots.get(physical)?.length) && !slotParents.has(element));
+            const folded = parent instanceof HTMLDetailsElement && !parent.open && element !== [...parent.children].find(child => child.tagName === 'SUMMARY');
             const clipped = /hidden|clip/.test(css.overflow) && css.display !== 'contents' && (boxOf(element).width <= 1 || boxOf(element).height <= 1);
-            const value = replaced || element.hasAttribute('hidden') || css.display === 'none' || css.opacity === '0' || clipped || Boolean(parent && hiddenTree(parent));
+            const value = folded || replaced || element.hasAttribute('hidden') || css.display === 'none' || css.opacity === '0' || clipped || Boolean(parent && hiddenTree(parent));
             hidden.set(element, value); return value;
         };
         const inertTree = (element: Element): boolean => {

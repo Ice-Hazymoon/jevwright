@@ -1340,6 +1340,56 @@ it('uses stable control identity when its nearby count changes between required 
 
 
 describe('hardening instruction and evidence boundaries', () => {
+    it('describes page key input that can advance across segmented fields', async () => {
+        const spec: TestSpec<void> = { id: 'segmented-input-history', title: 'Enter a sequence across fields', risk: 'The starting field is mistaken for the entire input destination', start: '/attribution-segments', steps: () => [act('Enter the six-digit access sequence displayed on the page across the segmented inputs and verify access'), verify('access granted', async ({ page }) => (await page.locator('output').textContent()) === 'Access granted')] };
+        const result = (await suite([spec], { mode: 'ai', policy: view => view.text.includes('Access granted') ? view.history.some(entry => entry.input_method?.includes('focus')) ? { done: 0.98 } : { done: 0.59, achieved: 0.35, remaining: 0.74, tool: 'none' } : fixturePolicy(view), helper: () => ({ outcome: 'step_already_done', tool: null, element: null, value_key: null, text: null, reason: 'The input was completed' }) }).run).results[0]!;
+        expect(result.status, result.summary).toBe('passed');
+    });
+    it('reviews a completed activation before repeating it to fix product content', async () => {
+        const spec: TestSpec<void> = { id: 'completed-removal-action', title: 'Remove an entry once', risk: 'Repeating a completed action hides a retained record', start: '/attribution-retained-entry', steps: () => [act('Remove the Retired entry'), check('The removed entry is absent from the directory')] };
+        const result = (await suite([spec], { mode: 'ai', policy: view => view.claim ? { holds: 0.02, support: 'contradicts', region: 'open' } : fixturePolicy(view), helper: () => ({ outcome: 'step_already_done', tool: null, element: null, value_key: null, text: null, reason: 'The Remove activation was performed' }) }).run).results[0]!;
+        expect(result.cause, result.summary).toBe('product');
+        expect(result.attempts[0]!.steps[0]!.actions).toHaveLength(1);
+    });
+    it('rechecks loading content before attributing an absent record to the product', async () => {
+        const spec: TestSpec<void> = { id: 'resolved-region', title: 'Load delivery records', risk: 'A transient missing record is called a defect', start: '/attribution-regions?region=loading&resolve=1', steps: () => [check('The delivery records show Record ZX-71')] };
+        const result = (await suite([spec], { mode: 'ai', policy: view => ({ holds: view.text.includes('Record ZX-71') ? 0.98 : 0.02, support: view.text.includes('Record ZX-71') ? 'supports' : 'not_shown', region: 'open' }) }).run).results[0]!;
+        expect(result.status, result.summary).toBe('passed');
+        expect(result.attempts[0]!.steps[0]!.evidence).toMatchObject({ verdicts: expect.arrayContaining([expect.objectContaining({ passed: false }), expect.objectContaining({ passed: true })]) });
+    });
+    it.each(['closed', 'unknown'])('keeps uncertain location evidence away from product attribution (%s)', async region => {
+        const spec: TestSpec<void> = { id: 'uncertain-region-' + region, title: 'Locate delivery records', risk: 'A guessed region becomes product evidence', start: '/attribution-regions?region=unselected', steps: () => [check('The delivery records show Record ZX-71')] };
+        const result = (await suite([spec], { mode: 'ai', policy: () => ({ holds: 0.02, support: 'not_shown', region: 'unknown' }), helper: () => ({ verdict: 'not_shown', region, reason: 'The content location is not established' }) }).run).results[0]!;
+        expect(result.cause, result.summary).toBe('agent');
+    });
+    it.each(['loading', 'empty', 'collapsed', 'unselected'])('attributes absent content from its relevant region (%s)', async region => {
+        const open = region === 'loading' || region === 'empty';
+        const spec: TestSpec<void> = { id: 'region-' + region, title: 'Inspect delivery records', risk: 'Absent content is charged to the wrong actor', start: '/attribution-regions?region=' + region, steps: () => [check('The delivery records show Record ZX-71')] };
+        const result = (await suite([spec], { mode: 'ai', policy: () => ({ holds: 0.02, support: 'not_shown', region: open ? 'open' : 'closed' }), helper: () => ({ verdict: 'not_shown', region: open ? 'open' : 'closed', reason: 'The requested record is absent' }) }).run).results[0]!;
+        expect(result.cause, result.summary).toBe(open ? 'product' : 'agent');
+        expect(result.attempts[0]!.steps[0]!.evidence).toMatchObject({ verdicts: expect.arrayContaining([expect.objectContaining({ region: open ? 'open' : 'closed' })]) });
+        if (!open) { expect(result.summary).toMatch(/relevant region is not open/i); }
+    });
+    it('grounds a requested page sequence before spending helpers on individual segments', async () => {
+        const spec: TestSpec<void> = { id: 'segmented-page-sequence', title: 'Enter an observed sequence', risk: 'Per-character helper calls exhaust the step budget', start: '/attribution-segments', steps: () => [act('Enter the six-digit access sequence displayed on the page across the segmented inputs and verify access'), verify('challenge accepted', async ({ page }) => (await page.locator('output').textContent()) === 'Access granted')] };
+        const test = suite([spec], { mode: 'ai', helper: view => ({ outcome: 'act', tool: 'type', element: view.elements.find(element => element.name === 'Segment ' + (view.history.filter(entry => entry.action === 'type').length + 1))!.i, text: '681942'[view.history.filter(entry => entry.action === 'type').length], value_key: null, reason: 'Enter the next displayed character' }) });
+        const result = (await test.run).results[0]!;
+        expect(result.status, result.summary).toBe('passed');
+        expect(result.models.llmCalls).toBe(0);
+        expect(result.attempts[0]!.steps[0]!.actions).toHaveLength(1);
+    });
+    it('lets completed selection reach an independent check of the broken result', async () => {
+        const spec: TestSpec<void> = { id: 'sorted-amounts', title: 'Order amounts', risk: 'The action stage hides a product defect', start: '/attribution-sort', steps: () => [act('Sort the entries by amount ascending'), check('The entry amounts are ascending')] };
+        const result = (await suite([spec], { mode: 'ai', policy: view => view.claim ? { holds: 0.02, support: 'contradicts', region: 'open' } : fixturePolicy(view), helper: () => ({ outcome: 'step_already_done', tool: null, element: null, value_key: null, text: null, reason: 'The requested selection was made' }) }).run).results[0]!;
+        expect(result.cause, result.summary).toBe('product');
+        expect(result.attempts[0]!.steps[0]!.actions?.map(action => action.tool)).toEqual(['select']);
+        expect(result.attempts[0]!.steps[1]!.failure).toBe('assertion');
+    });
+    it('binds a removed-item claim to the actual earlier action rather than a toast', async () => {
+        const spec: TestSpec<void> = { id: 'retained-entry', title: 'Remove a directory entry', risk: 'A confirmation hides a retained record', start: '/attribution-retained-entry', steps: () => [act('Remove the Retired entry'), check('The removed entry is absent from the directory')] };
+        const result = (await suite([spec], { mode: 'ai', policy: view => view.claim ? view.priorActions.some(step => step.history.some(action => action.element?.includes('Retired entry'))) ? { holds: 0.02, support: 'contradicts', region: 'open' } : { holds: 0.3, support: 'not_shown', region: 'unknown' } : view.history.some(entry => entry.action === 'click') ? { done: 0.98 } : { tool: 'click', target: element => element.name === 'Remove' }, helper: () => ({ verdict: 'true', reason: 'Removal requested proves the record is absent' }) }).run).results[0]!;
+        expect(result.cause, result.summary).toBe('product');
+    });
     it.each(['jev', 'helper'])('separates actual page input from its human provenance label (%s)', async (source) => {
         const spec: TestSpec<void> = { id: 'page-history-' + source, title: 'Enter observed token', risk: 'A provenance prefix is mistaken for actual field input', start: '/hardening-page-history?token=HS-4127', steps: () => [act('Read the token from the page and enter it in Code'), verify('exact token', async ({ page }) => (await page.getByRole('textbox', { name: 'Code', exact: true }).inputValue()) === 'HS-4127')] };
         const test = suite([spec], { mode: 'ai', policy: view => {

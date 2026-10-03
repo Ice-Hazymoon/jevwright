@@ -1030,6 +1030,13 @@ it('integration keeps noninteractive ARIA table cells out of the DOM supplement'
 
 
 describe('hardening surfaces', () => {
+    it('excludes native folded detail contents from text and control content', async () => {
+        const { observation } = await open('/attribution-regions?region=collapsed', async page => {
+            await page.locator('details').evaluate(element => { element.setAttribute('open', ''); element.querySelector('section')!.getBoundingClientRect(); element.removeAttribute('open'); });
+        });
+        expect(observation.text).not.toContain('Record ZX-71');
+        expect(observation.elements.some(element => element.content?.includes('Record ZX-71'))).toBe(false);
+    });
     it('retains visible content restored inside a visibility-hidden ancestor', async () => {
         const { observation } = await open('/hardening-visibility');
         expect(named(observation, 'button', 'Preview')[0]).toMatchObject({ content: 'Visible inner draft' });

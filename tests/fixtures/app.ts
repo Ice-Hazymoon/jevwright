@@ -57,6 +57,17 @@ function escapeHtml(text: string): string {
 function pages(state: FixtureState, url: URL): string | undefined {
     const bug = url.searchParams.get('bug');
     switch (url.pathname) {
+        case '/attribution-regions': {
+            const region = url.searchParams.get('region') ?? 'loading';
+            const content = '<section aria-label="Delivery records"><p>' + (region === 'loading' ? 'Fetching records…' : region === 'empty' ? 'Nothing has arrived' : 'Record ZX-71') + '</p></section>';
+            return layout('Dispatch workspace', region === 'collapsed' ? '<details><summary>Delivery records</summary>' + content + '</details>' : region === 'unselected' ? '<div role="tablist"><button role="tab" aria-selected="true">Overview</button><button role="tab" aria-selected="false">Delivery records</button></div><section aria-label="Overview">Welcome</section><div hidden>' + content + '</div>' : content, url.searchParams.has('resolve') ? `setTimeout(() => document.querySelector('section p').textContent = 'Record ZX-71', 1200);` : '');
+        }
+        case '/attribution-segments':
+            return layout('Access challenge', '<p>Access sequence: 681942</p><div>' + Array.from({ length: 6 }, (_, i) => '<input aria-label="Segment ' + (i + 1) + '" maxlength="1" autocomplete="one-time-code">').join('') + '</div><output id="result"></output>', `const fields = [...document.querySelectorAll('input')]; fields.forEach((field, i) => field.oninput = () => { if (field.value && i < fields.length - 1) fields[i + 1].focus(); if (fields.map(f => f.value).join('') === '681942') { document.getElementById('result').textContent = 'Access granted'; fields.forEach(f => f.remove()); } });`);
+        case '/attribution-sort':
+            return layout('Entry amounts', '<label>Ordering<select><option>Original</option><option>Amount ascending</option></select></label><section aria-label="Entries"><p>Amber: 40</p><p>Cedar: 10</p><p>Birch: 25</p></section>');
+        case '/attribution-retained-entry':
+            return layout('Entry directory', '<ul><li><span>Retired entry</span><button>Remove</button></li><li><span>Current entry</span></li></ul><output></output>', `document.querySelector('button').onclick = () => document.querySelector('output').textContent = 'Removal requested';`);
         case '/hardening-visibility':
             return layout('Visibility overrides', '<section style="visibility:hidden"><button style="visibility:visible" aria-label="Preview"><span>Visible inner draft</span></button><p>Hidden branch</p></section><div style="visibility:collapse">Collapsed branch</div><p style="opacity:0">Transparent branch</p>');
         case '/hardening-slotted-content':

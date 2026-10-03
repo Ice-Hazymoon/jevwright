@@ -18,6 +18,8 @@ export interface View {
     /** The following act step, when the engine shares it. */
     next?: string;
     claim?: string;
+    priorActions: Array<{ step: string; history: Array<Record<string, string>> }>;
+    pageValues: string[];
     values: Record<string, string>;
     history: Array<Record<string, string>>;
     url: string;
@@ -65,6 +67,7 @@ export interface Belief {
     anomaly?: number;
     holds?: number;
     support?: 'supports' | 'contradicts' | 'not_shown';
+    region?: 'open' | 'closed' | 'unknown';
     pSupport?: number;
     /** Whether the step's actions operated on what the step names (post-failure audit); defaults to yes. */
     onTarget?: number;
@@ -104,7 +107,7 @@ export function scriptedModels(policy: (view: View) => Belief, helper?: (view: V
         doGenerate: async ({ prompt }) => {
             const text = JSON.stringify(prompt);
             const payload = JSON.parse(extractJson(text)) as Record<string, unknown>;
-            const view = toView({ task: { step: payload.step, values: payload.values, history: payload.history }, page: payload.page, claim: payload.claim, control: payload.control, control_activations: payload.control_activations });
+            const view = toView({ task: { step: payload.step, values: payload.values, history: payload.history }, page: payload.page, claim: payload.claim, prior_actions: payload.prior_actions, control: payload.control, control_activations: payload.control_activations });
             const output = helper?.(view, String(payload.why_you_are_asked ?? '')) ?? { outcome: 'impossible', tool: null, element: null, value_key: null, text: null, reason: 'scripted helper has no answer' };
             return {
                 content: [{ type: 'text', text: JSON.stringify(output) }],
@@ -159,6 +162,7 @@ function answer(id: string, question: EvaluationQuestion, belief: Belief, view: 
     if (id === 'input_source') { chosen = belief.inputSource ?? (belief.pageValue !== undefined ? 'page' : Object.keys(view.values).length ? 'step' : 'clear'); }
     if (id === 'page_value') { chosen = options.find(key => question.criteria[key] === belief.pageValue); }
     if (id === 'support') { chosen = belief.support ?? 'not_shown'; }
+    if (id === 'region') { chosen = belief.region ?? 'unknown'; }
     return distribution(options, chosen && options.includes(chosen) ? chosen : undefined, id === 'support' ? belief.pSupport : undefined);
 }
 
@@ -180,6 +184,8 @@ function toView(state: Record<string, unknown>): View {
         ...(typeof state.control === 'string' ? { control: state.control } : {}),
         ...(typeof task.next_step === 'string' ? { next: task.next_step } : {}),
         ...(typeof state.claim === 'string' ? { claim: state.claim } : {}),
+        priorActions: (state.prior_actions ?? []) as View['priorActions'],
+        pageValues: (task.page_values ?? []) as string[],
         controlActivations: (state.control_activations ?? []) as Array<Record<string, string>>,
         values: (task.values ?? {}) as Record<string, string>,
         history: (task.history ?? []) as Array<Record<string, string>>,

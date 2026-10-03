@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Judge whether a check's expected region is open and visible independently from its content. Attribute missing content in an open region to the product, and unopened or unknown regions to the agent after review. Preserve prior successful action evidence to identify the asserted object.
+- Exclude native folded detail contents even when the browser retains their earlier layout dimensions.
+- Ground unresolved requested page input before spending helper calls, and retain bounded page-value vocabularies for later input. Let completed selections and view activations reach independent result checks despite a low product-outcome probability.
+
 - Register DOM selectors before concurrent contexts are created. Keep literal typing as typing so the helper can ground the exact instruction text immediately. Authorize necessary final controls for requested committed results without extending selection-only steps.
 - Separate actual page input from human provenance labels in model history, including replay healing; preserve report labels and recording formats.
 

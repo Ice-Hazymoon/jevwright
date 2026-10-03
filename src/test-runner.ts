@@ -507,8 +507,9 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
                 result.source = 'ai';
                 const claim = fillTemplate(step.assertion, displayData);
                 const reference = step.reference ? await step.reference(runContext(index)) : undefined;
+                const priorActions = steps.filter(entry => entry.kind === 'act' && entry.status === 'passed' && entry.actions?.some(action => action.ok)).slice(-3).map(entry => ({ step: entry.label, history: entry.actions!.filter(action => action.ok).slice(-12).map(action => ({ action: action.tool, ...(action.element ? { element: action.element } : {}), ...(action.destination ? { destination: action.destination } : {}) })) }));
                 let observed = await observe(page!, { redact });
-                let verdict = await judgeClaim(models, observed, claim, reference, signal);
+                let verdict = await judgeClaim(models, observed, claim, reference, signal, priorActions);
                 const attempts: unknown[] = [verdict];
                 if (!verdict.passed || verdict.uncertain) {
                     // A second look after the page settles; UI updates can trail the data.
@@ -517,24 +518,26 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
                     const next = await observe(page!, { redact });
                     if (next.signature !== observed.signature) {
                         observed = next;
-                        verdict = await judgeClaim(models, observed, claim, reference, signal);
+                        verdict = await judgeClaim(models, observed, claim, reference, signal, priorActions);
                         attempts.push(verdict);
                     }
                 }
                 if (verdict.uncertain) {
                     observed = await observe(page!, { redact });
-                    const tie = await adjudicateClaim(models, observed, claim, reference, signal);
+                    const tie = await adjudicateClaim(models, observed, claim, reference, signal, priorActions);
                     attempts.push({ adjudicated: tie });
-                    verdict = { ...verdict, passed: tie.passed, support: tie.support, note: tie.reason };
+                    verdict = { ...verdict, passed: tie.passed, support: tie.support, note: tie.reason, ...(tie.region ? { region: tie.region, pRegion: 1 } : {}) };
                 }
                 // Exactly what the claim was judged against, so a verdict can be audited without re-running.
                 result.observation = `step-${String(index + 1).padStart(2, '0')}-observation.json`;
                 await writeArtifact(join(directory, result.observation), pageState(observed), redact);
-                result.evidence = { claim, ...(reference !== undefined ? { reference } : {}), verdicts: attempts };
+                result.evidence = { claim, ...(reference !== undefined ? { reference } : {}), ...(priorActions.length ? { prior_actions: priorActions } : {}), verdicts: attempts };
                 if (!verdict.passed) {
                     result.status = 'failed';
-                    result.failure = verdict.support === 'contradicts' ? 'assertion' : 'not-shown';
-                    result.error = `Claim not shown on the page: ${claim} (holds=${verdict.holds}, ${verdict.support} ${verdict.pSupport})`;
+                    const openMissing = verdict.support === 'not_shown' && verdict.region === 'open' && verdict.pRegion >= 0.7;
+                    result.failure = verdict.support === 'contradicts' || openMissing ? 'assertion' : 'not-shown';
+                    const location = verdict.support === 'contradicts' ? 'Visible evidence contradicts the claim' : verdict.region === 'closed' ? 'Relevant region is not open in the current view' : openMissing ? 'Expected content is missing from the open visible region' : 'Claim not shown on the page';
+                    result.error = `${location}: ${claim} (holds=${verdict.holds}, ${verdict.support} ${verdict.pSupport}, region=${verdict.region})`;
                 }
                 return;
             }

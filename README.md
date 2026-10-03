@@ -90,7 +90,7 @@ A test is a list of steps. Code owns their order, and each step does one thing:
 | Step | Decided by | Use it for |
 | --- | --- | --- |
 | `act('Change Nickname to {nickname}', { expect })` | Jev grounds it. `expect.write` decides when it is done | One user intention, in the words on the screen |
-| `check('The Nickname field shows {nickname}')` | Jev, as two independent judgments; unclear ones get a second look | Facts visible on the page |
+| `check('The Nickname field shows {nickname}')` | Jev, as independent truth, support and region judgments; unclear ones get a second look | Facts visible on the page |
 | `verify('row stores the nickname', fn)` | Your code, polled for up to 8 s | Exact business facts from the database or API |
 | `reload()`, `back()`, `goto('/path')` | Code | Navigation |
 | `run('arm a failing save', fn)` | Code | Trusted setup between steps, such as injecting a fault |
@@ -211,7 +211,7 @@ can be a product regression or a stale target and does not establish either on i
 - Desktop defaults to 1280×900. Use `device: "mobile"` for touch and a mobile user agent, or provide a custom device.
 - Page values can be entered only when their exact text appears in the current observation. Replay re-reads them from recorded surrounding text; changed or ambiguous sources need an auto run. Declared secrets remain available only through their keys.
 - `check` requires the asserted content to be visible. A count or saved-button state cannot prove what another tab contains.
-- Missing evidence is uncertain and receives a second look or adjudication. A failed `check` is `product` only when visible evidence contradicts the claim; unresolved missing evidence is `agent`.
+- Failed checks receive a second look. Visible contradictions, or missing expected content in an open visible region, are `product`; a collapsed or unopened region is `agent`. Uncertain region evidence receives adjudication.
 - `check` is a model judgment. Exact values (money, multilingual text, line breaks) belong in `verify`.
 - Chromium only.
 

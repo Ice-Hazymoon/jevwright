@@ -6,6 +6,20 @@ const clicked = (view: View) => view.history.some(entry => entry.action === 'cli
 
 /** A competent scripted "Jev" for the fixture app: grounds each step the way the real model should. */
 export function fixturePolicy(view: View): Belief {
+    if (view.step === 'Remove the Retired entry') {
+        const clicked = view.history.some(entry => entry.action === 'click');
+        return clicked ? { done: 0.13, achieved: view.review ? 0.93 : 0.13, remaining: 0.88, navigation: 0.02, tool: 'click', target: is('button', 'Remove') } : { tool: 'click', target: is('button', 'Remove') };
+    }
+    if (view.step === 'Sort the entries by amount ascending') {
+        if (!view.history.some(entry => entry.action === 'select')) { return { tool: 'select', target: is('combobox', 'Ordering'), option: 'Amount ascending' }; }
+        // Reproduce an executed action whose broken result lowers the unrelated outcome probability.
+        return { done: 0.13, achieved: 0.62, remaining: 0.28, navigation: 0.04, tool: 'none' };
+    }
+    if (view.step === 'Enter the six-digit access sequence displayed on the page across the segmented inputs and verify access') {
+        if (view.text.includes('Access granted')) { return { done: 0.98 }; }
+        const reads = view.pageValues.includes('681942');
+        return { tool: 'type', target: is('textbox', 'Segment 1'), ...(reads ? { pageValue: '681942' } : { inputSource: 'step' as const }) };
+    }
     if (view.claim !== undefined) { return claim(view, view.claim); }
     if (view.step === 'Enable the public deployment') {
         const applied = view.history.some(entry => entry.action === 'click');

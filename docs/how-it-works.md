@@ -135,11 +135,12 @@ Two of them count as environment problems, not product ones:
 
 ## Checks
 
-A `check` asks Jev two independent questions over the page: does the claim hold, and does the page support it, contradict it, or not show the information at all?
-- Both judgments require direct evidence from the view, list, record or field the assertion names. Counts, notifications and button states cannot prove the contents of another view. Missing content is `not_shown`, even when the truth judgment is confident. A claim about a badge or notification can use that object directly.
-- Direct support passes; an explicit visible contradiction fails as `product`. Missing evidence remains uncertain even with a confident truth judgment.
+A `check` asks Jev three independent questions: does the claim hold, how does the page support it, and is the region where its evidence belongs open and visible?
+- The content judgments require direct evidence from the view, list, record or field the assertion names. Counts, notifications and button states cannot prove the contents of another view. Missing content is `not_shown`, even when the truth judgment is confident. A claim about a badge or notification can use that object directly.
+- Direct support passes; an explicit visible contradiction fails as `product`. Missing content in a confidently open visible region also fails as `product`. Empty, loading or erroneous contents do not close a region. Collapsed sections, unselected tabs, unopened dialogs and other pages are not open regions. Unknown region evidence remains uncertain.
 - A failed or unclear answer gets a second look after the page settles again. Jev is asked again only if the page changed (its observation signature differs); otherwise the first answer stands.
-- If it is still unclear, the helper LLM reads the same evidence and chooses true, false or not_shown. An unresolved not_shown fails as `agent`, rather than attributing a defect to the product.
+- If it is still unclear, the helper LLM reads the same evidence and independently chooses true/false/not_shown and open/closed/unknown. Missing content whose region is closed or unknown fails as `agent`; the report names an unopened region explicitly.
+- The last three completed action steps supply successful actions to identify the subject and opened view. Those actions do not prove the asserted resulting content. Product-looking failures still undergo the existing target audit.
 - The report keeps the observation the final verdict was judged against.
 
 With a `reference`, the judge compares the page with your trusted data.
@@ -153,6 +154,11 @@ up to four appeared anchors and up to two disappeared controls. Toasts, numeric 
 names are excluded; typing-only steps record no anchors. A `likely-done` step records no end state.
 
 Inputs read from the page record an optional `pageValue` descriptor: observation source and the text before and after the value. Replay reads between those anchors in the current observation. Missing or ambiguous anchors trigger fresh grounding in auto mode; replay mode fails as `agent` with “Page value needs model grounding (source is missing or ambiguous)”. Target descriptions replace only complete value tokens with at least three characters. Action logs mark these inputs with `page:`. Existing recordings remain valid.
+
+An unresolved type without supplied values receives a separate source/span judgment before using a helper.
+Only a requested page source enables subsequent page-value vocabularies. Short public page inputs use key
+events; model history identifies their starting field and notes that automatic focus can advance between
+fields. That history does not replace an independent check of the accepted result.
 
 Replay first checks a declared expectation. Otherwise, recorded end states must match the path,
 at least half of the appeared anchors, and every disappeared control. The engine polls for up to

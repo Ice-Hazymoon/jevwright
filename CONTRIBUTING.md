@@ -50,6 +50,10 @@ This runs the fixture app's healthy flows and seeded defects with real models:
 
 A full run costs a few cents. Run it after changing prompts, questions or thresholds, and note the result in the pull request.
 
+`npx jiti scripts/attribution-calibration.ts` separately checks open/closed regions, transient loading,
+segmented page input, broken sorting and a retained removed entry with real models. Its expected agent
+failures cover unopened regions; it does not replace the main calibration or paired A/B.
+
 ## Dependencies
 
 - `ai` is pinned to an exact version. jevwright uses the AI SDK's experimental evaluation API, which is exempt from semantic versioning; bump it deliberately and rerun the calibration.
