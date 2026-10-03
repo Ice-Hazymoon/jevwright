@@ -1300,3 +1300,15 @@ it('integration reaches direct content checks after button-based navigation to a
     expect(result.attempts[0]!.steps[0]!.actions).toHaveLength(2);
     expect(result.attempts[0]!.steps[1]!.failure).toBe('assertion');
 });
+
+
+it('reviews a submitted form with the same code-observed transition as the action decision', async () => {
+    const spec: TestSpec<void> = { id: 'submitted-form-transition', title: 'Sign in and leave the form', risk: 'Disappearing inputs obscure a completed submission', start: '/credential-form', data: { account: 'marble@example.test' }, secrets: { password: secret('Private-Key-7312') }, steps: () => [act('Sign in using account {account} with password {password}'), verify('account opened', async ({ page }) => page.getByRole('heading', { name: 'Signed in as marble@example.test', exact: true }).isVisible())] };
+    const result = (await suite([spec], { mode: 'ai', policy: view => {
+        if (!view.text.includes('Signed in as')) { return fixturePolicy(view); }
+        const changed = String(view.change?.new_text ?? '').includes('Signed') && (view.change?.removed as string[] | undefined)?.some(element => element.includes('Password'));
+        return { done: 0.53, remaining: 0.75, achieved: changed ? 0.99 : 0.37, navigation: 0.03, tool: 'none' };
+    }, helper: () => ({ outcome: 'step_already_done', tool: null, element: null, value_key: null, text: null, reason: 'The form was submitted and replaced by the account view' }) }).run).results[0]!;
+    expect(result.status, result.summary).toBe('passed');
+    expect(result.attempts[0]!.steps[0]!.actions?.map(action => action.tool)).toEqual(['type', 'type', 'click']);
+});

@@ -350,7 +350,7 @@ async function decideLoop(input: ActInput, models: Models, actions: ActionRecord
         const completionProposed = done >= 0.35 || decision.tool === 'none';
         if (saved && !missing.length && completionProposed && (acted() || done < 0.9)) {
             try {
-                const review = await confirmDone(input, models, observation, history);
+                const review = await confirmDone(input, models, observation, history, change);
                 const confirm = review.confidence;
                 trace.confirm = round2(confirm);
                 likelyComplete = confirm >= THRESHOLDS.likely;
@@ -877,7 +877,7 @@ function bestOption(options: string[], wanted: string): string {
     return options.find(option => option.toLowerCase() === lower) ?? options.find(option => option.toLowerCase().includes(lower)) ?? wanted;
 }
 
-async function confirmDone(input: ActInput, models: Models, observation: Observation, history: Array<Record<string, string>>): Promise<{ confidence: number; decision: Decision; pTool: number; pTarget: number; navigation: number }> {
+async function confirmDone(input: ActInput, models: Models, observation: Observation, history: Array<Record<string, string>>, change: Record<string, unknown> | undefined): Promise<{ confidence: number; decision: Decision; pTool: number; pTarget: number; navigation: number }> {
     const questions = decisionQuestions(input, observation, true, false);
     delete questions.done;
     delete questions.done_change;
@@ -889,7 +889,7 @@ async function confirmDone(input: ActInput, models: Models, observation: Observa
         pending: 'A required user action remains. Selecting a value prepares a transaction but does not finalize it. A badge, item title or saved button cannot establish that a requested destination view was opened. Inspect the current view and history for every clause.',
     } };
     questions.tool = { ...questions.tool!, instructions: 'If the action stage is pending, choose the action that performs the NEXT missing clause or final submission of task.step. Do not repeat an already finished preparation action. If all requested actions were performed, choose none; later checks evaluate product content.' };
-    const answers = await models.judge(decisionState(input, observation, history, undefined, []), questions, input.signal, 'confirm');
+    const answers = await models.judge(decisionState(input, observation, history, change, []), questions, input.signal, 'confirm');
     const decision = resolveDecision(observation, answers, input);
     return { confidence: choiceOf(answers.complete)?.probabilities.achieved ?? 0, navigation: choiceOf(answers.navigation)?.probabilities.pending ?? 1, decision, pTool: choiceOf(answers.tool)?.probabilities[decision.tool] ?? 0, pTarget: decision.target ? choiceOf(answers.target)?.probabilities[String(decision.target.i)] ?? 0 : 1 };
 }

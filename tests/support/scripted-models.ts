@@ -12,6 +12,7 @@ export interface View {
     field?: string;
     control?: string;
     review?: boolean;
+    change?: Record<string, unknown>;
     /** The following act step, when the engine shares it. */
     next?: string;
     claim?: string;
@@ -180,6 +181,7 @@ function toView(state: Record<string, unknown>): View {
         notices: (page.notices ?? []) as string[],
         shownBefore: (task.shown_before_step ?? []) as string[],
         entered: (task.values_entered ?? {}) as Record<string, string>,
+        change: task.last_change as Record<string, unknown> | undefined,
         ...(typeof page.dialog === 'string' ? { dialog: page.dialog } : {}),
         elements: (page.elements ?? []) as ViewElement[],
     };
