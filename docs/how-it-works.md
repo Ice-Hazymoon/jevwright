@@ -31,17 +31,18 @@ Each decision starts from Playwright's `ariaSnapshotJSON` in AI mode, with eleme
 
 It also keeps the page's notices (toasts, alerts) and a trimmed text of the page.
 A DOM supplement supplies roleless text targets, contenteditable fields, scrolling containers,
-and visible labels that differ from accessible names. It excludes hidden, inert and clipped
-screen-reader text. Visible text with `aria-hidden` is retained; accessible names remain separate.
+and visible labels that differ from accessible names. It excludes hidden and clipped
+screen-reader text. Visible `inert` previews and `display:contents` text remain readable, while inert controls cannot be acted on. Visible text with `aria-hidden` is retained; accessible names remain separate. Main content receives the bounded text budget before navigation.
+Assigned shadow slots retain their rendered text and ancestry, including captured closed roots. Hidden assignments and replaced fallback text are excluded.
 Field labels come from associated labels or adjacent leaf label/span elements, rather than explanatory paragraphs.
-Noninteractive text is offered only when it has pointer, hover or context-menu signals, or its text is named in the current instruction. Control descendants are excluded. At most 30 plain-text targets are offered; suppressed text does not count as omitted controls.
+Noninteractive text is offered only when it has pointer, revealing hover or context-menu signals, or its text is named in the current instruction. Decorative hover colors do not qualify. Control descendants are excluded. At most 30 supplemental plain-text targets are offered, preferring instruction-named and onscreen text. Clickable cards remain outside this supplement limit; controls trimmed by the overall 220-element limit count as omitted.
 
 Some cases need special handling:
 - **Closed shadow roots**: a context init script wraps `attachShadow` and retains roots in a weak map. Their modes and the application's `shadowRoot` getters stay unchanged. A selector engine reaches observed nodes in those roots. Declarative closed roots are not captured. The wrapper and engine globals are visible to application code.
 - **Modal dialogs**: when one is open, only the dialog is observed.
 - **Passwords**: values of password-like fields are masked.
 - **Hover-revealed controls** (a row's edit button that appears on hover) are marked, so the engine hovers their container first.
-- **Hidden content**: text hidden behind an `aria-label` is kept as the control's content.
+- **Visible content**: rendered text replaced by an `aria-label` is kept as the control's `content`, including visible inert previews.
 - **Inert controls**: controls inside an `inert` subtree, such as a collapsed accordion panel or the page behind a modal, are not offered. Playwright's snapshot does not treat `inert` as hidden. An inert element with exactly the same box as a live control, such as a card whose whole face is an inert preview, is kept, because the two cannot be told apart.
 
 ## The decision loop
@@ -56,7 +57,7 @@ A step runs for at most 8 actions. Each round sends one Jev request with several
 - Has each requested destination view been activated?
 
 Jev answers with probabilities, and code applies thresholds:
-- An independent remaining-work question reviews every clause and required outcome. A proposed completion receives an action-stage review: prepared values still need any requested final commit, and requested destinations must be opened. The review can propose the next missing action when the original decision offers none or wait. A separate model judgment must support the proposed target before code applies the action. A weak stage review does not overturn an otherwise completed step; a strong pending judgment does. A separate navigation judgment requires an activation action or explicit current-view state; a global heading or destination badge alone is insufficient. Prerequisites performed by a tool, such as scrolling a control into view before clicking, count as performed. Once a requested view is open, later checks evaluate its content; empty or loading product content does not undo navigation. When completion conflicts with a proposed activation, another judgment compares that specific control with successful action history alone, avoiding page titles and summary content. An uncertain activation can receive a helper review within the two-call limit. Both reviewers receive successful actions tied to the same connected DOM ref, while preserving the original descriptions. Changing nearby counts or labels does not make those actions belong to a different control; repeated activation requests still require the requested count. A strong action-stage judgment can end the step even when empty product content lowers the original completion probability; later checks still decide whether the content is correct. Dragging requires distinct source and destination DOM elements; a self-drop fails before the gesture. Action-stage completion review receives the same code-computed page changes as the action decision. Successful keyed inputs are also listed separately from exact current field matches, without exposing secret text. This preserves evidence when submission replaces the form and removes its fields; later checks still determine whether the result is correct. The action-stage review treats an explicit next step as separate later work. With that boundary, the scoped achieved/pending choice uses its majority rather than the stricter final-transaction confidence threshold; navigation and missing-value guards still apply. Its action proposals cannot run within the current step; the remaining-work judgment still checks every current clause.
+- An independent remaining-work question reviews every clause and required outcome. A proposed completion receives an action-stage review: prepared values still need any requested final commit, and requested destinations must be opened. The review can propose the next missing action when the original decision offers none or wait. A separate model judgment must support the proposed target before code applies the action. A weak stage review does not overturn an otherwise completed step; a strong pending judgment does. A separate navigation judgment requires an activation action or explicit current-view state; a global heading or destination badge alone is insufficient. Prerequisites performed by a tool, such as scrolling a control into view before clicking, count as performed. Once a requested view is open, later checks evaluate its content; empty or loading product content does not undo navigation. When completion conflicts with a proposed activation, the completion request includes a control judgment against successful history alone. A standalone judgment is used only when completion was not reviewed. A disputed required activation blocks completion unless its target audit clearly rejects the action as unrelated; only strong target support injects a review-proposed action. Neither review authorizes an unrequested submission, confirmation, purchase or deletion. An uncertain activation can receive a helper review within the two-call limit. Both reviewers receive successful actions tied to the same connected DOM ref, while preserving the original descriptions. Changing nearby counts or labels does not make those actions belong to a different control; repeated activation requests still require the requested count. A strong action-stage judgment can end the step even when empty product content lowers the original completion probability; later checks still decide whether the content is correct. Dragging requires distinct source and destination DOM elements; a self-drop fails before the gesture. Action-stage completion review receives the same code-computed page changes as the action decision. Successful keyed inputs are also listed separately from exact current field matches, without exposing secret text. This preserves evidence when submission replaces the form and removes its fields; later checks still determine whether the result is correct. The action-stage review treats an explicit next step as separate later work. With that boundary, the scoped achieved/pending choice uses its majority rather than the stricter final-transaction confidence threshold; navigation and missing-value guards still apply. Its action proposals cannot run within the current step; the remaining-work judgment still checks every current clause.
 - A declared write request ends a single submission after a submitting action (click, Enter, select) once the request succeeds. Compound instructions still check remaining work, so the first successful request cannot hide a later action.
 - If Jev thinks the step is done but the declared request never started, it is told once that nothing was saved.
 - A value the step names, which was not on the page when the step began, must be typed or selected, or must appear on the page. Until then, neither a successful request nor Jev's "done" completes the step. This stops a different control that saves through the same request from finishing the step early.
@@ -73,7 +74,7 @@ The helper is called at most twice per step. It may:
 - type a data value or an exact span from the current observation;
 - enter several of the step's values joined by line breaks, as multi-paragraph text.
 
-It may not invent text. Page values must appear verbatim in the current observation, with whitespace normalized and case preserved. Declared secrets and redacted markers never qualify as page values. Sources are split around redacted markers so marker fragments cannot become input. Jev can choose from a bounded list of observed spans; the helper can request another observed span, which code validates. A "done" from the helper counts only when Jev does not clearly disagree.
+It may not invent text. Page values must appear verbatim in the current observation, with whitespace normalized and case preserved. Declared secrets and redacted markers never qualify as page values. Sources are split around redacted markers so marker fragments cannot become input. Only after Jev chooses page input does the engine send a bounded list of observed spans for grounding; ordinary supplied inputs omit this vocabulary. The helper can request another observed span, which code validates. A "done" from the helper counts only when Jev does not clearly disagree.
 
 ### Browser actions
 
@@ -91,7 +92,7 @@ Upload can send a selected file or all files named in the step together. The fil
 chooses the group; multiple-file groups require a `multiple` input or multiple file chooser.
 A single-file input uses the selected key. Recordings store optional `fileKeys`, never local paths.
 
-Scroll can target the page or a scrolling container. `scroll_to` brings a named text or control into
+Scroll can target the page or a scrolling container. Targetless legacy scrolling uses the document or the unique visible scrolling container; no movement fails explicitly. `scroll_to` brings a named text or control into
 view. For a scroll search, Jev selects the first and last words of the target phrase in the original instruction. Code verifies the resulting span is an instruction substring. The search
 advances by 90% of a viewport,
 and observes mounted text between moves. Searches share a 30-second budget within each step and stop after 500 moves or five unchanged positions. A missing goal fails with “not found after N viewports”. This lets virtualized rows render and lets growing feeds load without a model call for
@@ -104,7 +105,7 @@ Before executing a model action, the engine uses the original connected referenc
 ## Settle
 
 Before each decision, the engine waits until the page is quiet: no data or navigation request is in flight, and there has been no DOM mutation for 350 ms.
-- Visible `aria-busy`, indeterminate progressbars without `aria-valuenow`, loading text in status/live regions, and newly appearing loading markers keep the page busy. Ordinary text, determinate progress and initially present decorative markers do not. Busy has its own settle reason. Bounded busy waits use a separate counter and do not consume action rounds.
+- Visible `aria-busy`, indeterminate progressbars without `aria-valuenow`, loading text in status/live regions, and newly appearing loading markers keep the page busy. Ordinary text, determinate progress and initially present decorative markers do not. Newly mounted class/id loading decorations expire after two seconds if they remain; explicit semantic busy signals still block. Settle polls only busy signal nodes, rather than rebuilding the DOM observation. Busy has its own settle reason. Bounded busy waits precede completion review and do not consume action rounds.
 - The app's own scripts and stylesheets count as requests, because a lazily loaded component renders nothing until its module arrives.
 - Inline-style changes, SVG attribute churn, `<head>` changes and semantic `time`/`role=timer` updates do not count as mutations. Document and shadow observers apply the same rules and record the last genuine mutation.
 
@@ -133,9 +134,9 @@ Two of them count as environment problems, not product ones:
 
 A `check` asks Jev two independent questions over the page: does the claim hold, and does the page support it, contradict it, or not show the information at all?
 - Both judgments require direct evidence from the view, list, record or field the assertion names. Counts, notifications and button states cannot prove the contents of another view. Missing content is `not_shown`, even when the truth judgment is confident. A claim about a badge or notification can use that object directly.
-- Clear answers decide the check.
+- Direct support passes; an explicit visible contradiction fails as `product`. Missing evidence remains uncertain even with a confident truth judgment.
 - A failed or unclear answer gets a second look after the page settles again. Jev is asked again only if the page changed (its observation signature differs); otherwise the first answer stands.
-- If it is still unclear, the helper LLM reads the same evidence and decides.
+- If it is still unclear, the helper LLM reads the same evidence and chooses true, false or not_shown. An unresolved not_shown fails as `agent`, rather than attributing a defect to the product.
 - The report keeps the observation the final verdict was judged against.
 
 With a `reference`, the judge compares the page with your trusted data.
@@ -148,7 +149,7 @@ Successful act steps record semantic targets, optional drag destinations, file-k
 up to four appeared anchors and up to two disappeared controls. Toasts, numeric names and unstable
 names are excluded; typing-only steps record no anchors. A `likely-done` step records no end state.
 
-Inputs read from the page record an optional `pageValue` descriptor: observation source and the text before and after the value. Replay reads between those anchors in the current observation. Missing or ambiguous anchors trigger fresh grounding in auto mode; replay mode fails as `agent` with “需要模型重新读取页面值”. Action logs mark these inputs with `page:`. Existing recordings remain valid.
+Inputs read from the page record an optional `pageValue` descriptor: observation source and the text before and after the value. Replay reads between those anchors in the current observation. Missing or ambiguous anchors trigger fresh grounding in auto mode; replay mode fails as `agent` with “Page value needs model grounding (source is missing or ambiguous)”. Target descriptions replace only complete value tokens with at least three characters. Action logs mark these inputs with `page:`. Existing recordings remain valid.
 
 Replay first checks a declared expectation. Otherwise, recorded end states must match the path,
 at least half of the appeared anchors, and every disappeared control. The engine polls for up to
@@ -221,7 +222,7 @@ A failed test is retried (`retries`, default 1):
 
 ### Secret values
 
-Use `secret(value, { purpose: 'password' | 'any' })` in `TestSpec.secrets`, separate from ordinary string `data`. The default purpose is `'password'`: code permits only `type=password` or `autocomplete=current-password/new-password` editable fields. Use `'any'` for API keys and other editable fields. This is an intentional breaking change before 1.0. Handles stringify as
+Use `secret(value, { purpose: 'password' | 'any' })` in `TestSpec.secrets`, separate from ordinary string `data`. The default purpose is `'password'`: code permits only `type=password` fields. Password autocomplete hints alone do not authorize a plain text field. Use `'any'` for API keys and other editable fields. This is an intentional breaking change before 1.0. Handles stringify as
 `{secret}`. Only trusted test code can call `reveal(handle)`; `RunContext.secrets` exposes the handles.
 An action references a secret by `{key}`. Models receive that placeholder and `<secret value>`, while
 code fills the original value only into an enabled editable field that satisfies its declared purpose. Replay applies the current handle purpose; recordings do not store secret values or relax purpose checks. When a step supplies several values including a secret, Jev matches the value to the selected field in a separate request before typing. Incompatible secrets are omitted from that field-specific value choice. The browser checks the actual field again immediately before input, including after semantic relocation. Select actions and semantic `check`

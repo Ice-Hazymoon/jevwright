@@ -1,5 +1,5 @@
 import type { TestSpec } from '../src/index.ts';
-import { mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -311,4 +311,15 @@ it('rejects a drag whose source and destination are the same element', async () 
     expect(result.attempts[0]!.steps[0]!.actions?.[0]?.ok).toBe(false);
     expect(result.attempts[0]!.steps[0]!.actions?.[0]?.error).toMatch(/different elements/);
     expect(result.attempts[0]!.steps).toHaveLength(1);
+});
+
+
+it('hardening replays a targetless legacy scroll inside an app shell', async () => {
+    const { stepKey } = await import('../src/recording.ts');
+    const step = act('Scroll down');
+    const spec: TestSpec = { ...base, id: 'legacy-shell-scroll', start: '/hardening-scroll', steps: () => [step, verify('shell moved', ({ page }) => page.locator('#app').evaluate(element => element.scrollTop > 0))] };
+    await mkdir(join(root, 'recordings'), { recursive: true });
+    await writeFile(join(root, 'recordings', spec.id + '.json'), JSON.stringify({ version: 1, test: spec.id, updatedAt: '', steps: [{ key: stepKey(step), instruction: step.instruction, actions: [{ tool: 'scroll' }] }] }));
+    const result = (await runSuite([spec], { ...options(), mode: 'replay' })).results[0]!;
+    expect(result.status, result.summary).toBe('passed');
 });

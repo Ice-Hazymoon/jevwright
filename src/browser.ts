@@ -6,7 +6,7 @@ import { createRequire } from 'node:module';
 import { chromium } from 'playwright';
 import { RequestError, Server } from 'proxy-chain';
 import { JevwrightError } from './errors.ts';
-import { canGoBack, domLocator, readSurface, registerDomSelector, trackRoots } from './dom.ts';
+import { canGoBack, domLocator, readBusy, readSurface, registerDomSelector, trackRoots } from './dom.ts';
 
 export function allowedUrl(raw: string, origins: readonly string[]): boolean {
     try {
@@ -146,7 +146,7 @@ export async function settle(page: Page, monitor: Pick<Monitor, 'pendingRequests
             state = { idle: 0, last: 'navigation' }; // Navigation in progress.
         }
         const pending = monitor.pendingRequests();
-        const busy = pending === 0 && state.idle >= quietMs && (await readSurface(page)).busy;
+        const busy = pending === 0 && state.idle >= quietMs && await readBusy(page);
         if (pending === 0 && state.idle >= quietMs && !busy) { return Date.now() - started; }
         blocker = pending ? `${pending} request(s) in flight` : busy ? 'busy: visible loading signal' : `DOM still changing (${state.last || 'unknown'})`;
         await new Promise(resolve => setTimeout(resolve, 100));
@@ -257,7 +257,7 @@ export async function perform(page: Page, call: ToolCall): Promise<void> {
             const locator = target();
             if (call.sensitive) {
                 if (!await locator.isEditable({ timeout })) { throw new Error('Secret input needs an enabled editable field'); }
-                if ((call.secretPurpose ?? 'password') === 'password' && !await locator.evaluate(element => (element instanceof HTMLInputElement && element.type === 'password') || /(?:^|\s)(?:current|new)-password(?:\s|$)/i.test(element.getAttribute('autocomplete') ?? ''))) { throw new Error('Secret password purpose requires a password or password-autocomplete field'); }
+                if ((call.secretPurpose ?? 'password') === 'password' && !await locator.evaluate(element => element instanceof HTMLInputElement && element.type === 'password')) { throw new Error('Secret password purpose requires a type=password field'); }
                 const existing = call.append ? await locator.inputValue().catch(() => locator.textContent().then(text => text ?? '')) : '';
                 await locator.fill(`${existing}${call.value}`, { timeout });
                 return;
@@ -387,7 +387,11 @@ async function scrollPage(page: Page, call: ToolCall): Promise<void> {
             if (search.test(text)) { return; }
         }
         const move = (direction: number) => {
-            const area = document.scrollingElement;
+            let area = document.scrollingElement;
+            if (!area || area.scrollHeight <= area.clientHeight + 1) {
+                const candidates = [...document.querySelectorAll('*')].filter(element => /auto|scroll/.test(getComputedStyle(element).overflowY) && element.scrollHeight > element.clientHeight + 1 && element.checkVisibility());
+                if (candidates.length === 1) { area = candidates[0]!; }
+            }
             if (!area) { return { before: 0, after: 0 }; }
             const before = area.scrollTop;
             area.scrollTop += direction * Math.max(100, area.clientHeight * 0.9);
@@ -396,6 +400,7 @@ async function scrollPage(page: Page, call: ToolCall): Promise<void> {
         const delta = locator
             ? await locator.evaluate((element, direction) => { const before = element.scrollTop; element.scrollTop += direction * Math.max(100, element.clientHeight * 0.9); return { before, after: element.scrollTop }; }, direction)
             : await page.evaluate(move, direction);
+        if (!call.scrollText && delta.before === delta.after) { throw new Error('Scroll did not move the page or target container'); }
         await page.waitForTimeout(delta.before === delta.after ? 500 : 40);
         if (delta.before === delta.after) { if (++stalled >= 5) { break; } } else { stalled = 0; }
     }

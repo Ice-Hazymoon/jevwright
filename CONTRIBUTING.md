@@ -16,6 +16,21 @@ npm run build
 ```
 
 The tests call no model and need no key.
+
+Large-page hardening probes also run offline. Archive the baseline source into a temporary directory,
+and link that directory's `node_modules` to this checkout's installed dependencies. Then run:
+
+```bash
+npx jiti scripts/hardening-performance.ts /path/to/baseline-source . 3
+npx jiti scripts/hardening-calls.ts /path/to/baseline-source
+npx jiti scripts/hardening-calls.ts .
+```
+
+The performance probe compares median observation and settle times on identical 2000×5 tables in fresh
+contexts, enforcing a 1.5 ratio. The calls probe executes a supplied-value type/save step over 120 rows;
+its caps use the measured main baseline of three calls and 18,969 serialized characters. It counts only
+model state and questions, not protocol overhead or tokens. Re-measure that baseline if the probe changes.
+
 - `tests/fixtures/app.ts` is a small multi-page app. Each page has seeded defects behind `?bug=`.
 - `tests/support/fixture-policy.ts` answers the engine's questions the way a competent model would. It also reproduces the missteps seen from real models.
 

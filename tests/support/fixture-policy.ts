@@ -7,6 +7,13 @@ const clicked = (view: View) => view.history.some(entry => entry.action === 'cli
 /** A competent scripted "Jev" for the fixture app: grounds each step the way the real model should. */
 export function fixturePolicy(view: View): Belief {
     if (view.claim !== undefined) { return claim(view, view.claim); }
+    if (view.step === 'Select Express shipping') {
+        const selected = find(view, is('combobox', 'Shipping'))?.value === 'Express';
+        if (!selected) { return { tool: 'select', target: is('combobox', 'Shipping'), option: 'Express' }; }
+        // Reproduce the preparation/commit assumption only when the runner explicitly teaches it.
+        const unsafe = /Selecting a value prepares a transaction|Selecting a date or editing fields prepares/.test(view.instructions ?? '');
+        return { done: 0.98, achieved: unsafe ? 0.02 : 0.98, remaining: 0.02, tool: unsafe ? 'click' : 'none', target: is('button', 'Place order'), needed: unsafe ? 0.98 : 0.02, onTarget: unsafe ? 0.02 : 0.98 };
+    }
     const belief = act(view, view.step ?? '');
     // Like the real model, a failure notice that appeared during this step reads as an error; one the engine
     // reports as shown before the step began does not.
@@ -145,6 +152,10 @@ function claim(view: View, text: string): Belief {
     if (nickname) { return verdict(find(view, is('textbox', 'Nickname'))?.value === nickname[1]); }
     if (/Beta plan is shown as Archived/.test(text)) { return verdict(/Beta plan\W+Archived/.test(view.text)); }
     if (/amount in euros/.test(text)) { return verdict(view.text.includes('€')); }
+    if (/reading list view displays the saved essay/.test(text)) {
+        if (view.text.includes('Catalog')) { return { holds: 0.5, support: 'not_shown' }; }
+        return verdict(view.text.includes('An essay') && !view.text.includes('No essays'));
+    }
     return { holds: 0.5, support: 'not_shown' };
 }
 

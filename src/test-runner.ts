@@ -24,7 +24,7 @@ import { secretCheckProblems } from './select.ts';
 import { describeStep, fillTemplate, templateKeys, writeRules } from './spec.ts';
 
 export type StepStatus = 'passed' | 'failed' | 'skipped';
-export type StepFailure = ActFailure | 'assertion' | 'invariant' | 'exception' | 'blocking-issue' | 'not-recorded' | 'timeout';
+export type StepFailure = ActFailure | 'assertion' | 'invariant' | 'exception' | 'blocking-issue' | 'not-recorded' | 'not-shown' | 'timeout';
 
 export interface StepResult {
     index: number;
@@ -525,7 +525,7 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
                     observed = await observe(page!, { redact });
                     const tie = await adjudicateClaim(models, observed, claim, reference, signal);
                     attempts.push({ adjudicated: tie });
-                    verdict = { ...verdict, passed: tie.passed, note: tie.reason };
+                    verdict = { ...verdict, passed: tie.passed, support: tie.support, note: tie.reason };
                 }
                 // Exactly what the claim was judged against, so a verdict can be audited without re-running.
                 result.observation = `step-${String(index + 1).padStart(2, '0')}-observation.json`;
@@ -533,7 +533,7 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
                 result.evidence = { claim, ...(reference !== undefined ? { reference } : {}), verdicts: attempts };
                 if (!verdict.passed) {
                     result.status = 'failed';
-                    result.failure = 'assertion';
+                    result.failure = verdict.support === 'contradicts' ? 'assertion' : 'not-shown';
                     result.error = `Claim not shown on the page: ${claim} (holds=${verdict.holds}, ${verdict.support} ${verdict.pSupport})`;
                 }
                 return;
@@ -603,6 +603,8 @@ function attribute(step: StepResult): { cause: Cause; summary: string } {
             return { cause: 'model', summary: `Model service failed at ${at}: ${step.error}` };
         case 'exception':
             return { cause: 'environment', summary: `Test code threw at ${at}: ${step.error}` };
+        case 'not-shown':
+            return { cause: 'agent', summary: `Insufficient visible evidence at ${at}: ${step.error}` };
         case 'not-recorded':
             return { cause: 'agent', summary: `Replay cannot run ${at}: ${step.error}` };
         default:

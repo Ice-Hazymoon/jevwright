@@ -57,6 +57,24 @@ function escapeHtml(text: string): string {
 function pages(state: FixtureState, url: URL): string | undefined {
     const bug = url.searchParams.get('bug');
     switch (url.pathname) {
+        case '/hardening-slotted-content':
+            return layout('Component previews', '<div id="component" role="button" tabindex="0" aria-label="Preview"><span slot="copy">Slotted draft</span><span slot="hidden" style="display:contents">Hidden slotted draft</span></div>', `document.getElementById('component').attachShadow({mode:'closed'}).innerHTML = '<div><slot name="copy">Unused fallback</slot><div style="display:none"><slot name="hidden"></slot></div></div>';`);
+        case '/hardening-visible-content':
+            return layout('Account overview', '<div role="button" tabindex="0" aria-label="Note"><div style="display:contents"><div inert><p>Working draft</p><button>Preview action</button></div></div></div><button aria-label="Note"><span style="display:contents">Revised draft</span></button><p style="display:contents">The subscription renews monthly.</p><p>Unit price: <span>$17.43</span></p><table><tr><th>Revenue</th><td>$69.72</td></tr><tr><th>Average</th><td>$17.43</td></tr></table><div role="alert"><p>This account is still in use.</p></div><div style="height:0;overflow:hidden" inert><p>Hidden price $999.99</p></div><p hidden>Hidden paragraph</p><span style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)">Screen reader text</span>', url.searchParams.has('chrome') ? `document.querySelector('nav').append(document.createTextNode('Section description '.repeat(300)));` : '');
+        case '/hardening-cards':
+            return layout('Catalog cards', Array.from({ length: Number(url.searchParams.get('count') ?? 60) }, (_, i) => '<div class="card" style="cursor:pointer;padding:6px;margin:2px;border:1px solid"><span>Product ' + i + '</span></div>').join(''), `document.querySelectorAll('.card').forEach((card, i) => card.onclick = () => toast('Opened ' + i));`);
+        case '/hardening-hover':
+            return layout('Hover surfaces', '<style>.row:hover span{opacity:.8}.menu:hover .submenu{visibility:visible}.submenu{visibility:hidden}</style><div class="row"><span>Decorated row</span></div><div class="menu"><span>Workspace tools</span><div class="submenu"><button>Invite</button></div></div>');
+        case '/hardening-table':
+            return layout('Profile ledger', '<style>tr:hover{background:#eee}.hover\\:bg:hover{color:blue}</style><label>Name<input id="name"></label><button id="save"><span>Save</span></button><a href="#help">Help</a><img width="24" height="24" alt="Brand" src="data:image/gif;base64,R0lGODlhAQABAAAAACw="><div id="decoration"></div><table>' + Array.from({ length: Number(url.searchParams.get('rows') ?? 120) }, (_, i) => '<tr class="hover:bg">' + Array.from({ length: Number(url.searchParams.get('cols') ?? 5) }, (_, c) => '<td>Entry ' + i + ' column ' + c + '</td>').join('') + '</tr>').join('') + '</table>', `document.getElementById('save').onclick = () => { toast('Profile stored'); document.getElementById('decoration').innerHTML = '<div class="avatar skeleton" style="width:20px;height:20px"></div>'; };`);
+        case '/hardening-shipping':
+            return layout('Delivery options', '<label>Shipping<select id="shipping"><option>Standard</option><option>Express</option></select></label><button id="order">Place order</button><output id="orders">0</output>', `document.getElementById('order').onclick = () => document.getElementById('orders').textContent = String(Number(document.getElementById('orders').textContent) + 1);`);
+        case '/hardening-cart':
+            return layout('Basket summary', '<span>Cart (1)</span><div role="status">Added to cart</div>');
+        case '/hardening-scroll':
+            return layout('Shell scroll', '<style>html,body{height:100%;margin:0;overflow:hidden}nav{display:none}main{height:100%}#app{height:100%;overflow:auto}</style><div id="app">' + Array.from({ length: 200 }, (_, i) => '<div style="height:40px">Row ' + i + '</div>').join('') + '</div>');
+        case '/hardening-page-input':
+            return layout('Page entries', '<p>Token: ' + (url.searchParams.get('token') ?? '2') + '; enter the token.</p><label>Address line 2<input></label><label>ABC1234<input></label>');
         case '/integration-counter':
             return layout('Batch totals', '<p>Unit price: 7</p><div><span>Documents</span><button id="minus">-</button><span id="quantity">1</span><button id="plus">+</button></div><output id="total">7</output>', `
 let quantity = 1; document.getElementById('plus').onclick = () => { quantity++; document.getElementById('quantity').textContent = String(quantity); document.getElementById('total').textContent = String(${bug ? '7' : 'quantity * 7'}); };

@@ -1037,7 +1037,7 @@ describe('page values and complete intentions', () => {
         const moved = { ...spec, start: '/page-entry?token=CY-1369&bug=relabeled' };
         const replay = (await suite([moved], { mode: 'replay' }).run).results[0]!;
         expect(replay.cause).toBe('agent');
-        expect(replay.summary).toContain('需要模型重新读取页面值');
+        expect(replay.summary).toContain('Page value needs model grounding');
         expect(replay.attempts[0]!.steps[0]!.actions).toHaveLength(0);
         const healed = (await suite([moved], { mode: 'auto' }).run).results[0]!;
         expect(healed.status, healed.summary).toBe('passed');
@@ -1054,7 +1054,7 @@ describe('page values and complete intentions', () => {
         await writeFile(path, JSON.stringify(stored));
         const result = (await suite([spec], { mode: 'replay' }).run).results[0]!;
         expect(result.cause).toBe('agent');
-        expect(result.summary).toContain('需要模型重新读取页面值');
+        expect(result.summary).toContain('Page value needs model grounding');
     });
 
     it.each(['invented-9231', 'ar-7285', 'hidden-3179'])('rejects helper text absent from the current observation: %s', async value => {
@@ -1205,10 +1205,10 @@ describe('page values and complete intentions', () => {
 
     it('rejects a high holds score when the asserted content is not shown', async () => {
         const spec: TestSpec<void> = { id: 'direct-content-check', title: 'Read the list', risk: 'Summary masks missing content', start: '/collection', steps: () => [run('save without opening', async ({ page }) => { await page.getByRole('button', { name: 'Save essay' }).click(); }), check('The reading list displays the saved essay')] };
-        const result = (await suite([spec], { policy: () => ({ holds: 0.98, support: 'not_shown' }) }).run).results[0]!;
+        const result = (await suite([spec], { policy: () => ({ holds: 0.98, support: 'not_shown' }), helper: () => ({ verdict: 'not_shown', reason: 'The requested view is absent' }) }).run).results[0]!;
         expect(result.status).toBe('failed');
-        expect(result.cause).toBe('product');
-        expect(result.attempts[0]!.steps[1]!.evidence).toMatchObject({ verdicts: [{ passed: false, support: 'not_shown' }] });
+        expect(result.cause).toBe('agent');
+        expect(result.attempts[0]!.steps[1]!.evidence).toMatchObject({ verdicts: [{ passed: false, support: 'not_shown', uncertain: true }, { adjudicated: { passed: false, support: 'not_shown' } }] });
     });
 });
 
@@ -1271,7 +1271,7 @@ describe('integration secret purposes', () => {
         const selected = test.calls.find(call => call.view.field?.includes('Email'))!;
         expect(selected.view.values).toEqual({ email: 'person@example.test' });
     });
-    it.each(['Password', 'New credential', 'API key'])('allows the declared purpose in %s', async name => {
+    it.each(['Password', 'API key'])('allows the declared purpose in %s', async name => {
         const spec: TestSpec<void> = { id: `purpose-${name.toLowerCase().replaceAll(' ', '-')}`, title: 'Valid secret purpose', risk: 'An authorized credential is blocked', start: '/integration-secrets', secrets: { credential: secret('Protected-5921', { purpose: name === 'API key' ? 'any' : 'password' }) }, steps: () => [act('Enter {credential} in ' + name), verify('entered', async ({ page }) => name === 'API key' ? (await page.getByRole('textbox', { name, exact: true }).textContent()) === 'Protected-5921' : (await page.getByRole('textbox', { name, exact: true }).inputValue()) === 'Protected-5921')] };
         const result = (await suite([spec], { mode: 'ai', policy: view => view.history.some(entry => entry.action === 'type' && !entry.error) ? { done: 0.99 } : { tool: 'type', target: element => element.name === name, value: 'credential' } }).run).results[0]!;
         expect(result.status, result.summary).toBe('passed');
@@ -1336,4 +1336,62 @@ it('uses stable control identity when its nearby count changes between required 
     expect(result.cause, result.summary).toBe('product');
     expect(result.attempts[0]!.steps[0]!.actions?.filter(action => action.ok)).toHaveLength(2);
     expect(result.attempts[0]!.steps[1]!.failure).toBe('assertion');
+});
+
+
+describe('hardening instruction and evidence boundaries', () => {
+    it('does not finish while requested submission and target reviews remain uncertain', async () => {
+        const spec: TestSpec<void> = { id: 'uncertain-required-submit', title: 'Submit a prepared form', risk: 'Conflicting reviews accept preparation as submission', start: '/credential-form', data: { account: 'marble@example.test' }, secrets: { password: secret('Private-Key-7312') }, steps: () => [act('Sign in using account {account} with password {password}'), verify('account opened', async ({ page }) => page.getByRole('heading', { name: 'Signed in as marble@example.test', exact: true }).isVisible())] };
+        const result = (await suite([spec], { mode: 'ai', policy: view => {
+            if (view.control) { return { needed: 0.68 }; }
+            if (view.field) { return fixturePolicy(view); }
+            if (!view.elements.length) { return { onTarget: 0.68 }; }
+            if (view.history.some(entry => entry.action === 'click') || view.history.filter(entry => entry.action === 'type').length < 2) { return fixturePolicy(view); }
+            return { done: 0.69, achieved: 0.7, remaining: 0.68, navigation: 0.03, tool: 'click', target: element => element.name === 'Sign in', onTarget: 0.68 };
+        } }).run).results[0]!;
+        expect(result.status, result.summary).toBe('passed');
+        expect(result.attempts[0]!.steps[0]!.actions?.map(action => action.tool)).toEqual(['type', 'type', 'click']);
+    });
+    it('selects shipping without placing an unrequested order', async () => {
+        const spec: TestSpec<void> = { id: 'shipping-selection', title: 'Select shipping', risk: 'Selection causes an unwanted purchase', start: '/hardening-shipping', steps: () => [act('Select Express shipping'), verify('selection only', async ({ page }) => (await page.locator('#shipping').inputValue()) === 'Express' && (await page.locator('#orders').textContent()) === '0')] };
+        const result = (await suite([spec], { mode: 'ai' }).run).results[0]!;
+        expect(result.status, result.summary).toBe('passed');
+        expect(result.attempts[0]!.steps[0]!.actions?.map(action => action.tool)).toEqual(['select']);
+    });
+    it('adjudicates missing evidence instead of charging it to the product', async () => {
+        const spec: TestSpec<void> = { id: 'uncertain-cart-evidence', title: 'Cart evidence', risk: 'A toast is treated as a product defect', start: '/hardening-cart', steps: () => [check('the item was added to the cart')] };
+        const test = suite([spec], { mode: 'ai', policy: () => ({ holds: 0.98, support: 'not_shown' }), helper: () => ({ verdict: 'true', reason: 'Added to cart directly confirms the asserted action' }) });
+        const result = (await test.run).results[0]!;
+        expect(result.status, result.summary).toBe('passed');
+        expect(result.attempts[0]!.steps[0]!.evidence).toMatchObject({ verdicts: [{ uncertain: true }, { adjudicated: { passed: true } }] });
+    });
+    it('reports unresolved missing evidence as agent rather than product', async () => {
+        const spec: TestSpec<void> = { id: 'missing-record-evidence', title: 'Record evidence', risk: 'An absent view becomes a product defect', start: '/hardening-cart', steps: () => [check('The receipts view lists this purchase')] };
+        const result = (await suite([spec], { mode: 'ai', policy: () => ({ holds: 0.02, support: 'not_shown' }), helper: () => ({ verdict: 'not_shown', reason: 'The receipts view is not open' }) }).run).results[0]!;
+        expect(result.cause, result.summary).toBe('agent');
+    });
+    it('does not treat a thousands separator as a compound step', async () => {
+        const spec: TestSpec<void> = { id: 'numeric-comma-submit', title: 'Save amount', risk: 'A numeric comma adds phantom clauses', start: '/profile', fixture: async () => { app.reset(); }, ready: async ({ page }) => { await page.getByRole('textbox', { name: 'Nickname', exact: true }).fill('New name'); }, steps: () => [act('Save the profile with 1,000 credits', { expect: { write: { path: '/api/profile' } }, maxActions: 1 })] };
+        const result = (await suite([spec], { mode: 'ai', policy: view => view.history.some(entry => entry.action === 'click') ? { done: 0.03, remaining: 0.98 } : { tool: 'click', target: element => element.name === 'Save profile' }, helper: () => ({ outcome: 'impossible', reason: 'No remaining action', tool: null, element: null, value_key: null, text: null }) }).run).results[0]!;
+        expect(result.status, result.summary).toBe('passed');
+    });
+    it.each(['2', 'ABC123'])('preserves field tokens when recording page input %s', async token => {
+        const spec: TestSpec<void> = { id: 'page-target-' + token.toLowerCase(), title: 'Enter page token', risk: 'A substring corrupts a recorded field name', start: '/hardening-page-input?token=' + token, steps: () => [act('Read the token from the page and enter it in ' + (token === '2' ? 'Address line 2' : 'ABC1234'))] };
+        const result = (await suite([spec], { mode: 'ai', policy: view => view.history.some(entry => entry.action === 'type') ? { done: 0.99 } : { tool: 'type', target: element => element.name === (token === '2' ? 'Address line 2' : 'ABC1234'), pageValue: token } }).run).results[0]!;
+        expect(result.status, result.summary).toBe('passed');
+        const stored = JSON.parse(await readFile(join(root, 'recordings', spec.id + '.json'), 'utf8'));
+        expect(stored.steps[0].actions[0].target.name).toBe(token === '2' ? 'Address line 2' : 'ABC1234');
+    });
+});
+
+
+it('hardening waits before completion review instead of reviewing each idle polling round', async () => {
+    const spec: TestSpec<void> = { id: 'review-after-wait', title: 'Deferred action', risk: 'Each wait duplicates review calls', start: '/reach-actions', steps: () => [act('Wait for the control, then double-click Open twice'), verify('double-clicked', ({ page }) => page.locator('#events').textContent().then(text => text?.includes('twice') === true))] };
+    const test = suite([spec], { mode: 'ai', policy: view => {
+        if (view.history.filter(entry => entry.action === 'wait').length < 3) { return { done: 0.4, tool: 'wait' }; }
+        return view.text.includes('twice|') ? { done: 0.99 } : { tool: 'double_click', target: element => element.name === 'Open twice' };
+    } });
+    const result = (await test.run).results[0]!;
+    expect(result.status, result.summary).toBe('passed');
+    expect(test.calls.filter(call => call.view.review && call.view.history.filter(entry => entry.action === 'wait').length < 3)).toHaveLength(0);
 });

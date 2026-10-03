@@ -964,9 +964,9 @@ describe('integration observation and timing', () => {
         expect(observation.omitted).toBe(0);
         expect(JSON.stringify(observation.elements).length).toBeLessThan(1800);
     });
-    it('caps pointer text supplements without counting them as omitted controls', async () => {
+    it('keeps pointer snapshot targets outside the plain text supplement limit', async () => {
         const { observation } = await open('/integration-pointer');
-        expect(observation.elements.filter(element => element.role === 'generic').length).toBeLessThanOrEqual(30);
+        expect(observation.elements.filter(element => element.role === 'generic')).toHaveLength(60);
         expect(observation.omitted).toBe(0);
     });
     it('does not turn decorative borders into recorded group context', async () => {
@@ -1026,4 +1026,97 @@ it('integration keeps noninteractive ARIA table cells out of the DOM supplement'
     const { observation } = await open('/integration-static?aria=1');
     expect(observation.elements.length).toBeLessThanOrEqual(6);
     expect(observation.omitted).toBe(0);
+});
+
+
+describe('hardening surfaces', () => {
+    it('retains accessible-label replacements across a shadow component slot', async () => {
+        const { observation } = await open('/hardening-slotted-content');
+        expect(observation.elements.find(element => element.name === 'Preview')?.content).toBe('Slotted draft');
+        expect(observation.text).toContain('Slotted draft');
+    });
+    it('excludes display:contents text assigned into a hidden shadow slot', async () => {
+        const { observation } = await open('/hardening-slotted-content');
+        expect(observation.text).not.toContain('Hidden slotted draft');
+        expect(observation.text).not.toContain('Unused fallback');
+    });
+    it('offers revealing submenu hover but excludes decorative descendant opacity', async () => {
+        const { observation } = await open('/hardening-hover');
+        expect(observation.elements.some(element => element.name === 'Decorated row')).toBe(false);
+        expect(observation.elements.some(element => element.name === 'Workspace tools')).toBe(true);
+    });
+    it('preserves main content when long navigation would exhaust the text budget', async () => {
+        const { observation } = await open('/hardening-visible-content?chrome=1');
+        expect(observation.text).toContain('Unit price: $17.43');
+        expect(observation.text).toContain('This account is still in use.');
+    });
+    it('retains aria-labelled card previews and visible body, prices, totals and errors', async () => {
+        const { observation } = await open('/hardening-visible-content');
+        const cards = observation.elements.filter(element => element.name === 'Note');
+        expect(cards.map(element => element.content)).toEqual(['Working draft Preview action', 'Revised draft']);
+        for (const value of ['Working draft', 'Revised draft', 'The subscription renews monthly.', 'Unit price: $17.43', 'Revenue $69.72', 'Average $17.43', 'This account is still in use.']) {
+            expect(observation.text).toContain(value);
+        }
+        expect(observation.elements.some(element => element.name === 'Preview action')).toBe(false);
+        for (const value of ['Hidden price', 'Hidden paragraph', 'Screen reader text']) { expect(observation.text).not.toContain(value); }
+        expect(observation.notices.join(' ')).toContain('This account is still in use.');
+    });
+    it('keeps every pointer card after the thirtieth and clicks the last one', async () => {
+        const context = await newTestContext(browser, { viewport: { width: 1280, height: 900 }, dialogs: 'accept' });
+        try {
+            const page = await context.newPage(); await page.goto(new URL('/hardening-cards', app.origin).toString());
+            const observation = await observe(page, { instruction: 'open Product 59' });
+            expect(observation.elements.filter(element => element.name.startsWith('Product '))).toHaveLength(60);
+            const last = observation.elements.find(element => element.name === 'Product 59')!;
+            await perform(page, { tool: 'click', ref: last.ref });
+            expect(await page.locator('#status').textContent()).toBe('Opened 59');
+        } finally { await context.close(); }
+    });
+    it('prioritizes named cards and counts trimmed clickable cards as omitted', async () => {
+        const context = await newTestContext(browser, { viewport: { width: 1280, height: 900 }, dialogs: 'accept' });
+        try {
+            const page = await context.newPage(); await page.goto(new URL('/hardening-cards?count=300', app.origin).toString());
+            const observation = await observe(page, { instruction: 'open Product 299' });
+            expect(observation.elements.some(element => element.name === 'Product 299')).toBe(true);
+            expect(observation.omitted).toBeGreaterThan(0);
+        } finally { await context.close(); }
+    });
+    it('keeps decorative row hover, ordinary links and images out of text and drag targets', async () => {
+        const { observation } = await open('/hardening-table');
+        expect(observation.elements.filter(element => element.role === 'generic')).toEqual([]);
+        expect(observation.elements.some(element => element.draggable)).toBe(false);
+        expect(observation.elements.some(element => element.role === 'img')).toBe(false);
+        expect(observation.elements.filter(element => element.name === 'Save')).toHaveLength(1);
+    });
+    it('stops treating a newly mounted persistent loading decoration as busy', async () => {
+        const context = await newTestContext(browser, { viewport: { width: 1280, height: 900 }, dialogs: 'accept' });
+        try {
+            const page = await context.newPage(); const monitor = createMonitor(context, { origin: app.origin });
+            await page.goto(new URL('/hardening-table?rows=1', app.origin).toString()); await observe(page);
+            await page.getByRole('button', { name: 'Save', exact: true }).click();
+            expect((await observe(page)).busy).toBe(true);
+            expect(await settle(page, monitor)).toBeLessThan(4000);
+            expect((await observe(page)).busy).toBe(false);
+            expect(await settle(page, monitor)).toBeLessThan(500);
+        } finally { await context.close(); }
+    });
+    it('scrolls a unique app shell for targetless legacy actions and rejects no movement', async () => {
+        const context = await newTestContext(browser, { viewport: { width: 1280, height: 900 }, dialogs: 'accept' });
+        try {
+            const page = await context.newPage(); await page.goto(new URL('/hardening-scroll', app.origin).toString());
+            await perform(page, { tool: 'scroll' });
+            expect(await page.locator('#app').evaluate(element => element.scrollTop)).toBeGreaterThan(0);
+            await page.locator('#app').evaluate(element => { element.scrollTop = element.scrollHeight; });
+            await expect(perform(page, { tool: 'scroll' })).rejects.toThrow(/did not move/i);
+        } finally { await context.close(); }
+    });
+    it('rejects password purpose on a plain text field with new-password autocomplete', async () => {
+        const context = await newTestContext(browser, { viewport: { width: 1280, height: 900 }, dialogs: 'accept' });
+        try {
+            const page = await context.newPage(); await page.goto(new URL('/integration-secrets', app.origin).toString());
+            const target = (await observe(page)).elements.find(element => element.name === 'New credential')!;
+            await expect(perform(page, { tool: 'type', ref: target.ref, value: 'Protected-5921', sensitive: true })).rejects.toThrow(/password/);
+            expect(await page.getByRole('textbox', { name: 'New credential', exact: true }).inputValue()).toBe('');
+        } finally { await context.close(); }
+    });
 });

@@ -13,6 +13,7 @@ export interface View {
     control?: string;
     controlActivations: Array<Record<string, string>>;
     review?: boolean;
+    instructions?: string;
     change?: Record<string, unknown>;
     /** The following act step, when the engine shares it. */
     next?: string;
@@ -84,14 +85,16 @@ export function scriptedModels(policy: (view: View) => Belief, helper?: (view: V
         doEvaluate: async ({ state, questions }) => {
             const view = toView(state as Record<string, unknown>);
             view.review = Object.hasOwn(questions, 'complete');
+            view.instructions = JSON.stringify(questions);
             calls.push({ questions: Object.keys(questions), view });
-            const belief = policy(view);
+            const belief = policy(view.review ? { ...view, control: undefined, controlActivations: [] } : view);
+            const controlBelief = view.control ? policy({ ...view, review: false, text: '', notices: [], elements: [], change: undefined }) : belief;
             const answers: Record<string, Answer> = {};
             // Post-failure audit: one question per earlier act step, each judged by the policy for that step.
             const audited = ((state as { steps?: Array<Record<string, unknown>> }).steps ?? []).map(entry => policy(toView({ task: entry })));
             for (const [id, question] of Object.entries(questions)) {
                 const step = /^on_target_(\d+)$/.exec(id);
-                answers[id] = step ? onTarget(audited[Number(step[1])]?.onTarget ?? 0.95) : answer(id, question, belief, view);
+                answers[id] = step ? onTarget(audited[Number(step[1])]?.onTarget ?? 0.95) : answer(id, question, id === 'needed' ? controlBelief : belief, view);
             }
             return { answers, usage: { inputTokens: 1000, outputTokens: 10 }, warnings: [], ...cost };
         },

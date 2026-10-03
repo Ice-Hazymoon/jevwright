@@ -116,7 +116,7 @@ export async function observe(page: Page, options: ObserveOptions = {}): Promise
     });
     const dialogs: AriaNode[] = []; collect(roots, node => node.role === 'dialog' || node.role === 'alertdialog', dialogs);
     const supplemented = surface.dialog && !dialogs.length ? [surface.dialog] : [...roots, ...added];
-    const result = buildObservation(supplemented, { url: page.url(), title, viewport, masked, values, inert, redact: options.redact });
+    const result = buildObservation(supplemented, { url: page.url(), title, viewport, masked, values, inert, redact: options.redact, instruction: options.instruction });
     const texts = [surface.text];
     if (!result.dialog) {
         const frames = page.frames().filter(frame => frame !== page.mainFrame());
@@ -212,7 +212,7 @@ interface Walk {
 }
 
 /** Pure transformation, unit-tested with captured snapshots. */
-export function buildObservation(tree: unknown, page: { url: string; title: string; viewport: { width: number; height: number }; masked?: Array<{ name: string; text: string }>; values?: Record<string, string>; inert?: Box[]; redact?: Redactor }): Observation {
+export function buildObservation(tree: unknown, page: { url: string; title: string; viewport: { width: number; height: number }; masked?: Array<{ name: string; text: string }>; values?: Record<string, string>; inert?: Box[]; redact?: Redactor; instruction?: string }): Observation {
     const clip = (text: string, max: number) => clipProtected(text, max, page.redact);
     const roots = normalize(tree);
     // Consumed in document order, so repeated labels ("Text" on every card) pair with their own content.
@@ -312,14 +312,10 @@ export function buildObservation(tree: unknown, page: { url: string; title: stri
             candidates.splice(index, 1);
         }
     }
-    let textTargets = 0;
-    for (let index = 0; index < candidates.length; index++) {
-        if (!INTERACTIVE.has(candidates[index]!.role) && ++textTargets > 30) { candidates.splice(index--, 1); }
-    }
     // Prefer main content and dialogs; page chrome and offscreen elements go last when trimming.
     // Controls inside an inert subtree are not offered at all, but still count toward the same-name index
     // that locates hover-revealed controls, as Playwright's role locator counts them.
-    const ranked = candidates.map((element, index) => ({ element, index, rank: (element.inMain ? 0 : element.inChrome ? 2 : 1) + (element.offscreen ? 1 : 0) })).filter(entry => !entry.element.inert);
+    const ranked = candidates.map((element, index) => ({ element, index, rank: (element.name && page.instruction?.toLowerCase().includes(element.name.toLowerCase()) ? -4 : 0) + (element.inMain ? 0 : element.inChrome ? 2 : 1) + (element.offscreen ? 1 : 0) })).filter(entry => !entry.element.inert);
     const kept = new Set(ranked.toSorted((a, b) => a.rank - b.rank || a.index - b.index).slice(0, LIMITS.elements).map(entry => entry.index));
     const elements: PageElement[] = [];
     const seen = new Map<string, number>();

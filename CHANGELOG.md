@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Preserve visible card content replaced by accessible labels, including inert previews, `display:contents` wrappers and assigned shadow slots; retain main text, prices, totals and errors while excluding hidden and replaced fallback text.
+- Keep clickable cards outside the plain-text supplement cap; count omitted controls and prioritize named targets. Cache DOM visibility/text and use lightweight busy polling on large pages.
+- Restrict completion review to requested actions. Treat missing check evidence as uncertain, and attribute only explicit contradictions to the product. Numeric grouping commas do not split steps.
+- Reduce decision payloads, merge completion/control reviews and wait before reviewing. Read page-value vocabularies only when requested; infer dragging only from explicit attributes or grab cursors, and hover targets from revealing styles.
+- Expire newly mounted loading decorations after two seconds, restore targetless scrolling in unique app containers and reject stationary scrolls. Preserve short/partial tokens in page-value target descriptions and use English replay errors.
+
 - Ground control-activation review in successful actions on the same connected DOM ref, so changing nearby counts do not trigger extra activations.
 
 - Reject a drag to the same DOM element, so a no-op pointer gesture cannot be recorded as a successful drop.
@@ -10,7 +16,7 @@
 
 - Respect an explicit next-step boundary when the scoped action-stage choice favors completion, avoiding rejection of an already opened confirmation dialog at borderline confidence. Later assertions and invariants still decide outcomes.
 
-- Breaking before 1.0: `secret(value)` now defaults to password purpose and can enter only password fields or current/new-password autocomplete fields. Use `secret(value, { purpose: 'any' })` for API keys and other editable fields. Code guards both observed and actual targets, including replay; field-specific model value choices exclude incompatible secrets.
+- Breaking before 1.0: `secret(value)` now defaults to password purpose and can enter only `type=password` fields. Autocomplete hints alone do not qualify. Use `secret(value, { purpose: 'any' })` for API keys and other editable fields. Code guards both observed and actual targets, including replay; field-specific model value choices exclude incompatible secrets.
 
 - Avoid treating ordinary processing text, decorative spinners and determinate progress as loading; report busy separately and keep bounded busy waits outside the action budget.
 - Limit plain-text targets to pointer/hover/context signals or instruction-named text, excluding control descendants and large-table text.
