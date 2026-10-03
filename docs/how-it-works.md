@@ -30,8 +30,14 @@ Each decision starts from Playwright's `ariaSnapshotJSON` in AI mode, with eleme
 - the row or list item the control sits in.
 
 It also keeps the page's notices (toasts, alerts) and a trimmed text of the page.
+A DOM supplement supplies roleless text targets, contenteditable fields, scrolling containers,
+and visible labels that differ from accessible names. It excludes hidden, inert and clipped
+screen-reader text. Visible text with `aria-hidden` is retained; accessible names remain separate.
+Field labels come from associated labels or adjacent leaf label/span elements, rather than explanatory paragraphs.
+Noninteractive text can be hovered, right-clicked or scrolled into view.
 
 Some cases need special handling:
+- **Closed shadow roots**: a context init script wraps `attachShadow` and retains roots in a weak map. Their modes and the application's `shadowRoot` getters stay unchanged. A selector engine reaches observed nodes in those roots. Declarative closed roots are not captured. The wrapper and engine globals are visible to application code.
 - **Modal dialogs**: when one is open, only the dialog is observed.
 - **Passwords**: values of password-like fields are masked.
 - **Hover-revealed controls** (a row's edit button that appears on hover) are marked, so the engine hovers their container first.
@@ -67,9 +73,39 @@ The helper is called at most twice per step. It may:
 
 It may not type text that neither the step nor its data contains. A "done" from the helper counts only when Jev does not clearly disagree.
 
+### Browser actions
+
+The model can choose hover, right-click, an 800 ms long press, double-click, drag and browser back.
+A drag names both a source and a destination. Playwright sends the mouse gesture for both native
+HTML drag-and-drop and pointer-driven boards. The test-level `double` option remains supported. Browser back is offered and executed only when
+Chromium navigation history contains an earlier HTTP(S) app page; the initial blank page is excluded.
+
+Select distinguishes native `<select>` controls from ARIA listboxes and comboboxes. Native controls
+use `selectOption`; ARIA choices click rendered options. The option question selects exact page text
+when a step has no data key. Empty or delayed option lists cause bounded waiting and fresh observation.
+This option choice does not authorize typing new page text.
+
+Upload can send a selected file or all files named in the step together. The file-group question
+chooses the group; multiple-file groups require a `multiple` input or multiple file chooser.
+A single-file input uses the selected key. Recordings store optional `fileKeys`, never local paths.
+
+Scroll can target the page or a scrolling container. `scroll_to` brings a named text or control into
+view. A scroll search uses an explicit `until` goal or quoted phrase from the current instruction,
+advances by 90% of a viewport,
+and observes mounted text between moves. It stops after 500 moves, 45 seconds or five unchanged
+positions. This lets virtualized rows render and lets growing feeds load without a model call for
+every viewport. Container searches inspect that container, so instructions outside it do not count as a loaded row.
+If the document cannot scroll and exactly one container can, a content target resolves to that container.
+Scroll searches and target gestures replay with semantic descriptors.
+
+Before executing a model action, the engine observes again and resolves its semantic target.
+If DOM replacement invalidates the reference before dispatch, it retries up to twice. A target
+that is still absent after three observations fails; actionability checks remain Playwright's.
+
 ## Settle
 
 Before each decision, the engine waits until the page is quiet: no data or navigation request is in flight, and there has been no DOM mutation for 350 ms.
+- Visible `aria-busy`, progressbars and loading/skeleton/spinner markers keep the page busy. The decision loop also waits while requests remain pending before treating absent controls as impossible. All waits remain bounded.
 - The app's own scripts and stylesheets count as requests, because a lazily loaded component renders nothing until its module arrives.
 - Inline-style changes, SVG attribute churn and `<head>` changes do not count as mutations, so animations do not keep a page busy forever.
 
@@ -106,7 +142,7 @@ With a `reference`, the judge compares the page with your trusted data.
 
 ## Recordings and healing
 
-Successful act steps record semantic targets and an optional end state: a normalized changed path,
+Successful act steps record semantic targets, optional drag destinations, file-key lists and scroll searches, and an optional end state: a normalized changed path,
 up to four appeared anchors and up to two disappeared controls. Toasts, numeric names and unstable
 names are excluded; typing-only steps record no anchors. A `likely-done` step records no end state.
 

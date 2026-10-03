@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Observe script-created closed shadow roots, roleless text targets, contenteditable editors and scroll containers while retaining visible labels.
+- Record and replay hover, right-click, long press, double-click, drag source/destination, browser back and scroll-to-text gestures.
+- Search mounted content while scrolling; wait for deferred controls and options, and refresh semantic targets after DOM replacement.
+- Select exact native and ARIA options; upload declared files together to multiple inputs in one action.
+- Extend screenshot secret detection to shadow roots and contenteditable editors.
+
 ## 0.6.0
 
 - Generate redacted JUnit reports, stable SHA-1 shards and last-failed selection from completed runs.

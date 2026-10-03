@@ -57,6 +57,63 @@ function escapeHtml(text: string): string {
 function pages(state: FixtureState, url: URL): string | undefined {
     const bug = url.searchParams.get('bug');
     switch (url.pathname) {
+        case '/reach-observe':
+            return layout('Surface controls', '<style>.menu:hover #submenu{display:block}#submenu{display:none}.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)}</style><div class="menu"><span>Workspace</span><div id="submenu"><button>Invite member</button></div></div><div id="closed"></div><div contenteditable="true" aria-label="Draft"></div><button aria-label="Discard"><span class="sr">Ignore this</span>Publish draft</button><div><span>Budget</span><input aria-label="Memo"></div><div aria-label="Activity" style="height:100px;overflow:auto"><div style="height:1200px">Earlier activity</div></div><p style="margin-top:1400px">End notes</p>', `
+const root = document.getElementById('closed').attachShadow({mode:'closed'});
+root.innerHTML = '<div id="nested"></div>';
+root.getElementById('nested').attachShadow({mode:'closed'}).innerHTML = '<label>Member<input></label><button>Grant</button>';
+window.fixtureRoot = root;
+window.rootStillClosed = document.getElementById('closed').shadowRoot === null;
+`);
+        case '/reach-actions':
+            return layout('Gestures', '<button id="hold">Hold action</button><button id="double">Open twice</button><div id="file">notes.txt</div><button id="rename" hidden>Rename file</button><label>Documents<input id="files" type="file" multiple></label><div style="display:flex;gap:60px"><div draggable="true" id="source">Parcel</div><div id="drop" style="padding:40px;border:1px solid">Receiving area</div><div id="pointer" style="cursor:grab;padding:20px">Task</div><div id="destination" style="padding:40px;border:1px solid">Finished</div></div><a href="/reach-details">View details</a><p id="end" style="margin-top:1600px">End notes</p><output id="events"></output>', `
+const events = document.getElementById('events'); const note = text => events.textContent += text + '|';
+const hold = document.getElementById('hold'); let timer;
+hold.onpointerdown = () => timer = setTimeout(() => note('held'), 600);
+hold.onpointerup = () => clearTimeout(timer);
+document.getElementById('double').ondblclick = () => note('twice');
+document.getElementById('file').oncontextmenu = e => { e.preventDefault(); document.getElementById('rename').hidden = false; };
+document.getElementById('rename').onclick = () => note('renamed');
+document.getElementById('files').onchange = e => note([...e.target.files].map(f => f.name).join(','));
+document.getElementById('source').ondragstart = e => e.dataTransfer.setData('text/plain','parcel');
+document.getElementById('drop').ondragover = e => e.preventDefault();
+document.getElementById('drop').ondrop = e => { e.preventDefault(); if(e.dataTransfer.getData('text/plain') === 'parcel') note('delivered'); };
+const task = document.getElementById('pointer'); let active = false;
+task.onpointerdown = e => { active = true; task.setPointerCapture(e.pointerId); };
+task.onpointerup = e => { const b = document.getElementById('destination').getBoundingClientRect(); if(active && e.clientX > b.left && e.clientX < b.right) note('moved'); active = false; };
+new IntersectionObserver(([entry]) => { if(entry.isIntersecting) note('end visible'); }).observe(document.getElementById('end'));
+window.addEventListener('pageshow', () => { if(sessionStorage.visited) note('returned'); });
+`);
+        case '/reach-details':
+            return layout('Details', '<p>Use browser history to return.</p>', 'sessionStorage.visited = "yes";');
+        case '/reach-fields':
+            return layout('Field labels', '<p>Use member@example.test / a passphrase</p><input aria-label="Address"><input aria-label="Passphrase" type="password"><label for="budget">Budget</label><input id="budget" aria-label="Memo">');
+        case '/reach-visual':
+            return layout('Visible summary', '<button aria-label="Choose amount" data-amount="5">5</button><button aria-label="Choose amount" data-amount="12">12</button><p>Total <span aria-hidden="true" id="total">0.00</span><span style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)">Unavailable amount</span></p><button id="finish">Finish</button>', `
+for (const button of document.querySelectorAll('[data-amount]')) button.onclick = () => { document.getElementById('total').textContent = Number(button.dataset.amount).toFixed(2); };
+document.getElementById('finish').onclick = () => { if(document.getElementById('total').textContent === '5.00') toast('Summary confirmed'); };
+`);
+        case '/reach-select':
+            return layout('Choices', (url.searchParams.has('duplicates') ? '<div role="listbox" aria-label="Other category"><div role="option" onclick="toast(&quot;Other category chosen&quot;)">Office supplies</div></div>' : '') + '<label>Category<input role="combobox" aria-controls="choices" id="search"></label><div id="choices" role="listbox" aria-label="Matches"></div><label>Order<select id="order"><option>Recent</option><option>Oldest first</option></select></label>', `
+let timer; document.getElementById('search').oninput = () => { clearTimeout(timer); document.getElementById('choices').textContent = ''; timer = setTimeout(() => { const option = document.createElement('div'); option.setAttribute('role','option'); option.textContent = 'Office supplies'; option.onclick = () => toast('Category chosen'); document.getElementById('choices').append(option); }, 1200); };
+document.getElementById('order').onchange = () => toast('Order chosen');
+`);
+        case '/reach-loading':
+            return layout('Deferred controls', '<div aria-busy="true" id="pending">Loading workspace</div>', `
+setTimeout(() => { const pending = document.getElementById('pending'); pending.removeAttribute('aria-busy'); pending.innerHTML = '<button onclick="toast(\\'Workspace ready\\')">Open workspace</button>'; }, 4500);
+`);
+        case '/reach-rebuild':
+            return layout('Rebuilt controls', '<div id="list"></div>', `
+let count = 0; const rebuild = () => { const list = document.getElementById('list'); list.innerHTML = '<button>Increment</button>'; list.firstChild.onclick = () => { count++; toast('Count ' + count); }; }; rebuild(); setInterval(rebuild, 400);
+`);
+        case '/reach-scroll':
+            return layout('Windowed results', (url.searchParams.has('hint') ? '<p>Scroll until Record 154 appears in the results.</p>' : '') + '<div id="results" aria-label="Results" style="height:180px;overflow:auto"><div id="spacer" style="height:12000px;position:relative"></div></div>', `
+const results = document.getElementById('results'); const draw = () => { const n = Math.floor(results.scrollTop / 60); const spacer = document.getElementById('spacer'); spacer.innerHTML = Array.from({length:4}, (_,i) => '<div style="position:absolute;top:' + (n+i)*60 + 'px">Record ' + (n+i+1) + (n+i===153 ? '<button onclick="toast(\\'Record opened\\')">Open record</button>' : '') + '</div>').join(''); }; results.onscroll = draw; draw();
+`);
+        case '/reach-feed':
+            return layout('Growing feed', '<div id="feed" aria-label="Updates" style="height:180px;overflow:auto"></div>', `
+const feed = document.getElementById('feed'); let count = 0, loading = false; const append = () => { for(let i=0;i<8;i++){ const row = document.createElement('div'); row.style.height='60px'; row.textContent = 'Update '+ ++count; if(count===39){ row.innerHTML += '<button onclick="toast(\\'Update opened\\')">Open update</button>'; } feed.append(row); } }; append(); feed.onscroll = () => { if(!loading && count<48 && feed.scrollTop+feed.clientHeight>=feed.scrollHeight-100){ loading=true; setTimeout(() => { append(); loading=false; },400); } };
+`);
         case '/upload':
             return layout('Avatar', '<label for="avatar">Choose avatar</label><input id="avatar" type="file" hidden><button id="choose">Upload avatar</button><button id="nothing">No chooser</button><label>Visible file<input type="file" id="visible"></label><output id="uploaded"></output>', `
 const avatar = document.getElementById('avatar');

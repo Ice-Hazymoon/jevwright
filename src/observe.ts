@@ -1,6 +1,7 @@
 import type { Redactor } from './secrets.ts';
 import type { Page } from 'playwright';
 import { createHash } from 'node:crypto';
+import { canGoBack, domLocator, readSurface } from './dom.ts';
 
 /** Node shape of Playwright `ariaSnapshotJSON({ mode: 'ai', boxes: true })`. */
 export interface AriaNode {
@@ -47,6 +48,9 @@ export interface PageElement {
     nth?: number;
     /** Visible text inside the element that its aria-label replaces in the accessible name (e.g. a card). */
     content?: string;
+    nativeSelect?: boolean;
+    draggable?: boolean;
+    scroll?: { top: number; height: number; viewport: number };
 }
 
 export interface Observation {
@@ -63,6 +67,10 @@ export interface Observation {
     omitted: number;
     /** Changes whenever URL, element values/states, notices or text change. */
     signature: string;
+    busy?: boolean;
+    scrollable?: boolean;
+    canGoBack?: boolean;
+    scroll?: { top: number; height: number; viewport: number };
 }
 
 const INTERACTIVE = new Set(['button', 'link', 'textbox', 'searchbox', 'combobox', 'checkbox', 'radio', 'switch', 'tab', 'menuitem', 'menuitemcheckbox', 'menuitemradio', 'option', 'slider', 'spinbutton', 'treeitem', 'listbox']);
@@ -86,15 +94,53 @@ export interface ObserveOptions {
 }
 
 export async function observe(page: Page, options: ObserveOptions = {}): Promise<Observation> {
-    const [tree, title, masked, inert] = await Promise.all([
+    const [tree, title, inert] = await Promise.all([
         page.ariaSnapshotJSON({ mode: 'ai', boxes: true, timeout: 10_000 }) as Promise<unknown>,
         page.title().catch(() => ''),
-        maskedContent(page),
         inertBoxes(page),
     ]);
     const viewport = options.viewport ?? page.viewportSize() ?? { width: 1280, height: 900 };
+    const surface = await readSurface(page);
+    const roots = normalize(tree);
+    const boxes: Box[] = [];
+    collect(roots, node => { if (node.box && isElement(node)) { boxes.push(node.box); } return false; }, []);
+    const added = surface.nodes.filter(node => !node.box || !boxes.some(box => sameBox(box, node.box!)));
     const values = await fieldValues(page, tree);
-    return buildObservation(tree, { url: page.url(), title, viewport, masked, values, inert, redact: options.redact });
+    const labelled: AriaNode[] = []; collect(roots, node => Boolean(node.name), labelled);
+    const masked = [...labelled, ...surface.nodes].flatMap(node => {
+        const content = node.box ? surface.details.find(detail => sameBox(detail.box, node.box!))?.content : undefined;
+        return node.name && content && content.length > 1 ? [{ name: node.name, text: content }] : [];
+    });
+    const dialogs: AriaNode[] = []; collect(roots, node => node.role === 'dialog' || node.role === 'alertdialog', dialogs);
+    const supplemented = surface.dialog && !dialogs.length ? [surface.dialog] : [...roots, ...added];
+    const result = buildObservation(supplemented, { url: page.url(), title, viewport, masked, values, inert, redact: options.redact });
+    const texts = [surface.text];
+    if (!result.dialog) {
+        const frames = page.frames().filter(frame => frame !== page.mainFrame());
+        texts.push(...await Promise.all(frames.map(frame => readSurface(frame).then(surface => surface.text).catch(() => ''))));
+    }
+    // Accessibility-hidden text may be visible; clipped accessibility text must not replace the rendered page.
+    result.text = clipProtected(texts.filter(Boolean).join(' '), LIMITS.text, options.redact);
+    for (const element of result.elements) {
+        const node = [...surface.nodes].find(node => node.ref === element.ref);
+        const snapshot: AriaNode[] = []; collect(roots, item => item.ref === element.ref, snapshot);
+        const box = node?.box ?? snapshot[0]?.box;
+        const detail = box ? surface.details.find(detail => sameBox(detail.box, box)) : undefined;
+        if (!detail) { continue; }
+        if (detail.context && element.ref?.startsWith('dom:')) { element.context = detail.context; }
+        if (detail.content) { element.content = clipProtected(detail.content, 160, options.redact); }
+        if (detail.near) { element.near = clipProtected(detail.near, LIMITS.near, options.redact); }
+        if (detail.value !== undefined) { element.value = options.redact?.contains(detail.value) ? detail.value : SECRET.test(element.name) ? '••••' : clipValue(detail.value, 300); }
+        if (detail.nativeSelect) { element.nativeSelect = true; }
+        if (detail.draggable) { element.draggable = true; }
+        if (detail.scroll) { element.scroll = detail.scroll; }
+    }
+    result.busy = surface.busy;
+    result.scrollable = surface.scrollable;
+    result.canGoBack = await canGoBack(page).catch(() => false);
+    result.scroll = surface.pageScroll;
+    result.signature = createHash('sha1').update(JSON.stringify([result.signature, result.text, result.elements.map(element => [element.content, element.near, element.value, element.scroll]), surface.busy, surface.pageScroll, result.canGoBack])).digest('hex').slice(0, 16);
+    return result;
 }
 
 type Box = NonNullable<AriaNode['box']>;
@@ -111,7 +157,7 @@ async function inertBoxes(page: Page): Promise<Box[]> {
         if (!roots.length) { return []; }
         const controls = 'a[href], button, input, select, textarea, summary, [role], [tabindex], [contenteditable]';
         // Same tolerance as `sameBox`, which matches these boxes to snapshot nodes.
-        const same = (a: DOMRect, b: DOMRect) => Math.abs(a.x - b.x) < 0.5 && Math.abs(a.y - b.y) < 0.5 && Math.abs(a.width - b.width) < 0.5 && Math.abs(a.height - b.height) < 0.5;
+        const same = (a: DOMRect, b: DOMRect) => Math.abs(a.x - b.x) <= 0.5 && Math.abs(a.y - b.y) <= 0.5 && Math.abs(a.width - b.width) <= 0.5 && Math.abs(a.height - b.height) <= 0.5;
         const live = [...document.querySelectorAll(controls)].filter(element => !element.closest('[inert]')).map(element => element.getBoundingClientRect());
         return roots.flatMap(root => [...(root.matches(controls) ? [root] : []), ...root.querySelectorAll(controls)])
             .map(element => element.getBoundingClientRect())
@@ -121,7 +167,7 @@ async function inertBoxes(page: Page): Promise<Box[]> {
     }).catch(() => []);
 }
 
-const sameBox = (a: Box, b: Box) => Math.abs(a.x - b.x) < 0.5 && Math.abs(a.y - b.y) < 0.5 && Math.abs(a.width - b.width) < 0.5 && Math.abs(a.height - b.height) < 0.5;
+const sameBox = (a: Box, b: Box) => Math.abs(a.x - b.x) <= 0.5 && Math.abs(a.y - b.y) <= 0.5 && Math.abs(a.width - b.width) <= 0.5 && Math.abs(a.height - b.height) <= 0.5;
 
 /** A snapshot node is the same element as a control inside an inert subtree when their boxes coincide. */
 function withinInert(box: Box | undefined, inert: readonly Box[] | undefined): boolean {
@@ -142,27 +188,8 @@ async function fieldValues(page: Page, tree: unknown): Promise<Record<string, st
         aria.children?.forEach(walk);
     };
     walk(tree);
-    const entries = await Promise.all(refs.slice(0, 40).map(async ref => [ref, await page.locator(`aria-ref=${ref}`).inputValue({ timeout: 500 }).catch(() => undefined)] as const));
+    const entries = await Promise.all(refs.slice(0, 40).map(async ref => [ref, await domLocator(page, ref).inputValue({ timeout: 500 }).catch(() => undefined)] as const));
     return Object.fromEntries(entries.filter((entry): entry is readonly [string, string] => entry[1] !== undefined));
-}
-
-/**
- * Visible text inside elements with an explicit aria-label. The label becomes the accessible name and the
- * text disappears from the accessibility tree, although users see it (edit-mode cards labelled "Text").
- */
-async function maskedContent(page: Page): Promise<Array<{ name: string; text: string }>> {
-    return page.evaluate(() => {
-        const found: Array<{ name: string; text: string }> = [];
-        for (const element of document.querySelectorAll<HTMLElement>('[aria-label]')) {
-            const name = element.getAttribute('aria-label')?.trim();
-            // A form field's innerText is its original markup, not what it holds now; its value comes from the snapshot.
-            if (!name || element.closest('[aria-hidden="true"]') || element.matches('input, textarea, select')) { continue; }
-            // eslint-disable-next-line unicorn/prefer-dom-node-text-content -- innerText respects CSS visibility/layout; hidden text must not leak into observations
-            const text = element.innerText;
-            if (text.length > 1 && text !== name) { found.push({ name, text }); }
-        }
-        return found;
-    }).catch(() => []);
 }
 
 interface Walk {
@@ -187,7 +214,7 @@ export function buildObservation(tree: unknown, page: { url: string; title: stri
     collect(roots, node => (node.role === 'dialog' || node.role === 'alertdialog') && !node.ariaHidden, dialogs);
     // Modal libraries hide the background from the accessibility tree; a visible dialog is the scope.
     const dialog = dialogs.at(-1);
-    const scope = dialog ? [dialog] : roots;
+    const scope = dialog ? [dialog, ...roots.filter(node => typeof node !== 'string' && node.ref?.startsWith('dom:'))] : roots;
 
     const candidates: Array<Omit<PageElement, 'i'> & { inMain: boolean; inChrome: boolean; inert: boolean }> = [];
     const notices: string[] = [];
@@ -246,7 +273,7 @@ export function buildObservation(tree: unknown, page: { url: string; title: stri
                     inert: withinInert(box, page.inert),
                 });
                 // Text inside a control belongs to the control; do not descend into its children.
-                if (node.role !== 'listitem' && node.role !== 'row') {
+                if (node.role !== 'listitem' && node.role !== 'row' && node.role !== 'listbox') {
                     near = undefined;
                     continue;
                 }
@@ -316,7 +343,7 @@ function collect(items: Array<AriaNode | string>, match: (node: AriaNode) => boo
 }
 
 function isElement(node: AriaNode): boolean {
-    if (INTERACTIVE.has(node.role)) { return true; }
+    if (INTERACTIVE.has(node.role) || node.ref?.startsWith('dom:')) { return true; }
     // Clickable non-semantic nodes (cards, rows) that carry their own text.
     if (node.cursor === 'pointer' && node.ref && !hasInteractiveDescendant(node)) {
         return Boolean(node.name || node.text || textChildren(node));

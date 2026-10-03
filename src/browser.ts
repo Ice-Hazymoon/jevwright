@@ -6,6 +6,7 @@ import { createRequire } from 'node:module';
 import { chromium } from 'playwright';
 import { RequestError, Server } from 'proxy-chain';
 import { JevwrightError } from './errors.ts';
+import { canGoBack, domLocator, readSurface, registerDomSelector, trackRoots } from './dom.ts';
 
 export function allowedUrl(raw: string, origins: readonly string[]): boolean {
     try {
@@ -109,6 +110,8 @@ export async function newTestContext(browser: Browser, options: { viewport: { wi
     // `baseURL` lets test code call `page.goto('/path')` and `page.request.get('/api/...')` with relative URLs.
     const context = await browser.newContext({ ...(options.device ?? { viewport: options.viewport }), serviceWorkers: 'block', acceptDownloads: options.acceptDownloads ?? false, locale: options.locale ?? 'en-US', timezoneId: options.timezone ?? 'UTC', ...(options.baseURL ? { baseURL: options.baseURL } : {}) });
     context.setDefaultTimeout(10_000);
+    await registerDomSelector();
+    await context.addInitScript(trackRoots);
     await context.addInitScript(watchMutations);
     context.on('page', (page) => {
         page.on('dialog', (dialog) => {
@@ -140,7 +143,7 @@ export async function settle(page: Page, monitor: Pick<Monitor, 'pendingRequests
             state = { idle: 0, last: 'navigation' }; // Navigation in progress.
         }
         const pending = monitor.pendingRequests();
-        if (pending === 0 && state.idle >= quietMs) { return Date.now() - started; }
+        if (pending === 0 && state.idle >= quietMs && !(await readSurface(page)).busy) { return Date.now() - started; }
         blocker = pending ? `${pending} request(s) in flight` : `DOM still changing (${state.last || 'unknown'})`;
         await new Promise(resolve => setTimeout(resolve, 100));
     }
@@ -148,7 +151,7 @@ export async function settle(page: Page, monitor: Pick<Monitor, 'pendingRequests
     return Date.now() - started;
 }
 
-export type Tool = 'click' | 'type' | 'press_enter' | 'press_escape' | 'select' | 'scroll' | 'wait' | 'upload';
+export type Tool = 'hover' | 'right_click' | 'long_press' | 'double_click' | 'drag' | 'back' | 'scroll_to' | 'click' | 'type' | 'press_enter' | 'press_escape' | 'select' | 'scroll' | 'wait' | 'upload';
 
 export interface ToolCall {
     tool: Tool;
@@ -163,19 +166,47 @@ export interface ToolCall {
     /** Fill atomically so trace snapshots cannot capture partial secret keystrokes. */
     sensitive?: boolean;
     filePath?: string;
+    filePaths?: string[];
+    destinationRef?: string;
+    scrollText?: string;
+    scrollDirection?: 'up' | 'down';
     hasTouch?: boolean;
 }
 
 export async function perform(page: Page, call: ToolCall): Promise<void> {
     const timeout = 5000;
     const target = (): Locator => {
-        if (call.ref) { return page.locator(`aria-ref=${call.ref}`); }
+        if (call.ref) { return domLocator(page, call.ref); }
         if (!call.locate) { throw new Error(`${call.tool} needs a target element`); }
         const scope = call.locate.inDialog ? page.getByRole('dialog').or(page.getByRole('alertdialog')).last() : page;
         return scope.getByRole(call.locate.role as Parameters<Page['getByRole']>[0], { name: call.locate.name, exact: true }).nth(call.locate.nth);
     };
     if (!call.ref && call.locate) { await reveal(page, target(), timeout); }
     switch (call.tool) {
+        case 'hover':
+            await target().hover({ timeout });
+            return;
+        case 'right_click':
+            await target().click({ button: 'right', timeout });
+            return;
+        case 'long_press':
+            await target().click({ delay: 800, timeout });
+            return;
+        case 'double_click':
+            await target().dblclick({ timeout });
+            return;
+        case 'back':
+            if (!await canGoBack(page)) { throw new Error('No earlier app page in browser history'); }
+            await page.goBack({ waitUntil: 'domcontentloaded', timeout });
+            return;
+        case 'scroll_to':
+            await target().scrollIntoViewIfNeeded({ timeout });
+            return;
+        case 'drag': {
+            if (!call.destinationRef) { throw new Error('Drag needs a destination'); }
+            await target().dragTo(domLocator(page, call.destinationRef), { timeout });
+            return;
+        }
         case 'click':
             try {
                 if (call.hasTouch) {
@@ -191,10 +222,12 @@ export async function perform(page: Page, call: ToolCall): Promise<void> {
             }
             return;
         case 'upload': {
-            if (!call.filePath) { throw new Error('Upload requires a declared file key'); }
+            if (!call.filePath && !call.filePaths?.length) { throw new Error('Upload requires a declared file key'); }
             const locator = target();
             if (await locator.evaluate(element => element instanceof HTMLInputElement && element.type === 'file', undefined, { timeout })) {
-                await locator.setInputFiles(call.filePath, { timeout });
+                const multiple = await locator.getAttribute('multiple') !== null;
+                if (!multiple && (call.filePaths?.length ?? 0) > 1) { throw new Error('Upload target accepts only one file'); }
+                await locator.setInputFiles(multiple && call.filePaths?.length ? call.filePaths : call.filePath!, { timeout });
             } else {
                 const chooser = page.waitForEvent('filechooser', { timeout }).catch(() => undefined);
                 try {
@@ -202,7 +235,8 @@ export async function perform(page: Page, call: ToolCall): Promise<void> {
                 } catch (error) { await chooser; throw error; }
                 const opened = await chooser;
                 if (!opened) { throw new Error('Upload target did not open a file chooser within 5 seconds'); }
-                await opened.setFiles(call.filePath, { timeout });
+                if (!opened.isMultiple() && (call.filePaths?.length ?? 0) > 1) { throw new Error('Upload target accepts only one file'); }
+                await opened.setFiles(opened.isMultiple() && call.filePaths?.length ? call.filePaths : call.filePath!, { timeout });
             }
             return;
         }
@@ -241,13 +275,22 @@ export async function perform(page: Page, call: ToolCall): Promise<void> {
             }
             return;
         case 'select': {
-            if (call.value === undefined) { throw new Error('No option to select'); }
             const locator = target();
-            await locator.selectOption({ label: call.value }, { timeout }).catch(async () => locator.selectOption(call.value!, { timeout }));
+            if (await locator.getAttribute('role') === 'option') { await locator.click({ timeout }); return; }
+            if (call.value === undefined) { throw new Error('No option to select'); }
+            if (await locator.evaluate(element => element instanceof HTMLSelectElement)) {
+                await locator.selectOption({ label: call.value }, { timeout }).catch(async () => locator.selectOption(call.value!, { timeout }));
+            } else {
+                const controls = await locator.getAttribute('aria-controls');
+                const scope = await locator.getAttribute('role') === 'listbox' ? locator : controls ? page.locator(`[id=${JSON.stringify(controls)}]`) : page;
+                const option = scope.getByRole('option', { name: call.value, exact: true });
+                if (!await option.count()) { throw new Error('Option is not rendered yet'); }
+                await option.click({ timeout });
+            }
             return;
         }
         case 'scroll':
-            await page.mouse.wheel(0, 700);
+            await scrollPage(page, call);
             return;
         case 'wait':
             await page.waitForTimeout(800);
@@ -310,4 +353,33 @@ export function actionError(error: unknown, redact?: Redactor): string {
     if (/not enabled|disabled/i.test(message)) { return 'target is disabled'; }
     if (/Timeout/i.test(message)) { return 'target did not become actionable in time'; }
     return (message.split('\n')[0] ?? message).slice(0, 180);
+}
+
+/** Search at viewport-sized intervals so windowed rows are not skipped; all searches have a time and iteration cap. */
+async function scrollPage(page: Page, call: ToolCall): Promise<void> {
+    const locator = call.ref ? domLocator(page, call.ref) : undefined;
+    const deadline = Date.now() + 45000;
+    const direction = call.scrollDirection === 'up' ? -1 : 1;
+    const phrase = call.scrollText?.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const search = phrase ? new RegExp(`(?<![\\p{L}\\p{N}_])${phrase}(?![\\p{L}\\p{N}_])`, 'u') : undefined;
+    let stalled = 0;
+    for (let attempt = 0; attempt < (call.scrollText ? 500 : 1) && Date.now() < deadline; attempt++) {
+        if (search) {
+            const scope = locator ? await locator.elementHandle({ timeout: 5000 }) : undefined;
+            const text = (await readSurface(page, scope ?? undefined).finally(() => scope?.dispose())).text;
+            if (search.test(text)) { return; }
+        }
+        const move = (direction: number) => {
+            const area = document.scrollingElement;
+            if (!area) { return { before: 0, after: 0 }; }
+            const before = area.scrollTop;
+            area.scrollTop += direction * Math.max(100, area.clientHeight * 0.9);
+            return { before, after: area.scrollTop };
+        };
+        const delta = locator
+            ? await locator.evaluate((element, direction) => { const before = element.scrollTop; element.scrollTop += direction * Math.max(100, element.clientHeight * 0.9); return { before, after: element.scrollTop }; }, direction)
+            : await page.evaluate(move, direction);
+        await page.waitForTimeout(delta.before === delta.after ? 500 : 40);
+        if (delta.before === delta.after) { if (++stalled >= 5) { return; } } else { stalled = 0; }
+    }
 }

@@ -190,18 +190,22 @@ can be a product regression or a stale target and does not establish either on i
 ## Limitations
 
 - The engine can:
-  - click, type, press Enter or Escape, and pick from a select;
-  - upload declared files and verify declared downloads;
+  - click, type into fields and contenteditable editors, press Enter or Escape, and choose native or ARIA options;
+  - upload declared files, including a chosen group in one multiple input, and verify declared downloads;
   - follow popups and return after they close;
-  - scroll and wait;
+  - scroll the page or a container, search for instruction text while scrolling, and bring static text into view;
+  - wait for loading indicators and refresh targets after DOM replacement;
   - hover to reveal controls;
-  - double-click to probe duplicate submissions.
+  - choose right-click, an 800 ms long press, double-click, drag between two semantic targets, and browser back;
+  - reach script-created closed shadow roots without opening them to application code.
 - It cannot:
-  - drag;
   - draw on a canvas;
   - use the clipboard.
 
   When one of these is only a precondition, do it in a `fixture` or `run` step. When it is the behavior under test, use a scripted Playwright test.
+- Declarative closed shadow roots are not captured. The engine wraps `attachShadow` and keeps references to script-created roots; the roots retain their original mode.
+- Dragging covers HTML drag-and-drop and pointer gestures. Drawing, arbitrary keyboard shortcuts and precise text-range formatting still need scripted Playwright steps.
+- Scroll searches stop after 500 viewports, 45 seconds, or five unchanged positions. A missing target still fails or needs another action.
 - Desktop defaults to 1280×900. Use `device: "mobile"` for touch and a mobile user agent, or provide a custom device.
 - `check` is a model judgment. Exact values (money, multilingual text, line breaks) belong in `verify`.
 - Chromium only.

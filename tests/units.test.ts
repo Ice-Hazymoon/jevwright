@@ -12,7 +12,7 @@ import { dirname, join, relative, resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { insertedText, pageChange, repeatsBlock } from '../src/act.ts';
-import { launchBrowser, newTestContext, settle } from '../src/browser.ts';
+import { launchBrowser, newTestContext, perform, settle } from '../src/browser.ts';
 import { main } from '../src/cli.ts';
 import { createModels, gatewayFromEnv } from '../src/models.ts';
 import { createMonitor, matchesWrite } from '../src/monitor.ts';
@@ -80,7 +80,7 @@ describe('observe', () => {
         const { observation } = await open('/items', page => page.getByRole('button', { name: 'Archive' }).nth(1).click());
         expect(observation.dialog).toBe('alertdialog "Archive plan?"');
         expect(observation.text).toContain('Archive Beta plan?');
-        expect(observation.elements.map(element => element.name).sort()).toEqual(['Archive plan', 'Cancel']);
+        expect(observation.elements.filter(element => element.role === 'button').map(element => element.name).sort()).toEqual(['Archive plan', 'Cancel']);
     });
 
     it('reports field values, disabled state and select options', async () => {
@@ -291,7 +291,7 @@ describe('monitor', () => {
         });
         expect(writes).toMatchObject([{ method: 'POST', path: '/api/items/b/archive', status: 200 }]);
         // Table cells expose their content as accessible names; it must reach the page text.
-        expect(observation.text).toContain('Beta plan · Archived');
+        expect(observation.text.replace(/ · /g, ' ')).toContain('Beta plan Archived');
     });
 
     it('matches write expectations by method, path and status', () => {
@@ -888,4 +888,59 @@ it('calibration removes a registered baseline after a failing checkout hook', as
         await removeOwnedWorktree(root, baseline);
         expect((await git('worktree', 'list', '--porcelain')).stdout).not.toContain(baseline);
     } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+describe('reach observation', () => {
+    it('reaches nested closed roots while preserving the application boundary', async () => {
+        const { observation } = await open('/reach-observe', async page => { expect(await page.evaluate(() => Reflect.get(window, 'rootStillClosed'))).toBe(true); });
+        expect(named(observation, 'textbox', 'Member')).toHaveLength(1);
+        expect(named(observation, 'button', 'Grant')).toHaveLength(1);
+    });
+    it('offers roleless hover text, editors, scrolling containers and noninteractive scroll targets', async () => {
+        const { observation } = await open('/reach-observe');
+        expect(observation.elements.some(element => element.name === 'Workspace' && element.ref)).toBe(true);
+        expect(named(observation, 'textbox', 'Draft')).toHaveLength(1);
+        expect(observation.elements.some(element => element.name === 'Activity' && Reflect.get(element, 'scroll'))).toBe(true);
+        expect(observation.elements.some(element => element.name === 'End notes' && element.ref)).toBe(true);
+    });
+    it('keeps visible labels distinct from accessible names and excludes clipped screen-reader text', async () => {
+        const { observation } = await open('/reach-observe');
+        expect(named(observation, 'button', 'Discard')[0]?.content).toBe('Publish draft');
+        expect(observation.text).not.toContain('Ignore this');
+        expect(named(observation, 'textbox', 'Memo')[0]?.near).toBe('Budget');
+    });
+    it('settles across an explicitly busy deferred render', async () => {
+        const { observation } = await open('/reach-loading');
+        expect(named(observation, 'button', 'Open workspace')).toHaveLength(1);
+    });
+    it('reads visible aria-hidden content and excludes visually clipped accessibility text', async () => {
+        const { observation } = await open('/reach-visual');
+        expect(observation.text).toContain('Total 0.00');
+        expect(observation.text).not.toContain('Unavailable amount');
+    });
+    it('distinguishes a field label from an explanatory paragraph', async () => {
+        const { observation } = await open('/reach-fields');
+        expect(named(observation, 'textbox', 'Address')[0]?.near).toBeUndefined();
+        expect(named(observation, 'textbox', 'Memo')[0]?.near).toBe('Budget');
+    });
+    it('rejects an ungrounded back gesture without leaving the app page', async () => {
+        const { observation } = await open('/reach-actions', async page => {
+            await expect(perform(page, { tool: 'back' })).rejects.toThrow('No earlier app page');
+            expect(page.url()).toContain('/reach-actions');
+        });
+        expect(named(observation, 'button', 'Open twice')).toHaveLength(1);
+    });
+});
+
+it('scopes closed-root dialogs and excludes inert shadow descendants', async () => {
+    const { observation } = await open('/reach-observe', page => page.evaluate(() => {
+        const root = Reflect.get(window, 'fixtureRoot') as ShadowRoot;
+        const dialog = document.createElement('div'); dialog.setAttribute('role', 'dialog'); dialog.setAttribute('aria-label', 'Member dialog'); dialog.innerHTML = '<button>Dismiss member dialog</button>';
+        root.append(dialog);
+    }));
+    expect(observation.dialog).toBe('dialog "Member dialog"');
+    expect(observation.elements.some(element => element.name === 'Dismiss member dialog')).toBe(true);
+    expect(observation.elements.some(element => element.name === 'Discard')).toBe(false);
+    const inert = await open('/reach-observe', page => page.locator('#closed').evaluate(element => element.setAttribute('inert', '')));
+    expect(inert.observation.elements.some(element => element.name === 'Member')).toBe(false);
 });

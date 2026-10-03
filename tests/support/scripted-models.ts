@@ -33,6 +33,7 @@ export interface ViewElement {
     in?: string;
     state?: string;
     options?: string[];
+    scroll?: unknown;
 }
 
 /** What a scripted Jev "believes" about the current state; unset answers default to unlikely. */
@@ -42,6 +43,11 @@ export interface Belief {
     tool?: string;
     target?: (element: ViewElement) => boolean;
     value?: string;
+    destination?: (element: ViewElement) => boolean;
+    option?: string;
+    scrollText?: string;
+    fileGroup?: 'selected' | 'all';
+    scrollDirection?: 'up' | 'down';
     anomaly?: number;
     holds?: number;
     support?: 'supports' | 'contradicts' | 'not_shown';
@@ -105,6 +111,11 @@ function answer(id: string, question: EvaluationQuestion, belief: Belief, view: 
     let chosen: string | undefined;
     if (id === 'tool') { chosen = belief.tool && options.includes(belief.tool) ? belief.tool : 'none'; }
     if (id === 'target') { chosen = options.find(option => belief.target?.(view.elements.find(element => element.i === Number(option))!)); }
+    if (id === 'destination') { chosen = options.find(option => belief.destination?.(view.elements.find(element => element.i === Number(option))!)); }
+    if (id === 'option') { chosen = options.find(option => question.criteria[option] === belief.option); }
+    if (id === 'file_group') { chosen = belief.fileGroup ?? 'all'; }
+    if (id === 'scroll_direction') { chosen = belief.scrollDirection ?? 'down'; }
+    if (id === 'scroll_text') { chosen = options.find(option => question.criteria[option] === belief.scrollText); }
     if (id === 'value') { chosen = belief.value; }
     if (id === 'support') { chosen = belief.support ?? 'not_shown'; }
     return distribution(options, chosen && options.includes(chosen) ? chosen : undefined);

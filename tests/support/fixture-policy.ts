@@ -117,3 +117,10 @@ function claim(view: View, text: string): Belief {
     if (/amount in euros/.test(text)) { return verdict(view.text.includes('€')); }
     return { holds: 0.5, support: 'not_shown' };
 }
+
+/** Reproduce the real model's premature no-action answer while deferred controls are still loading. */
+export function deferredPolicy(view: View): Belief {
+    return view.notices.includes('Workspace ready') ? { done: 0.95 }
+        : view.elements.some(is('button', 'Open workspace')) ? { tool: 'click', target: is('button', 'Open workspace') }
+            : view.history.some(entry => entry.action === 'wait') ? { tool: 'none' } : { tool: 'wait' };
+}

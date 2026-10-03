@@ -27,6 +27,10 @@ export interface RecordedAction {
     double?: boolean;
     /** Typed at the cursor after earlier text in the same field, instead of replacing it. */
     append?: boolean;
+    destination?: TargetDescriptor;
+    fileKeys?: string[];
+    scrollText?: string;
+    scrollDirection?: 'up' | 'down';
 }
 
 export type Anchor = { kind: 'element'; target: TargetDescriptor } | { kind: 'heading' | 'dialog'; text: string };
@@ -64,13 +68,17 @@ const recordingSchema = z.object({
             gone: z.array(descriptorSchema).optional(),
         }).optional(),
         actions: z.array(z.object({
-            tool: z.enum(['click', 'type', 'press_enter', 'press_escape', 'select', 'scroll', 'wait', 'upload']),
+            tool: z.enum(['click', 'type', 'press_enter', 'press_escape', 'select', 'scroll', 'wait', 'upload', 'hover', 'right_click', 'long_press', 'double_click', 'drag', 'back', 'scroll_to']),
             target: descriptorSchema.optional(),
             valueKey: z.string().optional(),
             value: z.string().optional(),
             template: z.string().optional(),
             double: z.boolean().optional(),
             append: z.boolean().optional(),
+            destination: descriptorSchema.optional(),
+            fileKeys: z.array(z.string()).optional(),
+            scrollText: z.string().optional(),
+            scrollDirection: z.enum(['up', 'down']).optional(),
         })),
     })),
 });
@@ -186,5 +194,5 @@ export function learnedRecording(previous: TestRecording | undefined, steps: Ste
 }
 
 function actionSignature(actions: RecordedAction[]): string {
-    return JSON.stringify(actions.map(action => [action.tool, action.target ? [action.target.role, action.target.name, stable(action.target.near), stable(action.target.context), action.target.nth] : null, action.valueKey ?? null, action.value ?? null, action.template ?? null, action.double ?? false, action.append ?? false]));
+    return JSON.stringify(actions.map(action => [action.tool, action.target ? [action.target.role, action.target.name, stable(action.target.near), stable(action.target.context), action.target.nth] : null, action.valueKey ?? null, action.value ?? null, action.template ?? null, action.double ?? false, action.append ?? false, action.destination ? [action.destination.role, action.destination.name, stable(action.destination.near), stable(action.destination.context), action.destination.nth] : null, action.fileKeys ?? null, action.scrollText ?? null, action.scrollDirection ?? null]));
 }

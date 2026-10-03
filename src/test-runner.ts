@@ -13,6 +13,7 @@ import { redactTrace, writeArtifact } from './artifacts.ts';
 import { newTestContext, settle } from './browser.ts';
 import { createDownloads } from './downloads.ts';
 import { JevwrightError } from './errors.ts';
+import { secretSurface } from './dom.ts';
 import { actedOnTarget, adjudicateClaim, judgeClaim } from './judge.ts';
 import { createModels, emptyUsage, ModelError } from './models.ts';
 import { createMonitor } from './monitor.ts';
@@ -622,7 +623,7 @@ function normalize(outcome: CheckOutcome): { passed: boolean; evidence?: unknown
 async function showsSecret(page: Page, redact: Redactor): Promise<boolean> {
     if (!redact.active) { return false; }
     // eslint-disable-next-line unicorn/prefer-dom-node-text-content -- only rendered text reaches the pixels
-    const shown = await page.evaluate(() => [document.body?.innerText ?? '', ...[...document.querySelectorAll('input, textarea')].map(field => (field as HTMLInputElement).value)].join('\n')).catch(() => undefined);
+    const shown = await secretSurface(page).catch(() => undefined);
     return shown === undefined || redact.contains(shown);
 }
 

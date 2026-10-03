@@ -8,7 +8,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runFailureExitCode } from '../src/cli.ts';
 import { act, check, reload, run, runSuite, verify } from '../src/index.ts';
 import { startFixtureApp } from './fixtures/app.ts';
-import { fixturePolicy } from './support/fixture-policy.ts';
+import { deferredPolicy, fixturePolicy } from './support/fixture-policy.ts';
 import { scriptedModels } from './support/scripted-models.ts';
 
 type App = Awaited<ReturnType<typeof startFixtureApp>>;
@@ -992,4 +992,10 @@ describe('unchanged check observations', () => {
         expect(result.totals.models.jevCalls).toBe(1);
         expect(result.totals.models.llmCalls).toBe(1);
     });
+});
+
+it('waits for deferred controls before accepting a no-action plan', async () => {
+    const spec: TestSpec = { id: 'deferred-controls', title: 'Open a deferred workspace', risk: 'Controls are declared absent before loading finishes', start: '/reach-loading', steps: () => [act('Wait for the workspace, then open it'), verify('workspace opened', ({ page }) => page.locator('#status').textContent().then(text => text === 'Workspace ready'))] };
+    const result = await runSuite([spec], { baseURL: app.origin, outputDir: join(root, 'deferred'), retries: 0, models: scriptedModels(deferredPolicy).settings, log: () => undefined });
+    expect(result.results[0]?.status, result.results[0]?.summary).toBe('passed');
 });

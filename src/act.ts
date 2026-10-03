@@ -21,6 +21,7 @@ import { templateKeys, writeRules } from './spec.ts';
 export interface ActionRecord {
     tool: Tool;
     element?: string;
+    destination?: string;
     /** Data key or literal (quoted) that was typed or selected. */
     value?: string;
     source: 'replay' | 'jev' | 'llm';
@@ -98,19 +99,26 @@ export interface ActInput {
 }
 
 const TOOLS: Record<Tool | 'none', string> = {
-    upload: 'Upload one of the declared files through the target file input or upload button',
+    hover: 'Hover the target text or control to reveal a menu or toolbar',
+    right_click: 'Right-click the target to open its context menu',
+    long_press: 'Hold the pointer down on the target for 800 ms',
+    double_click: 'Double-click the target',
+    drag: 'Drag the target source onto the separately chosen destination',
+    back: 'Return through browser history to the previous page only when task.step requests returning through history',
+    scroll_to: 'Bring the target text or control into view',
+    upload: 'Upload declared files together for a multiple input, or the chosen file for a single input through the target file input or upload button',
     click: 'Click the target (button, link, tab, checkbox, switch, radio, menu item, option, card)',
     type: 'Type one of the given `task.values` into the target text field. The first typing into a field in this step replaces its content; typing a different value into it again continues at the cursor',
     press_enter: 'Press Enter in the target field (e.g. to submit a search or add an item)',
     press_escape: 'Press Escape to close the open menu, popover or dialog',
-    select: 'Choose an option in the target dropdown that lists options',
-    scroll: 'Scroll down to load or reveal more content',
+    select: 'Choose the option named by the option question; use native selection for a select, or click a rendered ARIA option',
+    scroll: 'Scroll the target scrollable container, or the page when no container is targeted. The scroll_text question can name text to search for across successive viewports',
     wait: 'Wait: the page is still loading or processing (spinner, "loading…", "saving…", busy control)',
     none: 'No action: the step is already achieved, or nothing on this page can make progress',
 };
 /** Offered instead of `type` when the step names no values: the only thing to type is nothing. */
 const CLEAR = 'Clear the target text field, leaving it empty (this step gives no values to type)';
-const TARGETED = new Set<Tool>(['click', 'type', 'press_enter', 'select', 'upload']);
+const TARGETED = new Set<Tool>(['click', 'type', 'press_enter', 'select', 'upload', 'hover', 'right_click', 'long_press', 'double_click', 'drag', 'scroll_to']);
 const SUBMITS = new Set<Tool>(['click', 'press_enter', 'select']);
 const FIELD_ROLES = new Set(['textbox', 'searchbox', 'combobox', 'spinbutton']);
 const THRESHOLDS = { doneAt: 0.5, sure: 0.85, target: 0.3, confirm: 0.65, likely: 0.45, error: 0.7, helperDone: 0.35 };
@@ -211,6 +219,7 @@ async function replaySteps(input: ActInput, recorded: RecordedAction[], actions:
             const match = action.target ? resolveTargetMatch(action.target, observation) : undefined;
             element = match?.element;
             if (element && !match?.unique) { unique = false; }
+            if (action.destination && !resolveTargetMatch(action.destination, observation).unique) { unique = false; }
             if (!action.target) { break; }
         }
         if (action.target && !element) {
@@ -224,8 +233,8 @@ async function replaySteps(input: ActInput, recorded: RecordedAction[], actions:
         try {
             const sensitive = secretInput(input, action.valueKey, action.tool, element);
             if (action.template && templateKeys(action.template).some(key => input.secretKeys?.has(key))) { throw new Error('Secret input requires a single valueKey'); }
-            await perform(input.page, { hasTouch: input.hasTouch, filePath: uploadPath(input, action.tool, action.valueKey), sensitive, tool: action.tool, ref: element?.ref, locate: element && observation ? locateOf(element, observation) : undefined, value, double: action.double, ...(action.append ? { append: true } : {}) });
-            actions.push({ tool: action.tool, element: element ? describeElement(element) : undefined, value: recordedLabel(action, value), source: 'replay', ok: true, durationMs: Math.round(performance.now() - started) });
+            await performFresh(input, { hasTouch: input.hasTouch, filePath: uploadPath(input, action.tool, action.valueKey), filePaths: uploadPaths(input, action.fileKeys), sensitive, tool: action.tool, ref: element?.ref, locate: element && observation ? locateOf(element, observation) : undefined, value, double: action.double, scrollText: action.scrollText, scrollDirection: action.scrollDirection, ...(action.append ? { append: true } : {}) }, action.target, action.destination);
+            actions.push({ tool: action.tool, element: element ? describeElement(element) : undefined, ...(action.destination ? { destination: describeElement(action.destination) } : {}), value: recordedLabel(action, value), source: 'replay', ok: true, durationMs: Math.round(performance.now() - started) });
             recording.push(action);
         } catch (error) {
             actions.push({ tool: action.tool, element: element ? describeElement(element) : undefined, source: 'replay', ok: false, error: actionError(error, input.redact), durationMs: Math.round(performance.now() - started) });
@@ -243,6 +252,10 @@ interface Decision {
     literal?: string;
     /** Several data values in one entry (`{first}\n\n{second}`); it replaces the field's content. */
     template?: string;
+    fileKeys?: string[];
+    destination?: PageElement;
+    scrollText?: string;
+    scrollDirection?: 'up' | 'down';
     source: 'jev' | 'llm';
 }
 
@@ -345,6 +358,11 @@ async function decideLoop(input: ActInput, models: Models, actions: ActionRecord
         let next: Decision | undefined = decision;
         let escalate: string | undefined;
         if (decision.tool === 'none') {
+            if ((observation.busy || input.monitor.pendingRequests() > 0) && waits++ < 5) {
+                await input.page.waitForTimeout(600);
+                history.push({ action: 'wait', event: 'Content is still loading; observe again before choosing a target' });
+                continue;
+            }
             if (!everything && !retriedEmpty) {
                 // Late renders: look once more before giving up.
                 retriedEmpty = true;
@@ -362,6 +380,11 @@ async function decideLoop(input: ActInput, models: Models, actions: ActionRecord
                 history.push({ action: 'wait' });
                 continue;
             }
+        } else if (decision.tool === 'select' && !decision.target?.nativeSelect && decision.target?.role !== 'option'
+            && (!decision.target?.options?.length || ((trace.pTarget ?? 0) < THRESHOLDS.target && lastAction === 'type')) && waits++ < 5) {
+            await input.page.waitForTimeout(600);
+            history.push({ action: 'wait', event: 'Options are not rendered yet; observe again' });
+            continue;
         } else if (TARGETED.has(decision.tool as Tool) && (!decision.target || (trace.pTarget ?? 0) < THRESHOLDS.target)) {
             escalate = `target confidence ${trace.pTarget ?? 0} below ${THRESHOLDS.target}`;
         } else if (decision.tool === 'type' && decision.valueKey === undefined && decision.literal === undefined) {
@@ -372,9 +395,9 @@ async function decideLoop(input: ActInput, models: Models, actions: ActionRecord
             // Retrying what just failed on an unchanged plan wastes the step; ask the helper how to get past it.
             escalate = `the same action just failed: ${failed.error ?? 'unknown error'}`;
         }
-        const signature = `${decision.tool}|${decision.target ? describeElement(decision.target) : ''}|${decision.valueKey ?? ''}|${observation.signature}`;
+        const signature = `${decision.scrollText ?? ''}|${decision.destination?.i ?? ''}|${decision.tool}|${decision.target ? describeElement(decision.target) : ''}|${decision.valueKey ?? ''}|${observation.signature}`;
         seen.set(signature, (seen.get(signature) ?? 0) + 1);
-        if (!escalate && (seen.get(signature)! >= 3 || repeatsBlock(history, 2, 3) || repeatsBlock(history, 3, 3))) {
+        if (!escalate && (seen.get(signature)! >= 3 || (decision.tool !== 'scroll' && (repeatsBlock(history, 2, 3) || repeatsBlock(history, 3, 3))))) {
             escalate = 'repeating the same actions without progress';
         }
         if (escalate) {
@@ -395,9 +418,14 @@ async function decideLoop(input: ActInput, models: Models, actions: ActionRecord
             next = help.decision;
         }
 
+        if (next.tool === 'select' && next.target && !next.target.nativeSelect && next.target.role !== 'option' && !next.target.options?.length && waits++ < 5) {
+            await input.page.waitForTimeout(600);
+            history.push({ action: 'wait', event: 'Options are not rendered yet; observe again' });
+            continue;
+        }
         const record = await performDecision(input, next, observation, actions, recording);
         actions.push(record);
-        history.push({ action: record.tool, ...(record.element ? { element: record.element } : {}), ...(record.value ? { value: record.value } : {}), ...(record.error ? { error: record.error } : {}) });
+        history.push({ action: record.tool, ...(record.element ? { element: record.element } : {}), ...(record.destination ? { destination: record.destination } : {}), ...(record.value ? { value: record.value } : {}), ...(record.error ? { error: record.error } : {}) });
     }
     return { status: 'failed', failure: 'max-actions', reason: `Step not complete after ${maxActions} actions${missing.length ? `: ${neverEntered(missing)}` : ''}` };
 }
@@ -409,12 +437,14 @@ async function performDecision(input: ActInput, next: Decision, observation: Obs
     const append = appends(next, actions, field, typing);
     const call: ToolCall = { hasTouch: input.hasTouch, tool: next.tool as Tool, ref: next.target?.ref, locate: next.target ? locateOf(next.target, observation) : undefined, value: decidedValue(next, input.values), double: input.double && next.tool === 'click', ...(append ? { append } : {}) };
     const started = performance.now();
-    const record: ActionRecord = { tool: call.tool, element: field, value: typing, source: next.source, ok: true, durationMs: 0 };
+    const record: ActionRecord = { tool: call.tool, element: field, ...(next.destination ? { destination: describeElement(next.destination) } : {}), value: typing, source: next.source, ok: true, durationMs: 0 };
     try {
         call.filePath = uploadPath(input, call.tool, next.valueKey);
         call.sensitive = secretInput(input, next.valueKey, call.tool, next.target);
-        await perform(input.page, call);
-        if (call.tool !== 'wait' && call.tool !== 'scroll') { recording.push(recordedDecision(next, call, observation)); }
+        call.filePaths = call.tool === 'upload' ? uploadPaths(input, next.fileKeys) : undefined;
+        call.scrollText = next.scrollText; call.scrollDirection = next.scrollDirection;
+        await performFresh(input, call, next.target ? describeTarget(next.target, observation) : undefined, next.destination ? describeTarget(next.destination, observation) : undefined);
+        recording.push(recordedDecision(next, call, observation));
     } catch (error) {
         record.ok = false;
         record.error = actionError(error, input.redact);
@@ -448,6 +478,10 @@ function recordedDecision(next: Decision, call: ToolCall, observation: Observati
         ...(next.literal !== undefined ? { value: next.literal } : {}),
         ...(call.double ? { double: true } : {}),
         ...(call.append ? { append: true } : {}),
+        ...(next.destination ? { destination: describeTarget(next.destination, observation) } : {}),
+        ...(call.filePaths?.length ? { fileKeys: next.fileKeys! } : {}),
+        ...(next.scrollText ? { scrollText: next.scrollText } : {}),
+        ...(next.scrollDirection ? { scrollDirection: next.scrollDirection } : {}),
     };
 }
 
@@ -604,7 +638,14 @@ export function pageState(observation: Observation, options: { values?: boolean 
             ...(element.offscreen ? { offscreen: true } : {}),
             ...(element.reveal ? { appears_on_hover: true } : {}),
             ...(element.content ? { content: element.content } : {}),
+            ...(element.draggable ? { draggable: true } : {}),
+            ...(element.nativeSelect ? { native_select: true } : {}),
+            ...(element.scroll ? { scroll: element.scroll } : {}),
         })),
+        ...(observation.busy ? { loading: true } : {}),
+        ...(observation.scroll ? { scroll: observation.scroll } : {}),
+        ...(observation.scrollable ? { scrollable: true } : {}),
+        ...(observation.canGoBack ? { history_back_available: true } : {}),
         ...(observation.omitted ? { omitted_elements: observation.omitted } : {}),
     };
 }
@@ -615,12 +656,15 @@ function decisionQuestions(input: ActInput, observation: Observation, afterActio
     const withValues = hasValues ? ', with the given `task.values` (`task.values_entered`, when present, lists the ones code confirmed are exactly in a field)' : '';
     const actionable = observation.elements.filter(element => (element.ref || element.reveal) && !element.disabled);
     const tools: Partial<Record<Tool | 'none', string>> = { click: TOOLS.click };
+    if (observation.canGoBack) { tools.back = TOOLS.back; }
+    if (actionable.length) { for (const tool of ['hover', 'right_click', 'long_press', 'double_click', 'scroll_to'] as const) { tools[tool] = TOOLS[tool]; } }
+    if (actionable.some(element => element.draggable)) { tools.drag = TOOLS.drag; }
     if (Object.keys(input.files ?? {}).length && actionable.length) { tools.upload = TOOLS.upload; }
     if (actionable.some(element => FIELD_ROLES.has(element.role))) { tools.type = hasValues ? TOOLS.type : CLEAR; }
     if (actionable.some(element => FIELD_ROLES.has(element.role))) { tools.press_enter = TOOLS.press_enter; }
     if (observation.dialog || actionable.some(element => element.states?.includes('expanded'))) { tools.press_escape = TOOLS.press_escape; }
-    if (actionable.some(element => element.options?.length)) { tools.select = TOOLS.select; }
-    if (observation.omitted > 0) { tools.scroll = TOOLS.scroll; }
+    if (actionable.some(element => element.options?.length || element.role === 'listbox' || element.role === 'option')) { tools.select = TOOLS.select; }
+    if (observation.omitted > 0 || observation.scrollable) { tools.scroll = TOOLS.scroll; }
     tools.wait = TOOLS.wait;
     tools.none = TOOLS.none;
     const questions: Record<string, Question> = {
@@ -632,8 +676,13 @@ function decisionQuestions(input: ActInput, observation: Observation, afterActio
         questions.done_change = { type: 'boolean', instructions: `Does \`page\` show that \`task.step\` has been achieved${withValues}? Judge from \`page.text\`, \`page.elements\` and \`task.last_change\` (what the last action changed).${later}` };
     }
     if (actionable.length) {
-        questions.target = { type: 'choice', instructions: 'Which entry of `page.elements` (by its `i`) should the next action toward `task.step` act on?', criteria: Object.fromEntries(actionable.slice(0, 250).map(element => [String(element.i), null])) };
+        questions.target = { type: 'choice', instructions: 'Which entry of `page.elements` (by its `i`) should the next action toward `task.step` act on? Visible content and nearby labels can differ from accessible names; follow the task when it specifies which to use.', criteria: Object.fromEntries(actionable.slice(0, 250).map(element => [String(element.i), null])) };
     }
+    const options = [...new Set(actionable.flatMap(element => element.options ?? (element.role === 'option' ? [element.name] : [])))];
+    if (options.length) { questions.option = { type: 'choice', instructions: 'Which exact page option should select choose for task.step? This is used only for select.', criteria: Object.fromEntries(options.slice(0, 80).map((option, i) => [String(i), option])) }; }
+    if (tools.drag) { questions.destination = { type: 'choice', instructions: 'For drag only, which page.elements entry is the destination to drop onto? The target question selects the source.', criteria: Object.fromEntries(actionable.map(element => [String(element.i), null])) }; }
+    if (tools.scroll) { questions.scroll_direction = { type: 'choice', instructions: 'For scroll only, which direction should the page or container move?', criteria: { down: 'Scroll down', up: 'Scroll up' } }; questions.scroll_text = { type: 'choice', instructions: 'For scroll only: when task.step says to scroll until named text appears, choose that text even when page does not show it yet. Choose none only for a single viewport without a named goal.', criteria: { none: 'One viewport', ...Object.fromEntries(scrollPhrases(input.instruction).map((phrase, i) => [String(i), phrase])) } }; }
+    if (Object.keys(input.files ?? {}).length > 1) { questions.file_group = { type: 'choice', instructions: 'For upload only, does this single upload action attach all the files named in task.step, or just the file chosen by value?', criteria: { selected: 'Attach only the selected file', all: 'Attach all files named in this step together to the same multiple input' } }; }
     if (hasValues || Object.keys(input.files ?? {}).length) {
         questions.value = { type: 'choice', instructions: 'If the next action toward `task.step` types, selects or uploads something, which of `task.values` should it use? Prefer values not yet shown on `page` or listed in `task.values_entered`.', criteria: Object.fromEntries(Object.entries(modelValues(input)).map(([key, value]) => [key, value.slice(0, 200)])) };
     }
@@ -652,7 +701,7 @@ function resolveDecision(observation: Observation, answers: Record<string, Answe
     const fits: Partial<Record<Tool, (element: PageElement) => boolean>> = {
         type: element => FIELD_ROLES.has(element.role),
         press_enter: element => FIELD_ROLES.has(element.role),
-        select: element => Boolean(element.options?.length),
+        select: element => Boolean(element.options?.length) || element.role === 'listbox' || element.role === 'option' || element.role === 'combobox',
     };
     let chosen = target ? byIndex(target.choice) : undefined;
     let resolved: Tool | 'none' = tool;
@@ -666,6 +715,10 @@ function resolveDecision(observation: Observation, answers: Record<string, Answe
         }
     }
     const valueKey = originalValueKey(input, choiceOf(answers.value)?.choice);
+    const option = choiceOf(answers.option)?.choice;
+    const options = [...new Set(observation.elements.filter(element => (element.ref || element.reveal) && !element.disabled).flatMap(element => element.options ?? (element.role === 'option' ? [element.name] : [])))];
+    if (resolved === 'select' && chosen?.role === 'option') { return { tool: 'select', target: chosen, literal: chosen.name, source: 'jev' }; }
+    if (resolved === 'select' && valueKey === undefined && option !== undefined && options[Number(option)] !== undefined) { return { tool: 'select', target: chosen, literal: options[Number(option)], source: 'jev' }; }
     if (resolved === 'type' && !Object.keys(values).length && chosen) {
         return { tool: 'type', target: chosen, literal: '', source: 'jev' };
     }
@@ -673,7 +726,14 @@ function resolveDecision(observation: Observation, answers: Record<string, Answe
     if (resolved === 'select' && chosen?.options && valueKey !== undefined && !secretKeys?.has(valueKey) && !chosen.options.includes(values[valueKey] ?? '')) {
         return { tool: 'select', target: chosen, literal: bestOption(chosen.options, values[valueKey] ?? ''), source: 'jev' };
     }
-    return { tool: resolved, target: TARGETED.has(resolved as Tool) ? chosen : undefined, ...(resolved === 'type' || resolved === 'select' || resolved === 'upload' ? { valueKey } : {}), source: 'jev' };
+    if (resolved === 'scroll' && !chosen?.scroll && observation.scroll && observation.scroll.height <= observation.scroll.viewport) {
+        const containers = observation.elements.filter(element => element.scroll && element.ref);
+        if (containers.length === 1) { chosen = containers[0]; }
+    }
+    const scrollChoice = choiceOf(answers.scroll_text)?.choice;
+    const scrollText = scrollChoice === undefined || scrollChoice === 'none' ? undefined : scrollPhrases(input.instruction)[Number(scrollChoice)];
+    const destination = resolved === 'drag' ? observation.elements[Number(choiceOf(answers.destination)?.choice)] : undefined;
+    return { tool: resolved, target: TARGETED.has(resolved as Tool) || (resolved === 'scroll' && chosen?.scroll) ? chosen : undefined, ...(destination ? { destination } : {}), ...(resolved === 'upload' && choiceOf(answers.file_group)?.choice === 'all' ? { fileKeys: Object.keys(input.files ?? {}) } : {}), ...(resolved === 'scroll' && scrollText ? { scrollText } : {}), ...(resolved === 'scroll' ? { scrollDirection: choiceOf(answers.scroll_direction)?.choice === 'up' ? 'up' as const : 'down' as const } : {}), ...(resolved === 'type' || resolved === 'select' || resolved === 'upload' ? { valueKey } : {}), source: 'jev' };
 }
 
 function bestOption(options: string[], wanted: string): string {
@@ -800,8 +860,10 @@ async function awaitExpectation(input: ActInput, wait: boolean): Promise<Expecta
 const helperSchema = z.object({
     reason: z.string().max(600),
     outcome: z.enum(['act', 'step_already_done', 'impossible']),
-    tool: z.enum(['click', 'type', 'press_enter', 'press_escape', 'select', 'scroll', 'wait', 'upload']).nullable(),
+    tool: z.enum(['click', 'type', 'press_enter', 'press_escape', 'select', 'scroll', 'wait', 'upload', 'hover', 'right_click', 'long_press', 'double_click', 'drag', 'back', 'scroll_to']).nullable(),
     element: z.number().int().nullable(),
+    destination: z.number().int().nullable().optional(),
+    file_keys: z.array(z.string()).nullable().optional(),
     value_key: z.string().nullable(),
     text: z.string().nullable(),
 });
@@ -816,11 +878,13 @@ async function escalateToLlm(input: ActInput, models: Models, observation: Obser
     if (answer.outcome !== 'act' || !answer.tool) { return { outcome: answer.outcome === 'step_already_done' ? 'done' : 'impossible', reason: answer.reason }; }
     const target = answer.element !== null ? observation.elements[answer.element] : undefined;
     if (TARGETED.has(answer.tool) && ((!target?.ref && !target?.reveal) || target.disabled)) { return { outcome: 'impossible', reason: `helper chose an unusable element: ${answer.reason}` }; }
-    const text = helperText(answer, input);
+    const text = answer.tool === 'select' && answer.text && observation.elements.some(element => element.options?.includes(answer.text!) || (element.role === 'option' && element.name === answer.text)) ? { literal: answer.text } : helperText(answer, input);
     if ((answer.tool === 'type' || answer.tool === 'select' || answer.tool === 'upload') && !Object.keys(text).length) {
         return { outcome: 'impossible', reason: `helper proposed typing a value that is not in the step: ${answer.reason}` };
     }
-    return { outcome: 'act', decision: { tool: answer.tool, target, ...text, source: 'llm' }, reason: answer.reason };
+    const fileKeys = answer.file_keys?.map(key => originalValueKey(input, key));
+    if (fileKeys?.some(key => !key || !Object.hasOwn(input.files ?? {}, key))) { return { outcome: 'impossible', reason: 'helper chose an undeclared file' }; }
+    return { outcome: 'act', decision: { tool: answer.tool, target, ...(fileKeys?.length ? { fileKeys: fileKeys as string[] } : {}), ...(answer.destination != null ? { destination: observation.elements[answer.destination] } : {}), ...(answer.tool === 'scroll' && answer.text && input.instruction.includes(answer.text) ? { scrollText: answer.text } : {}), ...text, source: 'llm' }, reason: answer.reason };
 }
 
 /**
@@ -882,4 +946,39 @@ function originalValueKey(input: ActInput, alias: string | undefined): string | 
 
 function modelEnteredValues(input: ActInput, observation: Observation): Record<string, string> {
     return Object.fromEntries(Object.entries(enteredValues(observation, input.values)).map(([key, value]) => [modelValueKey(input, key), value]));
+}
+
+/** Candidate phrases come verbatim from the instruction; searching is not page input. */
+function scrollPhrases(instruction: string): string[] {
+    const until = /\buntil\s+(?:the\s+)?(.+?)(?:\s+(?:appears?|loads?|is\s+(?:rendered|visible)|becomes?\s+visible)\b|[,;]|$)/i.exec(instruction)?.[1];
+    const quoted = [...instruction.matchAll(/["“]([^"”]+)["”]/g)].map(match => match[1]!);
+    return [...new Set([until?.replace(/\s*\([^)]*\)/g, '').replace(/^["'“‘]|["'”’]$/g, '').trim(), ...quoted].filter((phrase): phrase is string => Boolean(phrase)))].slice(0, 16);
+}
+
+function uploadPaths(input: ActInput, keys?: readonly string[]): string[] | undefined {
+    if (!keys?.length) { return undefined; }
+    return keys.map(key => { const file = input.files?.[key]; if (!file) { throw new Error('Upload requires a declared file key'); } return file.path; });
+}
+
+/** Reobserve after model latency; retry only when an element vanished before Playwright dispatched the action. */
+async function performFresh(input: ActInput, call: ToolCall, target?: import('./recording.ts').TargetDescriptor, destination?: import('./recording.ts').TargetDescriptor): Promise<void> {
+    if (call.tool === 'select' && call.value !== undefined && input.redact?.contains(call.value)) { throw new Error('Secret input cannot use the select tool'); }
+    for (let attempt = 0; attempt < 3; attempt++) {
+        input.signal.throwIfAborted();
+        const observation = await observe(input.page, { redact: input.redact });
+        const element = target ? resolveTargetMatch(target, observation).element : undefined;
+        const dropped = destination ? resolveTargetMatch(destination, observation).element : undefined;
+        if ((target && !element) || (destination && !dropped)) {
+            if (attempt === 2) { throw new Error('Target is not rendered yet'); }
+            await input.page.waitForTimeout(600); continue;
+        }
+        try {
+            await perform(input.page, { ...call, ref: element?.ref ?? call.ref, locate: element ? locateOf(element, observation) : call.locate, destinationRef: dropped?.ref });
+            return;
+        } catch (error) {
+            if (error instanceof Error && /intercepts pointer events/i.test(error.message)) { throw error; }
+            const missing = await observe(input.page, { redact: input.redact });
+            if (attempt === 2 || !target || resolveTargetMatch(target, missing).element?.ref === element?.ref) { throw error; }
+        }
+    }
 }
