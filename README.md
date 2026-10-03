@@ -179,6 +179,7 @@ Replay skips `check` steps, since they need a model. A step without a recording 
 | Replay exits with code 4 (only missing recordings) | The step was never recorded, or was reworded since. Run the test once in auto mode (`npx jevwright run --test <id>`) and commit its recording. |
 | Every test fails with "Start page did not become ready" | Open the start page yourself and read `server.log`. Check that a `ready` hook does not wait for something that never appears. |
 | A request the app needs is blocked | `run.json` lists `blockedRequests`. If the origin is part of your app, add it to `allowedOrigins`. |
+| Replay says “需要模型重新读取页面值” | The recorded page-value source is missing or ambiguous. Run in auto mode to read the current value and refresh its source. |
 | `check` steps show as skipped | Replay mode makes no model calls. Run in auto mode, with a key, to judge them. |
 | `env` is `unknown` in fixtures | Declare its type once through `Register`; see [Starting the app per run](https://github.com/Ice-Hazymoon/jevwright/blob/main/docs/configuration.md#starting-the-app-per-run). |
 
@@ -207,6 +208,8 @@ can be a product regression or a stale target and does not establish either on i
 - Dragging covers HTML drag-and-drop and pointer gestures. Drawing, arbitrary keyboard shortcuts and precise text-range formatting still need scripted Playwright steps.
 - Scroll searches stop after 500 viewports, 45 seconds, or five unchanged positions. A missing target still fails or needs another action.
 - Desktop defaults to 1280×900. Use `device: "mobile"` for touch and a mobile user agent, or provide a custom device.
+- Page values can be entered only when their exact text appears in the current observation. Replay re-reads them from recorded surrounding text; changed or ambiguous sources need an auto run. Declared secrets remain available only through their keys.
+- `check` requires the asserted content to be visible. A count or saved-button state cannot prove what another tab contains.
 - `check` is a model judgment. Exact values (money, multilingual text, line breaks) belong in `verify`.
 - Chromium only.
 

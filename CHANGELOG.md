@@ -7,6 +7,11 @@
 - Search mounted content while scrolling; wait for deferred controls and options, and refresh semantic targets after DOM replacement.
 - Select exact native and ARIA options; upload declared files together to multiple inputs in one action.
 - Extend screenshot secret detection to shadow roots and contenteditable editors.
+- Allow Jev and the helper to enter exact observed page values, excluding declared secrets; record their sources and read the current values on replay.
+- Review all clauses and action stages before accepting step completion, including submission, confirmation and destination navigation; propose remaining actions and reject unrelated targets.
+- Match mixed public and secret input values to the selected field before typing.
+- Attribute action-triggered validation errors to the agent unless a declared request or monitor provides deterministic failure evidence.
+- Require checks and adjudication to use direct evidence from the asserted content; indirect summaries cannot override missing content.
 
 ## 0.6.0
 

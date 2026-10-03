@@ -9,6 +9,9 @@ type EvaluationQuestion = Parameters<Evaluate>[0]['questions'][string];
 /** The page as the engine serializes it for Jev (see `pageState`). */
 export interface View {
     step?: string;
+    field?: string;
+    control?: string;
+    review?: boolean;
     /** The following act step, when the engine shares it. */
     next?: string;
     claim?: string;
@@ -39,6 +42,12 @@ export interface ViewElement {
 /** What a scripted Jev "believes" about the current state; unset answers default to unlikely. */
 export interface Belief {
     done?: number;
+    complete?: number;
+    achieved?: number;
+    remaining?: number;
+    navigation?: number;
+    needed?: number;
+    pageValue?: string;
     error?: number;
     tool?: string;
     target?: (element: ViewElement) => boolean;
@@ -51,6 +60,7 @@ export interface Belief {
     anomaly?: number;
     holds?: number;
     support?: 'supports' | 'contradicts' | 'not_shown';
+    pSupport?: number;
     /** Whether the step's actions operated on what the step names (post-failure audit); defaults to yes. */
     onTarget?: number;
 }
@@ -70,6 +80,7 @@ export function scriptedModels(policy: (view: View) => Belief, helper?: (view: V
     const evaluation = new Experimental_EvaluationMockModelV4({
         doEvaluate: async ({ state, questions }) => {
             const view = toView(state as Record<string, unknown>);
+            view.review = Object.hasOwn(questions, 'complete');
             calls.push({ questions: Object.keys(questions), view });
             const belief = policy(view);
             const answers: Record<string, Answer> = {};
@@ -86,7 +97,7 @@ export function scriptedModels(policy: (view: View) => Belief, helper?: (view: V
         doGenerate: async ({ prompt }) => {
             const text = JSON.stringify(prompt);
             const payload = JSON.parse(extractJson(text)) as Record<string, unknown>;
-            const view = toView({ task: { step: payload.step, values: payload.values, history: payload.history }, page: payload.page, claim: payload.claim });
+            const view = toView({ task: { step: payload.step, values: payload.values, history: payload.history }, page: payload.page, claim: payload.claim, control: payload.control });
             const output = helper?.(view, String(payload.why_you_are_asked ?? '')) ?? { outcome: 'impossible', tool: null, element: null, value_key: null, text: null, reason: 'scripted helper has no answer' };
             return {
                 content: [{ type: 'text', text: JSON.stringify(output) }],
@@ -103,11 +114,27 @@ export function scriptedModels(policy: (view: View) => Belief, helper?: (view: V
 
 function answer(id: string, question: EvaluationQuestion, belief: Belief, view: View): Answer {
     if (question.type === 'boolean') {
-        const value = ({ done: belief.done, done_change: belief.done, complete: belief.done, error: belief.error, anomaly: belief.anomaly, holds: belief.holds } as Record<string, number | undefined>)[id];
+        const value = ({ done: belief.done, done_change: belief.done, complete: belief.complete ?? belief.done, remaining: belief.remaining ?? (belief.done === undefined ? 0 : 1 - belief.done), error: belief.error, anomaly: belief.anomaly, holds: belief.holds } as Record<string, number | undefined>)[id];
         return { type: 'boolean', probability: value ?? 0.03 };
     }
     if (question.type === 'score') { return { type: 'score', score: 0 }; }
     const options = Object.keys(question.criteria);
+    if (id === 'complete') {
+        const p = belief.achieved ?? belief.complete ?? belief.done ?? 0.03;
+        return { type: 'choice', choice: p >= 0.5 ? 'achieved' : 'pending', probabilities: { achieved: p, pending: 1 - p } };
+    }
+    if (id === 'needed') {
+        const p = belief.needed ?? 0.02;
+        return { type: 'choice', choice: p >= 0.5 ? 'activate' : 'finished', probabilities: { activate: p, finished: 1 - p } };
+    }
+    if (id === 'navigation') {
+        const p = belief.navigation ?? 0;
+        return { type: 'choice', choice: p >= 0.5 ? 'pending' : 'reached', probabilities: { pending: p, reached: 1 - p, not_required: 0 } };
+    }
+    if (id === 'remaining') {
+        const p = belief.remaining ?? (belief.done === undefined ? 0 : 1 - belief.done);
+        return { type: 'choice', choice: p >= 0.5 ? 'unfinished' : 'complete', probabilities: { unfinished: p, complete: 1 - p } };
+    }
     let chosen: string | undefined;
     if (id === 'tool') { chosen = belief.tool && options.includes(belief.tool) ? belief.tool : 'none'; }
     if (id === 'target') { chosen = options.find(option => belief.target?.(view.elements.find(element => element.i === Number(option))!)); }
@@ -117,15 +144,17 @@ function answer(id: string, question: EvaluationQuestion, belief: Belief, view: 
     if (id === 'scroll_direction') { chosen = belief.scrollDirection ?? 'down'; }
     if (id === 'scroll_text') { chosen = options.find(option => question.criteria[option] === belief.scrollText); }
     if (id === 'value') { chosen = belief.value; }
+    if (id === 'input_source') { chosen = belief.pageValue !== undefined ? 'page' : Object.keys(view.values).length ? 'step' : 'clear'; }
+    if (id === 'page_value') { chosen = options.find(key => question.criteria[key] === belief.pageValue); }
     if (id === 'support') { chosen = belief.support ?? 'not_shown'; }
-    return distribution(options, chosen && options.includes(chosen) ? chosen : undefined);
+    return distribution(options, chosen && options.includes(chosen) ? chosen : undefined, id === 'support' ? belief.pSupport : undefined);
 }
 
 /** A confident choice, or a flat distribution when the script has no opinion. */
-function distribution(options: string[], chosen: string | undefined): Answer {
+function distribution(options: string[], chosen: string | undefined, probability = 0.92): Answer {
     if (options.length === 1) { return { type: 'choice', choice: options[0]!, probabilities: { [options[0]!]: 1 } }; }
     const top = chosen ?? options[0]!;
-    const p = chosen ? 0.92 : 1 / options.length;
+    const p = chosen ? probability : 1 / options.length;
     const rest = (1 - p) / (options.length - 1);
     return { type: 'choice', choice: top, probabilities: Object.fromEntries(options.map(option => [option, option === top ? p : rest])) };
 }
@@ -135,6 +164,8 @@ function toView(state: Record<string, unknown>): View {
     const page = (state.page ?? {}) as Record<string, unknown>;
     return {
         ...(typeof task.step === 'string' ? { step: task.step } : {}),
+        ...(typeof state.field === 'string' ? { field: state.field } : {}),
+        ...(typeof state.control === 'string' ? { control: state.control } : {}),
         ...(typeof task.next_step === 'string' ? { next: task.next_step } : {}),
         ...(typeof state.claim === 'string' ? { claim: state.claim } : {}),
         values: (task.values ?? {}) as Record<string, string>,

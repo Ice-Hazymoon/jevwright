@@ -51,6 +51,36 @@ const EDITING: Array<[RegExp, (view: View) => Belief]> = [
 function act(view: View, step: string): Belief {
     const edit = EDITING.find(([pattern]) => pattern.test(step));
     if (edit) { return edit[1](view); }
+    if (step.startsWith('Sign in using account')) {
+        const privateKey = Object.keys(view.values).find(key => key !== 'account')!;
+        if (view.field) { return { value: view.field.includes('Account email') ? 'account' : privateKey }; }
+        if (view.text.includes('Signed in as marble@example.test')) { return { done: 0.99 }; }
+        if (!view.entered.account) { return { tool: 'type', target: is('textbox', 'Account email'), value: privateKey }; }
+        if (!view.entered[privateKey]) { return { tool: 'type', target: is('textbox', 'Password'), value: privateKey }; }
+        if (view.review) { return { achieved: 0.02, tool: 'type', target: is('textbox', 'Password'), value: privateKey }; }
+        return { done: 0.47, tool: 'click', target: is('button', 'Sign in') };
+    }
+    if (step === 'Finalize the choice of the entry dated 2026-01-01') {
+        return view.text.includes('confirmed') ? { done: 0.99, achieved: 0.99 } : view.text.includes('Alpha chosen') ? { done: 0.99, complete: 0.99, remaining: 0.02, achieved: 0.02 } : { tool: 'click', target: is('button', 'Choose') };
+    }
+    if (step === 'Enter the access token shown on the page and apply it') {
+        if (view.notices.includes('Access accepted')) { return { done: 0.95 }; }
+        const token = /(?:Access|Current) token: (.+?);/.exec(view.text)?.[1];
+        return view.history.some(entry => entry.action === 'type' && entry.value?.startsWith('page:'))
+            ? { tool: 'click', target: is('button', 'Apply token') }
+            : { tool: 'type', target: is('textbox', 'Token'), pageValue: token };
+    }
+    if (step === 'Save the essay, then open the reading list') {
+        if (view.text.includes('Catalog')) {
+            return Boolean(find(view, is('button', 'Saved')))
+                ? { done: 0.98, complete: 0.02, remaining: 0.98, tool: 'click', target: is('tab', /^Reading list/) }
+                : { tool: 'click', target: is('button', 'Save essay') };
+        }
+        return { done: 0.98, complete: 0.98, remaining: 0.02 };
+    }
+    if (step === 'Set the destination and confirm delivery') {
+        return clicked(view) ? { error: 0.98 } : { tool: 'click', target: is('button', 'Confirm delivery') };
+    }
     if (step.startsWith('Change Nickname')) {
         if (!typed(view, 'nickname')) { return { tool: 'type', target: is('textbox', 'Nickname'), value: 'nickname' }; }
         if (!typed(view, 'bio')) { return { tool: 'type', target: is('textbox', 'Bio'), value: 'bio' }; }

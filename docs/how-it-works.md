@@ -52,10 +52,12 @@ A step runs for at most 8 actions. Each round sends one Jev request with several
 - Which tool should come next?
 - Which control is the target?
 - Which data value should be entered?
+- Does any requested user action remain?
+- Has each requested destination view been activated?
 
 Jev answers with probabilities, and code applies thresholds:
-- A "done" that conflicts with a proposed action is confirmed once more before the step ends.
-- A declared write request ends the step after a submitting action (click, Enter, select) once the request succeeds.
+- An independent remaining-work question reviews every clause and required outcome. A proposed completion receives an action-stage review: prepared values still need any requested final commit, and requested destinations must be opened. The review can propose the next missing action when the original decision offers none or wait. A separate model judgment must support the proposed target before code applies the action. A weak stage review does not overturn an otherwise completed step; a strong pending judgment does. A separate navigation judgment requires an activation action or explicit current-view state; a global heading or destination badge alone is insufficient. Prerequisites performed by a tool, such as scrolling a control into view before clicking, count as performed. Once a requested view is open, later checks evaluate its content; empty or loading product content does not undo navigation. When completion conflicts with a proposed activation, another judgment compares that specific control with successful action history alone, avoiding page titles and summary content. An uncertain activation can receive a helper review within the two-call limit. A strong action-stage judgment can end the step even when empty product content lowers the original completion probability; later checks still decide whether the content is correct. The action-stage review treats an explicit next step as separate later work. Its action proposals cannot run within the current step; the remaining-work judgment still checks every current clause.
+- A declared write request ends a single submission after a submitting action (click, Enter, select) once the request succeeds. Compound instructions still check remaining work, so the first successful request cannot hide a later action.
 - If Jev thinks the step is done but the declared request never started, it is told once that nothing was saved.
 - A value the step names, which was not on the page when the step began, must be typed or selected, or must appear on the page. Until then, neither a successful request nor Jev's "done" completes the step. This stops a different control that saves through the same request from finishing the step early.
 - Notices already on the screen when the step began are marked as such, so a stale error does not fail the next step.
@@ -68,10 +70,10 @@ The helper LLM (DeepSeek V4.1 Flash by default) is consulted when Jev is stuck:
 
 The helper is called at most twice per step. It may:
 - act on a numbered control;
-- type a data value;
+- type a data value or an exact span from the current observation;
 - enter several of the step's values joined by line breaks, as multi-paragraph text.
 
-It may not type text that neither the step nor its data contains. A "done" from the helper counts only when Jev does not clearly disagree.
+It may not invent text. Page values must appear verbatim in the current observation, with whitespace normalized and case preserved. Declared secrets and redacted markers never qualify as page values. Sources are split around redacted markers so marker fragments cannot become input. Jev can choose from a bounded list of observed spans; the helper can request another observed span, which code validates. A "done" from the helper counts only when Jev does not clearly disagree.
 
 ### Browser actions
 
@@ -133,6 +135,7 @@ Two of them count as environment problems, not product ones:
 ## Checks
 
 A `check` asks Jev two independent questions over the page: does the claim hold, and does the page support it, contradict it, or not show the information at all?
+- Both judgments require direct evidence from the view, list, record or field the assertion names. Counts, notifications and button states cannot prove the contents of another view. Missing content is `not_shown`, even when the truth judgment is confident. A claim about a badge or notification can use that object directly.
 - Clear answers decide the check.
 - A failed or unclear answer gets a second look after the page settles again. Jev is asked again only if the page changed (its observation signature differs); otherwise the first answer stands.
 - If it is still unclear, the helper LLM reads the same evidence and decides.
@@ -145,6 +148,8 @@ With a `reference`, the judge compares the page with your trusted data.
 Successful act steps record semantic targets, optional drag destinations, file-key lists and scroll searches, and an optional end state: a normalized changed path,
 up to four appeared anchors and up to two disappeared controls. Toasts, numeric names and unstable
 names are excluded; typing-only steps record no anchors. A `likely-done` step records no end state.
+
+Inputs read from the page record an optional `pageValue` descriptor: observation source and the text before and after the value. Replay reads between those anchors in the current observation. Missing or ambiguous anchors trigger fresh grounding in auto mode; replay mode fails as `agent` with “需要模型重新读取页面值”. Action logs mark these inputs with `page:`. Existing recordings remain valid.
 
 Replay first checks a declared expectation. Otherwise, recorded end states must match the path,
 at least half of the appeared anchors, and every disappeared control. The engine polls for up to
@@ -182,6 +187,8 @@ Every failed attempt gets one cause:
 | `model` | Gateway errors, or the call or cost budget ran out, including tests the run budget kept from starting |
 | `timeout` | The test exceeded `timeoutMs` (default 240 s) |
 
+An error or rejection noticed during an unfinished `act` defaults to `agent`: the agent may have submitted incomplete input. A rejected declared request or a monitored high-severity issue supplies deterministic failure evidence. `expectError` still accepts the explicitly declared rejection; an unexpected request status remains `product`.
+
 Before a product-looking failure is reported, the engine checks the earlier AI-driven `act` steps. One Jev request asks, for each step, whether its actions operated on the control the step names or on a different one. If any step is unlikely to have acted on its target (probability below 0.25), the failure becomes `agent`, and the summary names the control the step actually touched.
 
 This question was calibrated on real run histories, 97 correct steps and 15 steps that acted on a wrong field:
@@ -218,7 +225,7 @@ A failed test is retried (`retries`, default 1):
 Use `secret(value)` in `TestSpec.secrets`, separate from ordinary string `data`. Handles stringify as
 `{secret}`. Only trusted test code can call `reveal(handle)`; `RunContext.secrets` exposes the handles.
 An action references a secret by `{key}`. Models receive that placeholder and `<secret value>`, while
-code fills the original value into an enabled editable field. Select actions and semantic `check`
+code fills the original value into an enabled editable field. When a step supplies several values including a secret, Jev matches the value to the selected field in a separate request before typing. Select actions and semantic `check`
 assertions cannot consume secrets; verify exact values with `verify` and `reveal` instead.
 
 Model payloads, progress logs and text artifacts redact the full secret, URI encoding (including browser

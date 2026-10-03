@@ -1,6 +1,6 @@
 import type { TestSpec } from '../src/index.ts';
 import type { startFixtureApp } from '../tests/fixtures/app.ts';
-import { act, check, reload, verify } from '../src/index.ts';
+import { act, check, reload, secret, verify } from '../src/index.ts';
 
 /** Declare newly required exports here so older engines can exclude unsupported cases. */
 export type CalibrationTest = TestSpec<void> & { expected: 'passed' | 'product'; requiredApis?: readonly string[] };
@@ -99,5 +99,32 @@ export function fixtureTests(app: App): Array<CalibrationTest> {
         fixture: async () => { app.reset(); },
         steps: () => [check('The page shows a total')],
     });
+    tests.push({
+        id: 'page-value-entry', expected: 'passed', module: 'fixture',
+        title: 'Read and enter the current access token', risk: 'The page value is replaced by invented data',
+        start: '/page-entry?token=DM-4827',
+        steps: () => [act('Enter the access token shown on the page and apply it'), verify('access accepted', async ({ page }) => (await page.getByRole('status').textContent()) === 'Access accepted')],
+    });
+    tests.push({
+        id: 'choice-finalize', expected: 'passed', module: 'fixture', title: 'Finalize a prepared choice', risk: 'Selection is mistaken for submission', start: '/effects?single=1&confirm=1',
+        steps: () => [act('Finalize the choice of the entry dated 2026-01-01'), verify('choice committed', async ({ page }) => page.getByRole('heading', { name: 'Alpha chosen and confirmed', exact: true }).isVisible())],
+    });
+    tests.push({
+        id: 'credential-entry', expected: 'passed', requiredApis: ['secret'], module: 'fixture', title: 'Use public and secret credentials', risk: 'The wrong value is entered in a field', start: '/credential-form',
+        data: { account: 'marble@example.test' }, secrets: { password: secret('Private-Key-7312') },
+        steps: () => [act('Sign in using account {account} with password {password}'), verify('account opened', async ({ page }) => page.getByRole('heading', { name: 'Signed in as marble@example.test', exact: true }).isVisible())],
+    });
+    for (const empty of [false, true]) {
+        tests.push({
+            id: `reading-list${empty ? '-empty' : ''}`, expected: empty ? 'product' : 'passed', module: 'fixture',
+            title: 'Save an essay and inspect its reading list', risk: 'A summary hides missing saved content',
+            start: `/collection${empty ? '?bug=empty' : ''}`,
+            steps: () => [
+                act('Save the essay, then open the reading list'),
+                verify('reading list opened', async ({ page }) => (await page.getByRole('heading', { name: 'Reading list', exact: true }).count()) === 2),
+                check('The reading list view displays the saved essay', { reference: () => ({ savedEssay: 'An essay' }) }),
+            ],
+        });
+    }
     return tests;
 }
