@@ -354,7 +354,7 @@ async function decideLoop(input: ActInput, models: Models, actions: ActionRecord
                 const confirm = review.confidence;
                 trace.confirm = round2(confirm);
                 likelyComplete = confirm >= THRESHOLDS.likely;
-                canFinish = review.navigation < 0.5 && remaining < 0.85 && (confirm >= THRESHOLDS.confirm || (canFinish && confirm > 0.15));
+                canFinish = review.navigation < 0.5 && remaining < 0.85 && (confirm >= (input.next ? 0.5 : THRESHOLDS.confirm) || (canFinish && confirm > 0.15));
                 if (!input.next && !canFinish && (decision.tool === 'none' || decision.tool === 'wait') && review.decision.tool !== 'none' && review.decision.tool !== 'wait' && review.pTool >= THRESHOLDS.target && review.pTarget >= THRESHOLDS.target) {
                     const named = await actedOnTarget(models, [{ step: input.instruction, history: [{ action: review.decision.tool, ...(review.decision.target ? { element: describeElement(review.decision.target) } : {}) }] }], input.signal, 0);
                     if ((named[0] ?? 0) >= 0.75) {

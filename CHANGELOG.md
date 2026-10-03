@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Respect an explicit next-step boundary when the scoped action-stage choice favors completion, avoiding rejection of an already opened confirmation dialog at borderline confidence. Later assertions and invariants still decide outcomes.
+
 - Breaking before 1.0: `secret(value)` now defaults to password purpose and can enter only password fields or current/new-password autocomplete fields. Use `secret(value, { purpose: 'any' })` for API keys and other editable fields. Code guards both observed and actual targets, including replay; field-specific model value choices exclude incompatible secrets.
 
 - Avoid treating ordinary processing text, decorative spinners and determinate progress as loading; report busy separately and keep bounded busy waits outside the action budget.

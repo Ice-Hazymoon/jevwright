@@ -135,7 +135,7 @@ const feed = document.getElementById('feed'); let count = 0, loading = false; co
 document.getElementById('apply').onclick = () => toast(document.getElementById('token').value === ${JSON.stringify(token)} ? 'Access accepted' : 'Could not apply token');`);
         }
         case '/collection':
-            return layout('Reading list', '<button id="save">Save essay</button><button id="tab" role="tab" aria-selected="false">Reading list (0)</button><section id="content"><h2>Catalog</h2><p>An essay</p></section>', `
+            return layout('Reading list', `<button id="save">Save essay</button><button id="tab" ${url.searchParams.has('buttons') ? '' : 'role="tab" aria-selected="false"'}>Reading list (0)</button><section id="content"><h2>Catalog</h2><p>An essay</p></section>`, `
 document.getElementById('save').onclick = async () => { await send('/api/profile', { nickname: 'Essay', bio: 'Reading list' }); document.getElementById('save').textContent = 'Saved'; document.getElementById('tab').textContent = 'Reading list (1)'; };
 document.getElementById('tab').onclick = () => { document.getElementById('tab').setAttribute('aria-selected', 'true'); document.getElementById('content').innerHTML = ${JSON.stringify(bug === 'empty' ? '<h2>Reading list</h2><p>No essays</p>' : '<h2>Reading list</h2><p>An essay</p>')}; };`);
         case '/required-form':

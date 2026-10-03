@@ -1277,3 +1277,26 @@ describe('integration secret purposes', () => {
         expect(result.status, result.summary).toBe('passed');
     });
 });
+
+
+it('integration preserves the explicit next-step boundary at observed confidence 0.64', async () => {
+    const spec: TestSpec<void> = { id: 'borderline-next-stage', title: 'Prepare and confirm separately', risk: 'A prepared dialog is rejected before the defect check', start: '/items?bug=wrong-row', fixture: async () => { app.reset(); }, invariants: [{ name: 'Other entries stay active', check: () => app.state.items.filter(item => item.id !== 'b').every(item => !item.archived) }], steps: () => [act('Start archiving the Beta plan'), act('Confirm archiving in the dialog', { expect: { write: { path: /\/archive$/ } } })] };
+    const result = (await suite([spec], { mode: 'ai', policy: view => view.step === 'Start archiving the Beta plan' && view.dialog ? { done: 0.65, remaining: 0.51, achieved: 0.64, navigation: 0.03, tool: 'none' } : fixturePolicy(view), helper: () => ({ outcome: 'step_already_done', tool: null, element: null, value_key: null, text: null, reason: 'The current action opened the confirmation dialog; confirmation is the next step' }) }).run).results[0]!;
+    expect(result.cause, result.summary).toBe('product');
+    expect(result.attempts[0]!.steps[0]!.status).toBe('passed');
+    expect(result.attempts[0]!.steps[1]!.failure).toBe('invariant');
+});
+
+
+it('integration reaches direct content checks after button-based navigation to an empty destination', async () => {
+    const spec: TestSpec<void> = { id: 'button-destination-empty', title: 'Save and inspect a destination', risk: 'Empty content is hidden by an agent failure', start: '/collection?bug=empty&buttons=1', steps: () => [act('Save the essay, then open the reading list'), check('The reading list view displays the saved essay')] };
+    const result = (await suite([spec], { mode: 'ai', policy: view => {
+        if (view.claim) { return { holds: 0.03, support: 'contradicts' }; }
+        if (!view.text.includes('Catalog')) { return { done: 0.15, achieved: 0.84, remaining: 0.53, navigation: 0.25, tool: 'none' }; }
+        return view.elements.some(element => element.name === 'Saved') ? { done: 0.76, remaining: 0.8, navigation: 0.57, tool: 'click', target: element => element.name === 'Reading list (1)' } : { tool: 'click', target: element => element.name === 'Save essay' };
+    } }).run).results[0]!;
+    expect(result.cause, result.summary).toBe('product');
+    expect(result.attempts[0]!.steps[0]!.status).toBe('passed');
+    expect(result.attempts[0]!.steps[0]!.actions).toHaveLength(2);
+    expect(result.attempts[0]!.steps[1]!.failure).toBe('assertion');
+});
