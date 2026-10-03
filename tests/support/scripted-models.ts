@@ -52,6 +52,7 @@ export interface Belief {
     navigation?: number;
     needed?: number;
     pageValue?: string;
+    inputSource?: 'step' | 'page' | 'clear';
     error?: number;
     tool?: string;
     target?: (element: ViewElement) => boolean;
@@ -155,7 +156,7 @@ function answer(id: string, question: EvaluationQuestion, belief: Belief, view: 
     }
     if (id === 'scroll_text') { chosen = options.find(option => question.criteria[option] === belief.scrollText); }
     if (id === 'value') { chosen = belief.value; }
-    if (id === 'input_source') { chosen = belief.pageValue !== undefined ? 'page' : Object.keys(view.values).length ? 'step' : 'clear'; }
+    if (id === 'input_source') { chosen = belief.inputSource ?? (belief.pageValue !== undefined ? 'page' : Object.keys(view.values).length ? 'step' : 'clear'); }
     if (id === 'page_value') { chosen = options.find(key => question.criteria[key] === belief.pageValue); }
     if (id === 'support') { chosen = belief.support ?? 'not_shown'; }
     return distribution(options, chosen && options.includes(chosen) ? chosen : undefined, id === 'support' ? belief.pSupport : undefined);

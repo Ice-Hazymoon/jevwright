@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Register DOM selectors before concurrent contexts are created. Keep literal typing as typing so the helper can ground the exact instruction text immediately. Authorize necessary final controls for requested committed results without extending selection-only steps.
+
 - Preserve visible card content replaced by accessible labels, including inert previews, `display:contents` wrappers and assigned shadow slots; retain main text, prices, totals and errors while excluding hidden and replaced fallback text.
 - Keep clickable cards outside the plain-text supplement cap; count omitted controls and prioritize named targets. Cache DOM visibility/text and use lightweight busy polling on large pages.
 - Restrict completion review to requested actions. Treat missing check evidence as uncertain, and attribute only explicit contradictions to the product. Numeric grouping commas do not split steps.

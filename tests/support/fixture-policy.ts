@@ -7,6 +7,14 @@ const clicked = (view: View) => view.history.some(entry => entry.action === 'cli
 /** A competent scripted "Jev" for the fixture app: grounds each step the way the real model should. */
 export function fixturePolicy(view: View): Belief {
     if (view.claim !== undefined) { return claim(view, view.claim); }
+    if (view.step === 'Enable the public deployment') {
+        const applied = view.history.some(entry => entry.action === 'click');
+        const selected = view.history.some(entry => entry.action === 'select');
+        if (!selected) { return { tool: 'select', target: is('combobox', 'Visibility'), option: 'Public' }; }
+        // Reproduce treating a requested committed result as preparation because its final button is not named.
+        const authorized = /requested result includes|requested committed result authorizes/i.test(view.instructions ?? '');
+        return { done: 0.98, achieved: applied || !authorized ? 0.98 : 0.02, remaining: 0.02, tool: applied ? 'none' : 'click', target: is('button', 'Apply changes'), needed: applied || !authorized ? 0.02 : 0.98 };
+    }
     if (view.step === 'Select Express shipping') {
         const selected = find(view, is('combobox', 'Shipping'))?.value === 'Express';
         if (!selected) { return { tool: 'select', target: is('combobox', 'Shipping'), option: 'Express' }; }

@@ -1340,6 +1340,18 @@ it('uses stable control identity when its nearby count changes between required 
 
 
 describe('hardening instruction and evidence boundaries', () => {
+    it('authorizes the final control needed for a requested committed result', async () => {
+        const spec: TestSpec<void> = { id: 'public-deployment', title: 'Enable deployment', risk: 'A selected value is mistaken for a committed result', start: '/hardening-commit', steps: () => [act('Enable the public deployment'), verify('deployment public', async ({ page }) => (await page.locator('#result').textContent()) === 'Deployment public')] };
+        const result = (await suite([spec], { mode: 'ai' }).run).results[0]!;
+        expect(result.status, result.summary).toBe('passed');
+        expect(result.attempts[0]!.steps[0]!.actions?.map(action => action.tool)).toEqual(['select', 'click']);
+    });
+    it('grounds an instruction literal immediately instead of repeatedly focusing its field', async () => {
+        const spec: TestSpec<void> = { id: 'instruction-literal', title: 'Enter contact address', risk: 'A missing data key converts typing to repeated focus', start: '/hardening-literal', steps: () => [act('Enter fern@example.test in Contact address'), verify('contact entered', async ({ page }) => (await page.locator('#contact').inputValue()) === 'fern@example.test')] };
+        const result = (await suite([spec], { mode: 'ai', policy: view => view.history.some(entry => entry.action === 'type') ? { done: 0.98 } : { tool: 'type', target: element => element.name === 'Contact address', inputSource: 'step' }, helper: view => ({ outcome: 'act', tool: 'type', element: view.elements.find(element => element.name === 'Contact address')!.i, text: 'fern@example.test', value_key: null, reason: 'The instruction supplies this exact literal' }) }).run).results[0]!;
+        expect(result.status, result.summary).toBe('passed');
+        expect(result.attempts[0]!.steps[0]!.actions?.map(action => action.tool)).toEqual(['type']);
+    });
     it('does not finish while requested submission and target reviews remain uncertain', async () => {
         const spec: TestSpec<void> = { id: 'uncertain-required-submit', title: 'Submit a prepared form', risk: 'Conflicting reviews accept preparation as submission', start: '/credential-form', data: { account: 'marble@example.test' }, secrets: { password: secret('Private-Key-7312') }, steps: () => [act('Sign in using account {account} with password {password}'), verify('account opened', async ({ page }) => page.getByRole('heading', { name: 'Signed in as marble@example.test', exact: true }).isVisible())] };
         const result = (await suite([spec], { mode: 'ai', policy: view => {

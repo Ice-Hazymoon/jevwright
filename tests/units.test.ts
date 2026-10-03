@@ -1030,6 +1030,29 @@ it('integration keeps noninteractive ARIA table cells out of the DOM supplement'
 
 
 describe('hardening surfaces', () => {
+    it('registers DOM selectors before concurrent fresh contexts capture their engines', () => {
+        const code = `
+            import { chromium, selectors } from 'playwright';
+            import { createJiti } from 'jiti';
+            const { newTestContext } = await createJiti(import.meta.url).import('./src/browser.ts');
+            const browser = await chromium.launch();
+            const register = selectors.register.bind(selectors);
+            selectors.register = async (...args) => {
+                if (browser.contexts().length) throw new Error('Concurrent contexts can capture an unregistered DOM engine');
+                return register(...args);
+            };
+            try {
+                const contexts = await Promise.all(Array.from({ length: 12 }, () => newTestContext(browser, { viewport: { width: 1280, height: 900 }, dialogs: 'accept' })));
+                for (const context of contexts) {
+                    const page = await context.newPage();
+                    await page.setContent('<div class=card>Expandable card</div>');
+                    await page.evaluate(() => Reflect.set(window, '__jevwrightRefs', new Map([['probe', document.querySelector('.card')]])));
+                    if (await page.locator('jev-ref=probe').count() !== 1) throw new Error('DOM reference not resolved');
+                }
+            } finally { await browser.close(); }
+        `;
+        expect(() => execFileSync(process.execPath, ['--input-type=module', '-e', code], { cwd: resolve('.'), encoding: 'utf8', timeout: 25_000 })).not.toThrow();
+    });
     it('retains accessible-label replacements across a shadow component slot', async () => {
         const { observation } = await open('/hardening-slotted-content');
         expect(observation.elements.find(element => element.name === 'Preview')?.content).toBe('Slotted draft');

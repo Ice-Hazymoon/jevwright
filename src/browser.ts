@@ -111,9 +111,10 @@ function watchMutations() {
 
 export async function newTestContext(browser: Browser, options: { viewport: { width: number; height: number }; dialogs: 'accept' | 'dismiss'; baseURL?: string; locale?: string; timezone?: string; device?: ResolvedDevice; acceptDownloads?: boolean; onDownload?: (download: import('playwright').Download) => void; onDialog?: (detail: string) => void }): Promise<BrowserContext> {
     // `baseURL` lets test code call `page.goto('/path')` and `page.request.get('/api/...')` with relative URLs.
+    // New contexts capture the registered engines; concurrent creation must await registration first.
+    await registerDomSelector();
     const context = await browser.newContext({ ...(options.device ?? { viewport: options.viewport }), serviceWorkers: 'block', acceptDownloads: options.acceptDownloads ?? false, locale: options.locale ?? 'en-US', timezoneId: options.timezone ?? 'UTC', ...(options.baseURL ? { baseURL: options.baseURL } : {}) });
     context.setDefaultTimeout(10_000);
-    await registerDomSelector();
     await context.addInitScript(trackRoots);
     await context.addInitScript(watchMutations);
     context.on('page', (page) => {
