@@ -98,8 +98,9 @@ Two of them count as environment problems, not product ones:
 
 A `check` asks Jev two independent questions over the page: does the claim hold, and does the page support it, contradict it, or not show the information at all?
 - Clear answers decide the check.
-- An unclear one gets a second look after the page settles again.
+- A failed or unclear answer gets a second look after the page settles again. Jev is asked again only if the page changed (its observation signature differs); otherwise the first answer stands.
 - If it is still unclear, the helper LLM reads the same evidence and decides.
+- The report keeps the observation the final verdict was judged against.
 
 With a `reference`, the judge compares the page with your trusted data.
 
@@ -114,7 +115,9 @@ at least half of the appeared anchors, and every disappeared control. The engine
 five seconds. An empty end state provides no additional evidence and is labeled in the report.
 
 - In auto mode a missing target or mismatched end state triggers AI healing from the current page.
-  Healing must perform a new successful action before it may replace a mismatched end state.
+  Healing must perform a new successful action before it counts. A step healed after a mismatched end
+  state is then dropped from the recording rather than saved: its actions started from a page the
+  misfired replay had already changed. The next auto run grounds the step from its start and records it.
 - In replay mode a missing target fails as `agent`; a failed declared expectation fails as `product`.
   A mismatched end state is annotated and execution continues, leaving the verdict to later checks.
   Even a passing test retains that annotation so its recording can be reviewed.
@@ -123,7 +126,7 @@ five seconds. An empty end state provides no additional evidence and is labeled 
   supports the intended control with probability at least 0.75 (or an expectation failed).
 - Legacy recordings without end states still replay. Auto may backfill an end state only if a later
   verify or write/URL expectation passes and the whole attempt passes. Invariants alone do not qualify.
-- Recording writes require a changed action recipe or a newly added end state. Unchanged replay and
+- Recording writes require a changed, added or dropped step, or a newly added end state. Unchanged replay and
   unchanged AI paths do not rewrite the file.
 
 After a product failure involving replay, auto may use one fresh AI retry. It needs at least 20% of
@@ -185,23 +188,19 @@ assertions cannot consume secrets; verify exact values with `verify` and `reveal
 Model payloads, progress logs and text artifacts redact the full secret, URI encoding (including browser
 URL encoding), JSON escaping, HTML entities and base64. A secret-bearing descriptor is not recorded;
 the report explains why that step needs AI again. Secret names are excluded from learned end anchors.
-After secret input, step screenshots are withheld. Secret tests disable trace frames from the start;
-trace text is rewritten and binary entries containing the secret are removed. Failed rewriting deletes
+Tests that declare a secret take no step screenshots. Any other test skips a screenshot while its page
+shows a secret declared elsewhere in the run. While a run has secrets, every trace is recorded without
+frames; its text is rewritten and binary entries containing a secret are removed. Failed rewriting deletes
 the original trace and sets `traceWithheld` without changing the test verdict.
 
 This is an accidental-disclosure boundary, not encrypted storage. It does not recognize arbitrary
 transformations such as truncation, case changes, hashes, or a secret split across nodes. Requests to
 allowed app origins still carry the tested input, as intended. Keep real credentials out of ordinary data.
 
-Secret-bearing attempts suppress screenshots from the start, including fixture-rendered echoes.
 Engine result grammar is preserved only for engine-owned fields. User evidence, reference and metadata
 objects are fully redacted, including their keys. CLI setup and translation callback errors are redacted
 before being printed. These protections cover declared values and their documented encodings, not
 arbitrary application hashes or application-truncated fragments of a secret.
-
-A failed or uncertain `check` still waits for delayed rendering and observes again. It asks Jev again
-only if the observation signature changed. An unchanged uncertain verdict goes to the helper;
-an unchanged certain rejection stays failed. The second observation remains available as evidence.
 
 Engine protocol types, question IDs and option IDs retain their identities. User data/file keys containing
 a declared secret use deterministic aliases that are checked for secret content and collisions; Jev and

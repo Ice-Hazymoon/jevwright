@@ -128,6 +128,8 @@ jevwright <command> [options]
 | `--test <ids>` | Test ids; `prefix*` matches by prefix. An id that matches nothing is an error. |
 | `--module <names>` | Tests whose `module` is listed. |
 | `--tag <names>` | Tests with any of the tags. |
+| `--shard <i/n>` | The i-th of n stable partitions of the filtered tests (see [CI selection and JUnit](#ci-selection-and-junit)). |
+| `--last-failed` | Tests that failed or were flaky in the most recently finished, uninterrupted run. |
 
 **Run options**
 
@@ -166,6 +168,22 @@ jevwright <command> [options]
 | `3` | An internal error. Please [report it](https://github.com/Ice-Hazymoon/jevwright/issues). |
 | `4` | A standalone replay failed only because steps lack recordings. Record them in auto mode. The replay pass of `--new` still returns 1. |
 | `130` | Interrupted. |
+
+## CI selection and JUnit
+
+`--shard i/n` partitions selected tests using SHA-1(test id) modulo n, after the ordinary filters.
+For example, `--shard 2/3` runs the second of three disjoint partitions. Adding a test does not move
+existing tests. An empty partition, like any empty selection, exits successfully without starting the app
+and writes no run directory or `junit.xml`; let your CI reporter accept a missing file.
+
+`--last-failed` intersects that selection with the failed and flaky ids in the most recently finished
+run. Running, interrupted and partially published directories are ignored. No completed run is a usage error
+(exit 2); a completed run with no failed or flaky tests selects nothing.
+
+Every run writes `junit.xml`, one suite per module (`default` when omitted). Product, agent and timeout
+failures use `<failure>`; environment and model failures use `<error>`. Known issues and explicit skips
+use `<skipped>`. Flaky tests stay passed in JUnit and carry their retry evidence in `<system-out>`.
+The JSON and HTML reports retain the complete attempt history.
 
 ## Recordings
 
@@ -212,21 +230,6 @@ Differences from the CLI:
 
 `models.models` takes AI SDK evaluation and language models to use instead of a gateway, for example the SDK's mock models in your own tests. It is experimental: it relies on the AI SDK's experimental evaluation API, whose shape may change in a minor release.
 
-
-### CI selection and JUnit
-
-`--shard i/n` partitions selected tests using SHA-1(test id) modulo n, after the ordinary filters.
-For example, `--shard 2/3` runs the second of three disjoint partitions. Adding a test does not move
-existing tests. An empty partition exits successfully without starting the app.
-
-`--last-failed` intersects that selection with the failed and flaky ids in the most recently finished
-run. Running and partially published directories are ignored. No completed run is a usage error
-(exit 2); a completed run with no failed or flaky tests selects nothing.
-
-Every run writes `junit.xml`, one suite per module (`default` when omitted). Product, agent and timeout
-failures use `<failure>`; environment and model failures use `<error>`. Known issues and explicit skips
-use `<skipped>`. Flaky tests stay passed in JUnit and carry their retry evidence in `<system-out>`.
-The JSON and HTML reports retain the complete attempt history.
 
 ### Declaring secrets
 
