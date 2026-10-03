@@ -1340,6 +1340,20 @@ it('uses stable control identity when its nearby count changes between required 
 
 
 describe('hardening instruction and evidence boundaries', () => {
+    it.each(['jev', 'helper'])('separates actual page input from its human provenance label (%s)', async (source) => {
+        const spec: TestSpec<void> = { id: 'page-history-' + source, title: 'Enter observed token', risk: 'A provenance prefix is mistaken for actual field input', start: '/hardening-page-history?token=HS-4127', steps: () => [act('Read the token from the page and enter it in Code'), verify('exact token', async ({ page }) => (await page.getByRole('textbox', { name: 'Code', exact: true }).inputValue()) === 'HS-4127')] };
+        const test = suite([spec], { mode: 'ai', policy: view => {
+            // Reproduce a real helper mistaking the log prefix for malformed input despite a correct field value.
+            if (view.history.some(entry => entry.value?.startsWith('page: '))) { return { tool: 'type', inputSource: 'step', target: element => element.name === 'Code' }; }
+            if (view.history.some(entry => entry.action === 'type')) { return { done: 0.98 }; }
+            return { tool: 'type', target: element => element.name === 'Code', ...(source === 'jev' ? { pageValue: 'HS-4127' } : { inputSource: 'step' as const }) };
+        }, helper: view => ({ outcome: 'act', tool: 'type', element: view.elements.find(element => element.name === 'Code')!.i, text: 'HS-4127', value_key: null, reason: 'Enter the exact observed token' }) });
+        const result = (await test.run).results[0]!;
+        expect(result.status, result.summary).toBe('passed');
+        expect(result.attempts[0]!.steps[0]!.actions?.map(action => action.tool)).toEqual(['type']);
+        expect(result.attempts[0]!.steps[0]!.actions?.[0]?.value).toBe('page: "HS-4127"');
+        expect(test.calls.some(call => call.view.history.some(entry => entry.value === 'HS-4127' && entry.input_source === 'page'))).toBe(true);
+    });
     it('authorizes the final control needed for a requested committed result', async () => {
         const spec: TestSpec<void> = { id: 'public-deployment', title: 'Enable deployment', risk: 'A selected value is mistaken for a committed result', start: '/hardening-commit', steps: () => [act('Enable the public deployment'), verify('deployment public', async ({ page }) => (await page.locator('#result').textContent()) === 'Deployment public')] };
         const result = (await suite([spec], { mode: 'ai' }).run).results[0]!;

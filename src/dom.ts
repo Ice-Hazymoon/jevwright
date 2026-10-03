@@ -83,13 +83,14 @@ export async function readSurface(page: Page | Frame, scope?: ElementHandle<Elem
             if (!box) { box = element.getBoundingClientRect(); boxes.set(element, box); }
             return box;
         };
+        // Visibility can be restored by descendants; display, opacity and clipping hide entire subtrees.
         const hiddenTree = (element: Element): boolean => {
             if (hidden.has(element)) { return hidden.get(element)!; }
             const css = styleOf(element); const parent = parentOf(element);
             const physical = element.parentElement;
             const replaced = Boolean(physical && (shadows.has(physical) || slots.get(physical)?.length) && !slotParents.has(element));
             const clipped = /hidden|clip/.test(css.overflow) && css.display !== 'contents' && (boxOf(element).width <= 1 || boxOf(element).height <= 1);
-            const value = replaced || element.hasAttribute('hidden') || css.display === 'none' || css.opacity === '0' || css.visibility === 'hidden' || clipped || Boolean(parent && hiddenTree(parent));
+            const value = replaced || element.hasAttribute('hidden') || css.display === 'none' || css.opacity === '0' || clipped || Boolean(parent && hiddenTree(parent));
             hidden.set(element, value); return value;
         };
         const inertTree = (element: Element): boolean => {
@@ -101,19 +102,19 @@ export async function readSurface(page: Page | Frame, scope?: ElementHandle<Elem
         const visible = (element: Element): boolean => {
             if (visibility.has(element)) { return visibility.get(element)!; }
             const b = boxOf(element); const css = styleOf(element);
-            const value = Boolean(b.width && b.height && !hiddenTree(element) && !(b.width <= 1 && b.height <= 1 && (css.overflow === 'hidden' || css.clip !== 'auto')));
+            const value = Boolean(b.width && b.height && css.visibility === 'visible' && !hiddenTree(element) && !(b.width <= 1 && b.height <= 1 && (css.overflow === 'hidden' || css.clip !== 'auto')));
             visibility.set(element, value); return value;
         };
         // Inert previews remain visible; display:contents wrappers pass their rendered children through.
-        const textVisible = (element: Element) => !hiddenTree(element) && (styleOf(element).display === 'contents' || visible(element));
+        const textVisible = (element: Element) => !hiddenTree(element) && styleOf(element).visibility === 'visible' && (styleOf(element).display === 'contents' || visible(element));
         const ownText = (node: Node, element: Element): string => {
             const assigned = slotParents.get(node);
             if (!assigned && node.parentNode === element && (shadows.has(element) || slots.get(element)?.length)) { return ''; }
-            return hiddenTree(assigned ?? element) ? '' : node.textContent ?? '';
+            return textVisible(assigned ?? element) ? node.textContent ?? '' : '';
         };
         // Each subtree contributes its visible text once, rather than being walked again for every ancestor.
         for (const element of all.toReversed()) {
-            texts.set(element, textVisible(element) ? childrenOf(element).map(node => node.nodeType === Node.TEXT_NODE ? ownText(node, element) : node instanceof Element ? texts.get(node) ?? '' : '').join(' ').replace(/\s+/g, ' ').trim() : '');
+            texts.set(element, !hiddenTree(element) ? childrenOf(element).map(node => node.nodeType === Node.TEXT_NODE ? ownText(node, element) : node instanceof Element ? texts.get(node) ?? '' : '').join(' ').replace(/\s+/g, ' ').trim() : '');
         }
         const text = (element: Element): string => texts.get(element) ?? '';
         const dialog = all.findLast(element => element.matches('dialog[open], [role=dialog], [role=alertdialog]') && visible(element));
@@ -138,7 +139,7 @@ export async function readSurface(page: Page | Frame, scope?: ElementHandle<Elem
                 for (const selector of rule.selectorText.split(',').filter(selector => /:hover\s+|:hover\s*>/.test(selector))) {
                     try {
                         const targets = [...document.querySelectorAll(selector.replaceAll(':hover', ''))];
-                        if (targets.some(target => hiddenTree(target))) { hoverSelectors.push(selector.split(':hover')[0]!.trim()); }
+                        if (targets.some(target => hiddenTree(target) || styleOf(target).visibility !== 'visible')) { hoverSelectors.push(selector.split(':hover')[0]!.trim()); }
                     } catch { /* Unsupported selectors cannot establish a revealing hover. */ }
                 }
             }

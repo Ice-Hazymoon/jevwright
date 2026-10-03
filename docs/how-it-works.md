@@ -34,6 +34,7 @@ A DOM supplement supplies roleless text targets, contenteditable fields, scrolli
 and visible labels that differ from accessible names. It excludes hidden and clipped
 screen-reader text. Visible `inert` previews and `display:contents` text remain readable, while inert controls cannot be acted on. Visible text with `aria-hidden` is retained; accessible names remain separate. Main content receives the bounded text budget before navigation.
 Assigned shadow slots retain their rendered text and ancestry, including captured closed roots. Hidden assignments and replaced fallback text are excluded.
+Descendants that restore `visibility:visible` remain readable inside a `visibility:hidden` wrapper. Ancestors that hide content through `opacity:0`, `display:none` or a collapsed clipping box still hide their subtrees.
 Field labels come from associated labels or adjacent leaf label/span elements, rather than explanatory paragraphs.
 Noninteractive text is offered only when it has pointer, revealing hover or context-menu signals, or its text is named in the current instruction. Decorative hover colors do not qualify. Control descendants are excluded. At most 30 supplemental plain-text targets are offered, preferring instruction-named and onscreen text. Clickable cards remain outside this supplement limit; controls trimmed by the overall 220-element limit count as omitted.
 
@@ -46,6 +47,8 @@ Some cases need special handling:
 - **Inert controls**: controls inside an `inert` subtree, such as a collapsed accordion panel or the page behind a modal, are not offered. Playwright's snapshot does not treat `inert` as hidden. An inert element with exactly the same box as a live control, such as a card whose whole face is an inert preview, is kept, because the two cannot be told apart.
 
 ## The decision loop
+
+Model history separates actual page input from its `input_source` provenance. Reports retain the human `page: ...` label; it is not text entered into the field.
 
 A step runs for at most 8 actions. Each round sends one Jev request with several independent questions:
 - Is the step done?

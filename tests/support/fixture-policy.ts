@@ -81,7 +81,7 @@ function act(view: View, step: string): Belief {
     if (step === 'Enter the access token shown on the page and apply it') {
         if (view.notices.includes('Access accepted')) { return { done: 0.95 }; }
         const token = /(?:Access|Current) token: (.+?);/.exec(view.text)?.[1];
-        return view.history.some(entry => entry.action === 'type' && entry.value?.startsWith('page:'))
+        return view.history.some(entry => entry.action === 'type' && (entry.input_source === 'page' || entry.value?.startsWith('page:')))
             ? { tool: 'click', target: is('button', 'Apply token') }
             : { tool: 'type', target: is('textbox', 'Token'), pageValue: token };
     }

@@ -57,6 +57,8 @@ function escapeHtml(text: string): string {
 function pages(state: FixtureState, url: URL): string | undefined {
     const bug = url.searchParams.get('bug');
     switch (url.pathname) {
+        case '/hardening-visibility':
+            return layout('Visibility overrides', '<section style="visibility:hidden"><button style="visibility:visible" aria-label="Preview"><span>Visible inner draft</span></button><p>Hidden branch</p></section><div style="visibility:collapse">Collapsed branch</div><p style="opacity:0">Transparent branch</p>');
         case '/hardening-slotted-content':
             return layout('Component previews', '<div id="component" role="button" tabindex="0" aria-label="Preview"><span slot="copy">Slotted draft</span><span slot="hidden" style="display:contents">Hidden slotted draft</span></div>', `document.getElementById('component').attachShadow({mode:'closed'}).innerHTML = '<div><slot name="copy">Unused fallback</slot><div style="display:none"><slot name="hidden"></slot></div></div>';`);
         case '/hardening-visible-content':
@@ -77,6 +79,8 @@ function pages(state: FixtureState, url: URL): string | undefined {
             return layout('Basket summary', '<span>Cart (1)</span><div role="status">Added to cart</div>');
         case '/hardening-scroll':
             return layout('Shell scroll', '<style>html,body{height:100%;margin:0;overflow:hidden}nav{display:none}main{height:100%}#app{height:100%;overflow:auto}</style><div id="app">' + Array.from({ length: 200 }, (_, i) => '<div style="height:40px">Row ' + i + '</div>').join('') + '</div>');
+        case '/hardening-page-history':
+            return layout('Observed token', '<p>Access token: ' + escapeHtml(url.searchParams.get('token') ?? 'HS-4127') + '; enter it below.</p><label>Code<input></label>');
         case '/hardening-page-input':
             return layout('Page entries', '<p>Token: ' + (url.searchParams.get('token') ?? '2') + '; enter the token.</p><label>Address line 2<input></label><label>ABC1234<input></label>');
         case '/integration-counter':

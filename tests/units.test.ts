@@ -1030,6 +1030,12 @@ it('integration keeps noninteractive ARIA table cells out of the DOM supplement'
 
 
 describe('hardening surfaces', () => {
+    it('retains visible content restored inside a visibility-hidden ancestor', async () => {
+        const { observation } = await open('/hardening-visibility');
+        expect(named(observation, 'button', 'Preview')[0]).toMatchObject({ content: 'Visible inner draft' });
+        expect(observation.text).toContain('Visible inner draft');
+        expect(observation.text).not.toMatch(/Hidden branch|Collapsed branch|Transparent branch/);
+    });
     it('registers DOM selectors before concurrent fresh contexts capture their engines', () => {
         const code = `
             import { chromium, selectors } from 'playwright';

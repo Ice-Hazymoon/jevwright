@@ -273,11 +273,20 @@ interface Decision {
     source: 'jev' | 'llm';
 }
 
+function actionHistory(action: ActionRecord, pageInput = false): Record<string, string> {
+    let value = action.value;
+    // The model needs the actual input; the page prefix is a human provenance label.
+    if (pageInput && value?.startsWith('page: ')) {
+        try { const literal: unknown = JSON.parse(value.slice(6)); if (typeof literal === 'string') { value = literal; } } catch { /* Keep older labels that cannot be decoded. */ }
+    }
+    return { action: action.tool, ...(action.element ? { element: action.element } : {}), ...(value !== undefined ? { value } : {}), ...(pageInput ? { input_source: 'page' } : {}), ...(action.error ? { error: action.error } : {}) };
+}
+
 async function decideLoop(input: ActInput, models: Models, actions: ActionRecord[], rounds: Round[], recording: RecordedAction[], start: StepStart): Promise<Omit<ActResult, 'source' | 'actions' | 'rounds' | 'recording'>> {
     const maxActions = input.maxActions ?? 8;
     // One declared submission has code-owned evidence; compound steps can still have later actions.
     const compound = /\b(?:and|then|also|afterwards)\b|然后|并且|之后|再|以及|[;；]|(?<!\d)[,，]|[,，](?!\d)/i.test(input.instruction.replace(/"(?:\\.|[^"\\])*"|“[^”]*”|‘[^’]*’/g, ''));
-    const history: Array<Record<string, string>> = actions.map(action => ({ action: action.tool, ...(action.element ? { element: action.element } : {}), ...(action.value ? { value: action.value } : {}), ...(action.error ? { error: action.error } : {}) }));
+    const history = actions.map((action, index) => actionHistory(action, Boolean(input.recorded?.actions[index]?.pageValue)));
     const seen = new Map<string, number>();
     const actionTargets = new Map<ActionRecord, string>();
     let previous: Observation | undefined;
@@ -541,7 +550,7 @@ async function decideLoop(input: ActInput, models: Models, actions: ActionRecord
         if (next.tool === 'scroll' && next.scrollText) { searchSpentMs += record.durationMs; }
         actions.push(record);
         if (record.ok && next.target?.ref) { actionTargets.set(record, next.target.ref); }
-        history.push({ action: record.tool, ...(record.element ? { element: record.element } : {}), ...(record.destination ? { destination: record.destination } : {}), ...(record.value ? { value: record.value } : {}), ...(record.error ? { error: record.error } : {}) });
+        history.push({ ...actionHistory(record, Boolean(next.pageValue)), ...(record.destination ? { destination: record.destination } : {}) });
     }
     return { status: 'failed', failure: 'max-actions', reason: `Step not complete after ${maxActions} actions${missing.length ? `: ${neverEntered(missing)}` : ''}` };
 }
@@ -710,7 +719,7 @@ function round2(value: number): number {
 function decisionState(input: ActInput, observation: Observation, history: Array<Record<string, string>>, change: Record<string, unknown> | undefined, stale: string[]): Record<string, unknown> {
     const values = Object.keys(input.values).length ? modelValues(input) : undefined;
     const entered = modelEnteredValues(input, observation);
-    const supplied = Object.fromEntries(history.filter(entry => !entry.error && (entry.action === 'type' || entry.action === 'select') && entry.value && Object.hasOwn(input.values, entry.value)).map(entry => [modelValueKey(input, entry.value!), entry.element ?? entry.action!]));
+    const supplied = Object.fromEntries(history.filter(entry => !entry.error && entry.input_source !== 'page' && (entry.action === 'type' || entry.action === 'select') && entry.value && Object.hasOwn(input.values, entry.value)).map(entry => [modelValueKey(input, entry.value!), entry.element ?? entry.action!]));
     const pageValues = input.readPageValues ? pageValueChoices(observation, input.redact) : [];
     return {
         task: {
