@@ -1244,6 +1244,16 @@ it('reach2 exposes delegated context handlers inside named sections and generic 
     expect(observation.elements.find(element => element.role === 'box')).toMatchObject({ dropTarget: true });
 });
 
+it('protects complete drop target names before applying the observation budget', async () => {
+    const { createRedactor, secret } = await import('../src/secrets.ts');
+    await open('/surface-events?long-drop', async page => {
+        const redact = createRedactor([secret('private-sequence-829173')]);
+        const observation = redact.value(await observe(page, { redact }));
+        expect(observation.elements.some(element => element.dropTarget && element.name.includes('{secret}'))).toBe(true);
+        expect(JSON.stringify(redact.value(observation))).not.toContain('private-se');
+    });
+});
+
 it('reach2 uses visible conflicting labels as primary names and retains replaced content and legacy identities', async () => {
     const { observation } = await open('/surface-labels');
     expect(named(observation, 'textbox', 'Cost')[0]).toMatchObject({ ariaName: 'Description' });

@@ -172,6 +172,7 @@ document.querySelector('main').addEventListener('contextmenu', e => { if(e.targe
 document.getElementById('rename').onclick = () => { selectedFile.textContent = selectedFile.textContent.replace('.csv', '-renamed.csv'); document.getElementById('rename').hidden = true; toast('Document renamed'); };
 const parcel = document.getElementById('parcel'); parcel.addEventListener('dragstart', e => e.dataTransfer.setData('text/plain', 'package'));
 const drop = document.getElementById('drop');
+if (location.search.includes('long-drop')) drop.textContent = 'x'.repeat(70) + 'private-sequence-829173';
 drop.__reactProps$fixture = { onDragOver: e => e.preventDefault(), onDrop: e => { e.preventDefault(); if(e.dataTransfer.getData('text/plain') === 'package' && !location.search.includes('no-drop')) { drop.append(parcel); toast('Package received'); } } };
 document.querySelector('main').addEventListener('dragover', e => { if(drop.contains(e.target)) drop.__reactProps$fixture.onDragOver(e); });
 document.querySelector('main').addEventListener('drop', e => { if(drop.contains(e.target)) drop.__reactProps$fixture.onDrop(e); });

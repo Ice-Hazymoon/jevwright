@@ -179,18 +179,21 @@ export async function readSurface(page: Page | Frame, scope?: ElementHandle<Elem
         const draggableOf = (element: Element) => element.getAttribute('draggable') === 'true' || /grab/.test(styleOf(element).cursor)
             || eventsOf(element).has('dragstart') || (eventsOf(element).has('pointerdown') && (eventsOf(element).has('pointermove') || eventsOf(element).has('pointerup')));
         const hasDrag = all.some(element => visible(element) && !inertTree(element) && draggableOf(element));
-        const interactiveParent = (element: Element) => {
-            for (let parent = parentOf(element); parent; parent = parentOf(parent)) {
-                if (parent.matches('button,a[href],input,select,textarea,summary,[contenteditable=true]') || actionRoles.has(parent.getAttribute('role') ?? '') || styleOf(parent).cursor === 'pointer' || eventsOf(parent).has('click')) { return true; }
-            }
-            return false;
+        const interactiveParents = new Map<Element, boolean>();
+        const interactiveParent = (element: Element): boolean => {
+            if (interactiveParents.has(element)) { return interactiveParents.get(element)!; }
+            const parent = parentOf(element);
+            const value = Boolean(parent && (parent.matches('button,a[href],input,select,textarea,summary,[contenteditable=true]') || actionRoles.has(parent.getAttribute('role') ?? '') || styleOf(parent).cursor === 'pointer' || eventsOf(parent).has('click') || interactiveParent(parent)));
+            interactiveParents.set(element, value); return value;
         };
-        const pointerSignal = (element: Element) => {
-            for (let parent: Element | null = element; parent && parent !== document.body; parent = parentOf(parent)) {
-                if (['contextmenu', 'mouseenter', 'mouseover', 'dragover', 'drop'].some(type => eventsOf(parent!).has(type)) || /pointer|grab/.test(styleOf(parent).cursor)) { return true; }
-                if (hoverSelectors.some(selector => { try { return parent!.matches(selector); } catch { return false; } })) { return true; }
-            }
-            return false;
+        const pointerSignals = new Map<Element, boolean>();
+        const pointerSignal = (element: Element): boolean => {
+            if (pointerSignals.has(element)) { return pointerSignals.get(element)!; }
+            // Ancestor hints are stable within one observation; share them across sibling leaves.
+            const parent = parentOf(element);
+            const value = element !== document.body && (['contextmenu', 'mouseenter', 'mouseover', 'dragover', 'drop'].some(type => eventsOf(element).has(type)) || /pointer|grab/.test(styleOf(element).cursor)
+                || hoverSelectors.some(selector => { try { return element.matches(selector); } catch { return false; } }) || Boolean(parent && pointerSignal(parent)));
+            pointerSignals.set(element, value); return value;
         };
         const textCandidates: AriaNode[] = [];
         const nodes: AriaNode[] = [];
@@ -218,9 +221,8 @@ export async function readSurface(page: Page | Frame, scope?: ElementHandle<Elem
             const scrolling = /auto|scroll/.test(css.overflowY) && element.scrollHeight > element.clientHeight + 1;
             const name = label || labelled || labels || group || (field ? element.getAttribute('placeholder') ?? '' : rendered.length <= 160 ? rendered : scrolling ? text(element.firstElementChild ?? element) : '');
             const draggable = element instanceof HTMLElement && draggableOf(element);
-            const painted = css.backgroundColor !== 'rgba(0, 0, 0, 0)' || ['borderTopWidth', 'borderRightWidth', 'borderBottomWidth', 'borderLeftWidth', 'outlineWidth'].some(key => parseFloat(Reflect.get(css, key) as string) > 0);
             const container = !nativeRole && !actionRoles.has(role) && !draggable && !interactiveParent(element) && b.width >= 24 && b.height >= 24 && !element.matches('html,body,main,header,footer,nav');
-            const emptyBox = container && !rendered && !element.children.length && painted;
+            const emptyBox = container && !rendered && !element.children.length && (css.backgroundColor !== 'rgba(0, 0, 0, 0)' || ['borderTopWidth', 'borderRightWidth', 'borderBottomWidth', 'borderLeftWidth', 'outlineWidth'].some(key => parseFloat(Reflect.get(css, key) as string) > 0));
             const dropTarget = eventsOf(element).has('dragover') || eventsOf(element).has('drop') || (hasDrag && container && (Boolean(label || element.getAttribute('data-testid')) || emptyBox));
             // Option lists and selected values are content; only a form label or action caption names a control.
             const visibleName = field || select ? labels || near : (nativeRole || actionRoles.has(role)) && !['combobox', 'listbox'].includes(role) && !select && !editable ? rendered : undefined;
@@ -243,7 +245,7 @@ export async function readSurface(page: Page | Frame, scope?: ElementHandle<Elem
             if (field && element instanceof HTMLInputElement && element.type === 'hidden') { continue; }
             const key = ids.get(element) ?? `d${++serial}`;
             ids.set(element, key); refs.set(key, element);
-            const node: AriaNode = { role: emptyBox && dropTarget ? 'box' : role, name: dropTarget && !label ? group || text(element.querySelector('h1,h2,h3,h4') ?? element).slice(0, 80) || element.getAttribute('data-testid') || '' : name, ref: `dom:${key}`, box, ...(value !== undefined ? { text: value } : {}), ...(element.hasAttribute('disabled') ? { disabled: true } : {}) };
+            const node: AriaNode = { role: emptyBox && dropTarget ? 'box' : role, name: dropTarget && !label ? group || text(element.querySelector('h1,h2,h3,h4') ?? element) || element.getAttribute('data-testid') || '' : name, ref: `dom:${key}`, box, ...(value !== undefined ? { text: value } : {}), ...(element.hasAttribute('disabled') ? { disabled: true } : {}) };
             if (select) { node.children = [...element.options].map(option => ({ role: 'option', name: option.label, selected: option.selected })); }
             if (leaf && !nativeRole && !group && !actionRoles.has(role) && !scrolling && !draggable && !dropTarget && !clickable) { textCandidates.push(node); } else { nodes.push(node); }
         }
