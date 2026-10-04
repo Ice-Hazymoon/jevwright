@@ -16,6 +16,14 @@ export function registerDomSelector(): Promise<void> {
 
 /** Keep closed roots reachable to the engine without changing mode or the host's shadowRoot getter. */
 export function trackRoots() {
+    // Registration is a surface hint; actionability and the resulting effect still decide delivery.
+    const events = new WeakMap<EventTarget, Set<string>>();
+    Reflect.set(window, '__jevwrightEvents', events);
+    const add = EventTarget.prototype.addEventListener;
+    EventTarget.prototype.addEventListener = function (type, listener, options) {
+        if (listener) { const types = events.get(this) ?? new Set<string>(); types.add(type.toLowerCase()); events.set(this, types); }
+        return add.call(this, type, listener, options);
+    };
     const roots = new WeakMap<Element, ShadowRoot>();
     Reflect.set(window, '__jevwrightRoots', roots);
     const shadowRoots = new Set<ShadowRoot>();
@@ -33,7 +41,7 @@ export function trackRoots() {
 
 export interface DomSurface {
     nodes: AriaNode[];
-    details: Array<{ box: NonNullable<AriaNode['box']>; content?: string; near?: string; value?: string; inputType?: string; autocomplete?: string; nativeSelect?: boolean; context?: string; draggable?: boolean; scroll?: { top: number; height: number; viewport: number } }>;
+    details: Array<{ box: NonNullable<AriaNode['box']>; content?: string; visibleName?: string; selection?: string; dropTarget?: boolean; near?: string; value?: string; inputType?: string; autocomplete?: string; nativeSelect?: boolean; context?: string; draggable?: boolean; scroll?: { top: number; height: number; viewport: number } }>;
     text: string;
     dialog?: AriaNode;
     busy: boolean;
@@ -147,15 +155,39 @@ export async function readSurface(page: Page | Frame, scope?: ElementHandle<Elem
             else if ('cssRules' in rule) { rules((rule as CSSGroupingRule).cssRules); }
         } };
         for (const sheet of document.styleSheets) { try { rules(sheet.cssRules); } catch { /* Cross-origin stylesheets are unreadable. */ } }
+        const registered = Reflect.get(window, '__jevwrightEvents') as WeakMap<EventTarget, Set<string>> | undefined;
+        const eventCache = new Map<Element, Set<string>>();
+        const eventsOf = (element: Element): Set<string> => {
+            if (eventCache.has(element)) { return eventCache.get(element)!; }
+            const keys = Object.keys(element);
+            // Framework roots register delegated listeners for descendants, not actions on the root itself.
+            const delegated = keys.some(key => key.startsWith('__reactContainer$') || key === '_reactRootContainer' || key === '__vue_app__');
+            const events = new Set(delegated ? [] : registered?.get(element));
+            for (const key of keys) {
+                if (key.startsWith('__reactProps$') || key === '_vei') {
+                    const props = Reflect.get(element, key) as Record<string, unknown> | undefined;
+                    for (const [name, value] of Object.entries(props ?? {})) {
+                        if (/^on/i.test(name) && typeof value === 'function') { events.add(name.slice(2).replace(/Capture$/, '').toLowerCase()); }
+                    }
+                }
+            }
+            for (const type of ['click', 'contextmenu', 'mouseenter', 'mouseover', 'dragstart', 'dragover', 'drop', 'pointerdown', 'pointermove', 'pointerup']) {
+                if (typeof Reflect.get(element, `on${type}`) === 'function') { events.add(type); }
+            }
+            eventCache.set(element, events); return events;
+        };
+        const draggableOf = (element: Element) => element.getAttribute('draggable') === 'true' || /grab/.test(styleOf(element).cursor)
+            || eventsOf(element).has('dragstart') || (eventsOf(element).has('pointerdown') && (eventsOf(element).has('pointermove') || eventsOf(element).has('pointerup')));
+        const hasDrag = all.some(element => visible(element) && !inertTree(element) && draggableOf(element));
         const interactiveParent = (element: Element) => {
             for (let parent = parentOf(element); parent; parent = parentOf(parent)) {
-                if (parent.matches('button,a[href],input,select,textarea,summary,[aria-label],[aria-labelledby],[contenteditable=true]') || actionRoles.has(parent.getAttribute('role') ?? '') || styleOf(parent).cursor === 'pointer') { return true; }
+                if (parent.matches('button,a[href],input,select,textarea,summary,[contenteditable=true]') || actionRoles.has(parent.getAttribute('role') ?? '') || styleOf(parent).cursor === 'pointer' || eventsOf(parent).has('click')) { return true; }
             }
             return false;
         };
         const pointerSignal = (element: Element) => {
             for (let parent: Element | null = element; parent && parent !== document.body; parent = parentOf(parent)) {
-                if (parent instanceof HTMLElement && (parent.oncontextmenu || parent.onmouseenter || parent.onmouseover || parent.ondragover || /pointer|grab/.test(styleOf(parent).cursor))) { return true; }
+                if (['contextmenu', 'mouseenter', 'mouseover', 'dragover', 'drop'].some(type => eventsOf(parent!).has(type)) || /pointer|grab/.test(styleOf(parent).cursor)) { return true; }
                 if (hoverSelectors.some(selector => { try { return parent!.matches(selector); } catch { return false; } })) { return true; }
             }
             return false;
@@ -178,31 +210,41 @@ export async function readSurface(page: Page | Frame, scope?: ElementHandle<Elem
             const group = groupName(element);
             const role = element.getAttribute('role') ?? nativeRole ?? (group ? 'group' : 'generic');
             const label = element.getAttribute('aria-label')?.trim();
-            const labels = field || select ? [...element.labels ?? []].map(text).join(' ') : '';
+            const labelText = (label: Element): string => childrenOf(label).map(node => node.nodeType === Node.TEXT_NODE ? ownText(node, label) : node instanceof Element && !node.matches('input,textarea,select,[contenteditable=true]') ? labelText(node) : '').join(' ').replace(/\s+/g, ' ').trim();
+            const labels = field || select ? [...element.labels ?? []].map(labelText).join(' ') : '';
             const labelled = element.getAttribute('aria-labelledby')?.split(/\s+/).map(id => text((element.getRootNode() as Document | ShadowRoot).getElementById(id) ?? element)).join(' ');
             const preceding = element.previousElementSibling;
             const near = (labels || (preceding?.matches('label, span') && !preceding.children.length ? text(preceding) : '')).slice(0, 80);
             const scrolling = /auto|scroll/.test(css.overflowY) && element.scrollHeight > element.clientHeight + 1;
             const name = label || labelled || labels || group || (field ? element.getAttribute('placeholder') ?? '' : rendered.length <= 160 ? rendered : scrolling ? text(element.firstElementChild ?? element).slice(0, 60) : '');
-            const draggable = element instanceof HTMLElement && (element.getAttribute('draggable') === 'true' || /grab/.test(css.cursor));
+            const draggable = element instanceof HTMLElement && draggableOf(element);
+            const painted = css.backgroundColor !== 'rgba(0, 0, 0, 0)' || ['borderTopWidth', 'borderRightWidth', 'borderBottomWidth', 'borderLeftWidth', 'outlineWidth'].some(key => parseFloat(Reflect.get(css, key) as string) > 0);
+            const container = !nativeRole && !actionRoles.has(role) && !draggable && !interactiveParent(element) && b.width >= 24 && b.height >= 24 && !element.matches('html,body,main,header,footer,nav');
+            const emptyBox = container && !rendered && !element.children.length && painted;
+            const dropTarget = eventsOf(element).has('dragover') || eventsOf(element).has('drop') || (hasDrag && container && (Boolean(label || element.getAttribute('data-testid')) || emptyBox));
+            // Option lists and selected values are content; only a form label or action caption names a control.
+            const visibleName = field || select ? labels || near : (nativeRole || actionRoles.has(role)) && !['combobox', 'listbox'].includes(role) && !select && !editable ? rendered : undefined;
+            const focused = element === (element.getRootNode() as Document | ShadowRoot).activeElement;
+            const selected = focused && field && element.selectionStart !== null && element.selectionEnd !== null ? element.value.slice(element.selectionStart, element.selectionEnd)
+                : focused && editable ? (element.getRootNode() instanceof ShadowRoot ? (element.getRootNode() as ShadowRoot & { getSelection?: () => Selection | null }).getSelection?.() : document.getSelection())?.toString() : undefined;
             const value = field ? element instanceof HTMLInputElement && element.type === 'password' ? '••••' : element.value : editable ? (element as HTMLElement).innerText : undefined;
             let context: string | undefined;
             for (let parent = element.parentElement; parent && parent !== document.body; parent = parent.parentElement) {
                 const name = groupName(parent);
                 if (name) { context = `group "${name}"`; break; }
             }
-            if (nativeRole || label || group || actionRoles.has(role) || scrolling || draggable) { details.push({ box, ...(context ? { context } : {}), ...(label && rendered && !field && !select && rendered !== label ? { content: rendered } : {}), ...(field && near && near !== name ? { near } : {}), ...(element instanceof HTMLInputElement ? { inputType: element.type, autocomplete: element.autocomplete } : {}), ...(editable ? { value } : {}), ...(select ? { nativeSelect: true } : {}), ...(draggable ? { draggable: true } : {}), ...(scrolling ? { scroll: { top: element.scrollTop, height: element.scrollHeight, viewport: element.clientHeight } } : {}) }); }
+            if (nativeRole || label || group || actionRoles.has(role) || scrolling || draggable || dropTarget) { details.push({ box, ...(visibleName ? { visibleName } : {}), ...(selected !== undefined ? { selection: selected } : {}), ...(dropTarget ? { dropTarget: true } : {}), ...(context ? { context } : {}), ...(label && rendered && !field && !select && rendered !== label ? { content: rendered } : {}), ...(field && near && near !== name ? { near } : {}), ...(element instanceof HTMLInputElement ? { inputType: element.type, autocomplete: element.autocomplete } : {}), ...(editable ? { value } : {}), ...(select ? { nativeSelect: true } : {}), ...(draggable ? { draggable: true } : {}), ...(scrolling ? { scroll: { top: element.scrollTop, height: element.scrollHeight, viewport: element.clientHeight } } : {}) }); }
             scrollable ||= scrolling;
             const clickable = css.cursor === 'pointer' && rendered && rendered.length <= 160 && !interactiveParent(element);
             const leaf = rendered && rendered.length <= 160 && ![...element.children].some(child => text(child)) && !interactiveParent(element) && (pointerSignal(element) || instruction.toLowerCase().includes(rendered.toLowerCase()));
             if (['dialog', 'alertdialog', 'status', 'alert', 'progressbar', 'heading'].includes(role) || element.matches('h1,h2,h3,h4,h5,h6')) { continue; }
-            if (!(nativeRole || group || actionRoles.has(role) || scrolling || draggable || clickable || leaf)) { continue; }
+            if (!(nativeRole || group || actionRoles.has(role) || scrolling || draggable || dropTarget || clickable || leaf)) { continue; }
             if (field && element instanceof HTMLInputElement && element.type === 'hidden') { continue; }
             const key = ids.get(element) ?? `d${++serial}`;
             ids.set(element, key); refs.set(key, element);
-            const node: AriaNode = { role, name, ref: `dom:${key}`, box, ...(value !== undefined ? { text: value } : {}), ...(element.hasAttribute('disabled') ? { disabled: true } : {}) };
+            const node: AriaNode = { role: emptyBox && dropTarget ? 'box' : role, name: dropTarget && !label ? group || text(element.querySelector('h1,h2,h3,h4') ?? element).slice(0, 80) || element.getAttribute('data-testid') || '' : name, ref: `dom:${key}`, box, ...(value !== undefined ? { text: value } : {}), ...(element.hasAttribute('disabled') ? { disabled: true } : {}) };
             if (select) { node.children = [...element.options].map(option => ({ role: 'option', name: option.label, selected: option.selected })); }
-            if (leaf && !nativeRole && !group && !actionRoles.has(role) && !scrolling && !draggable && !clickable) { textCandidates.push(node); } else { nodes.push(node); }
+            if (leaf && !nativeRole && !group && !actionRoles.has(role) && !scrolling && !draggable && !dropTarget && !clickable) { textCandidates.push(node); } else { nodes.push(node); }
         }
         const viewportRank = (node: AriaNode) => node.box && node.box.y >= 0 && node.box.y < innerHeight ? 0 : 1;
         const named = (node: AriaNode) => node.name && instruction.toLowerCase().includes(node.name.toLowerCase()) ? 0 : 1;

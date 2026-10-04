@@ -180,6 +180,8 @@ Replay skips `check` steps, since they need a model. A step without a recording 
 | Every test fails with "Start page did not become ready" | Open the start page yourself and read `server.log`. Check that a `ready` hook does not wait for something that never appears. |
 | A request the app needs is blocked | `run.json` lists `blockedRequests`. If the origin is part of your app, add it to `allowedOrigins`. |
 | Replay says “Page value needs model grounding” | The recorded page-value source is missing or ambiguous. Run in auto mode to read the current value and refresh its source. |
+| A visible label conflicts with an aria name | The visible label becomes the primary name; `aria_name` and `content` retain the original name and rendered text. Review the app’s accessible labels. |
+| A drag reports no observed effect | Check that the destination is correct and that the page reflects the move. A delivered gesture alone does not establish a drop. |
 | Secret input fails with a password-purpose message | Use a password field, or declare `secret(value, { purpose: 'any' })` for an API key or another editable field. |
 | `check` steps show as skipped | Replay mode makes no model calls. Run in auto mode, with a key, to judge them. |
 | `env` is `unknown` in fixtures | Declare its type once through `Register`; see [Starting the app per run](https://github.com/Ice-Hazymoon/jevwright/blob/main/docs/configuration.md#starting-the-app-per-run). |
@@ -192,7 +194,7 @@ can be a product regression or a stale target and does not establish either on i
 ## Limitations
 
 - The engine can:
-  - click, type into fields and contenteditable editors, press Enter or Escape, and choose native or ARIA options;
+  - click, type into fields and contenteditable editors, press keyboard shortcuts, select exact editable text, and choose native or ARIA options;
   - upload declared files, including a chosen group in one multiple input, and verify declared downloads;
   - follow popups and return after they close;
   - scroll the page or a container, search for instruction text while scrolling, and bring static text into view;
@@ -206,8 +208,8 @@ can be a product regression or a stale target and does not establish either on i
 
   When one of these is only a precondition, do it in a `fixture` or `run` step. When it is the behavior under test, use a scripted Playwright test.
 - Declarative closed shadow roots are not captured. The engine wraps `attachShadow` and keeps references to script-created roots; the roots retain their original mode.
-- Dragging covers HTML drag-and-drop and pointer gestures. Drawing, arbitrary keyboard shortcuts and precise text-range formatting still need scripted Playwright steps.
-- Scroll searches share 30 seconds per step and stop after 500 viewports or five unchanged positions. Missing goals fail explicitly.
+- Dragging covers HTML drag-and-drop and pointer gestures. Drawing still needs scripted Playwright steps. Keyboard shortcuts and exact editable text selection can drive rich-text formatting.
+- Scroll searches use a container-sized budget, share at most 120 seconds per step, and stop after 500 viewports or five unchanged positions. Missing goals fail explicitly.
 - Desktop defaults to 1280×900. Use `device: "mobile"` for touch and a mobile user agent, or provide a custom device.
 - Page values can be entered only when their exact text appears in the current observation. Replay re-reads them from recorded surrounding text; changed or ambiguous sources need an auto run. Declared secrets remain available only through their keys.
 - `check` requires the asserted content to be visible. A count or saved-button state cannot prove what another tab contains.

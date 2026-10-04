@@ -46,6 +46,8 @@ export interface ModelConfig {
     maxCallsPerTest?: number;
     /** Per-request timeout in milliseconds. Default 45 000. */
     timeoutMs?: number;
+    /** Proposed-action confidence before independent remaining-work review. Default 0.75. */
+    actionPriorityThreshold?: number;
 }
 
 export interface JevwrightConfig {
@@ -134,6 +136,7 @@ const schema = z.object({
         llmModel: z.string().min(1).optional(),
         maxCallsPerTest: positiveInt.optional(),
         timeoutMs: positiveInt.optional(),
+        actionPriorityThreshold: z.number().min(0.5).max(1).optional(),
     }).strict().optional(),
     command: z.string().min(1).optional(),
 }).strict();

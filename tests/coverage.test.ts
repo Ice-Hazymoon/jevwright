@@ -143,7 +143,7 @@ describe('reach actions', () => {
         await runAndReplay('gestures', '/reach-actions', 'Hold action, then open twice', models, shows('held|twice'));
     });
     it('uses visible totals after choosing among identical accessible button names', async () => {
-        const models = scriptedModels(view => view.notices.includes('Summary confirmed') ? { done: 0.95 } : view.text.includes('Total 5.00') ? { tool: 'click', target: is('button', 'Finish') } : { tool: 'click', target: element => element.name === 'Choose amount' && Reflect.get(element, 'content') === '5' });
+        const models = scriptedModels(view => view.notices.includes('Summary confirmed') ? { done: 0.95 } : view.text.includes('Total 5.00') ? { tool: 'click', target: is('button', 'Finish') } : { tool: 'click', target: element => (element.name === 'Choose amount' || Reflect.get(element, 'aria_name') === 'Choose amount') && Reflect.get(element, 'content') === '5' });
         await runAndReplay('visible-summary', '/reach-visual', 'Choose 5, then Finish the summary', models, () => [verify('summary', ({ page }) => page.locator('#status').textContent().then(text => text === 'Summary confirmed'))]);
     });
     it('records context menus on text without a role', async () => {
@@ -259,7 +259,7 @@ it('integration reports a missing scroll search instead of succeeding silently',
 
 it('integration keeps a connected original ref when an identical sibling is inserted during model latency', async () => {
     let inserted = false;
-    const models = scriptedModels(view => view.notices.includes('Summary confirmed') ? { done: 0.95 } : view.text.includes('Total 5.00') ? { tool: 'click', target: is('button', 'Finish') } : { tool: 'click', target: element => element.name === 'Choose amount' && Reflect.get(element, 'content') === '5' });
+    const models = scriptedModels(view => view.notices.includes('Summary confirmed') ? { done: 0.95 } : view.text.includes('Total 5.00') ? { tool: 'click', target: is('button', 'Finish') } : { tool: 'click', target: element => (element.name === 'Choose amount' || Reflect.get(element, 'aria_name') === 'Choose amount') && Reflect.get(element, 'content') === '5' });
     const evaluate = models.settings.models!.evaluation as unknown as { doEvaluate: (...args: any[]) => Promise<any> };
     const original = evaluate.doEvaluate.bind(evaluate);
     const spec: TestSpec = { ...base, id: 'connected-ref', start: '/reach-visual', ready: async ({ page }) => {
@@ -321,5 +321,57 @@ it('hardening replays a targetless legacy scroll inside an app shell', async () 
     await mkdir(join(root, 'recordings'), { recursive: true });
     await writeFile(join(root, 'recordings', spec.id + '.json'), JSON.stringify({ version: 1, test: spec.id, updatedAt: '', steps: [{ key: stepKey(step), instruction: step.instruction, actions: [{ tool: 'scroll' }] }] }));
     const result = (await runSuite([spec], { ...options(), mode: 'replay' })).results[0]!;
+    expect(result.status, result.summary).toBe('passed');
+});
+
+it('reach2 records selection and repeated keyboard chords and replays formatting without a model', async () => {
+    const spec: TestSpec = { ...base, id: 'keyboard-format', start: '/surface-editor', data: { text: 'ship confirmed' }, steps: () => [act('Type {text} in Document and make confirmed bold', { maxActions: 6 }), verify('word formatting', ({ page }) => page.locator('#editor').innerHTML().then(html => html === 'ship <b>confirmed</b>'))] };
+    const models = scriptedModels(view => {
+        if (!view.history.some(entry => entry.action === 'type')) { return { tool: 'type', target: is('textbox', 'Document'), value: 'text' }; }
+        if (!view.history.some(entry => entry.action === 'select_text')) { return { tool: 'select_text', target: is('textbox', 'Document'), selectText: 'confirmed' }; }
+        if (!view.history.some(entry => entry.action === 'press')) { return { tool: 'press', key: 'ControlOrMeta+b', times: 1 }; }
+        return { done: 0.99 };
+    });
+    const result = (await runSuite([spec], { ...options(), models: models.settings })).results[0]!;
+    expect(result.status, result.summary).toBe('passed');
+    const recipe = JSON.parse(await readFile(join(root, 'recordings/keyboard-format.json'), 'utf8'));
+    expect(recipe.steps[0].actions[2]).toMatchObject({ tool: 'press', key: 'ControlOrMeta+b', times: 1 });
+    const replay = await runSuite([spec], { ...options(), mode: 'replay' });
+    expect(replay.results[0]?.status, replay.results[0]?.summary).toBe('passed');
+    expect(replay.totals.models.jevCalls).toBe(0);
+});
+
+it('reach2 records both framework drag destinations and verifies native and pointer effects', async () => {
+    const spec: TestSpec = { ...base, id: 'delegated-drag', start: '/surface-events', steps: () => [act('Deliver Package to Receiving bay, then move Review draft to Completed'), verify('containers changed', ({ page }) => page.locator('#drop #parcel').count().then(async count => count === 1 && await page.locator('#queue #task').count() === 1))] };
+    const models = scriptedModels(view => view.text.includes('Review completed') ? { done: 0.99 } : view.text.includes('Package received') ? { tool: 'drag', target: element => element.name === 'Review draft', destination: element => element.name === 'Completed' } : { tool: 'drag', target: element => element.name === 'Package', destination: element => element.name === 'Receiving bay' });
+    const result = (await runSuite([spec], { ...options(), models: models.settings })).results[0]!;
+    expect(result.status, result.summary).toBe('passed');
+    expect((await runSuite([spec], { ...options(), mode: 'replay' })).results[0]?.status).toBe('passed');
+});
+
+it('reach2 enters exact page instructions with conflicting visible field labels and replays their source', async () => {
+    const spec: TestSpec = { ...base, id: 'visible-instructions', start: '/surface-labels', steps: () => [act('Store the entry as the page instructs'), verify('stored', ({ page }) => page.locator('#status').textContent().then(value => value === 'Entry stored'))] };
+    const models = scriptedModels(view => view.text.includes('Entry stored') ? { done: 0.99 } : view.history.some(entry => entry.action === 'type') ? { tool: 'click', target: is('button', 'Store entry') } : { tool: 'type', target: is('textbox', 'Cost'), pageValue: '17.25' });
+    const result = (await runSuite([spec], { ...options(), models: models.settings })).results[0]!;
+    expect(result.status, result.summary).toBe('passed');
+    const recipe = JSON.parse(await readFile(join(root, 'recordings/visible-instructions.json'), 'utf8'));
+    expect(recipe.steps[0].actions[0].pageValue).toBeDefined();
+    expect(recipe.steps[0].actions[0].value).toBeUndefined();
+    expect((await runSuite([spec], { ...options(), mode: 'replay' })).results[0]?.status).toBe('passed');
+});
+
+it('reach2 opens delegated text context menus without targeting the enclosing named section', async () => {
+    for (const [id, name] of [['react-menu', 'ledger.csv'], ['vue-menu', 'schedule.csv'], ['listener-menu', 'letter.csv']]) {
+        const spec: TestSpec = { ...base, id: id!, start: '/surface-events', steps: () => [act(`Rename ${name} through its context menu`), verify('renamed', ({ page }) => page.locator('#status').textContent().then(value => value === 'Document renamed'))] };
+        const models = scriptedModels(view => view.text.includes('Document renamed') ? { done: 0.99 } : view.elements.some(is('button', 'Rename document')) ? { tool: 'click', target: is('button', 'Rename document') } : { tool: 'right_click', target: element => element.name === name });
+        expect((await runSuite([spec], { ...options(), models: models.settings })).results[0]?.status).toBe('passed');
+        expect((await runSuite([spec], { ...options(), mode: 'replay' })).results[0]?.status).toBe('passed');
+    }
+});
+
+it('reach2 searches helper-selected normalized entity words from the instruction', async () => {
+    const spec: TestSpec = { ...base, id: 'helper-entity-search', start: '/surface-search', steps: () => [act('Scroll the archive until Special entry (record 812) is rendered'), verify('rendered', ({ page }) => page.getByRole('button', { name: 'Open entry' }).isVisible())] };
+    const models = scriptedModels(view => view.elements.some(is('button', 'Open entry')) ? { done: 0.99 } : { tool: 'none' }, view => ({ outcome: 'act', tool: 'scroll', element: view.elements.find(element => element.scroll)!.i, value_key: null, text: 'RECORD 812', reason: 'Find the identifying entity supplied by the instruction' }));
+    const result = (await runSuite([spec], { ...options(), models: models.settings })).results[0]!;
     expect(result.status, result.summary).toBe('passed');
 });

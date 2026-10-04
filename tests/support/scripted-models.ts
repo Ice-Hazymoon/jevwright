@@ -43,6 +43,9 @@ export interface ViewElement {
     state?: string;
     options?: string[];
     scroll?: unknown;
+    selection?: string;
+    drop_target?: boolean;
+    draggable?: boolean;
 }
 
 /** What a scripted Jev "believes" about the current state; unset answers default to unlikely. */
@@ -61,6 +64,9 @@ export interface Belief {
     value?: string;
     destination?: (element: ViewElement) => boolean;
     option?: string;
+    key?: string;
+    times?: number;
+    selectText?: string;
     scrollText?: string;
     fileGroup?: 'selected' | 'all';
     scrollDirection?: 'up' | 'down';
@@ -158,6 +164,10 @@ function answer(id: string, question: EvaluationQuestion, belief: Belief, view: 
         chosen = at < 0 ? undefined : String(words.findIndex(word => word.index! <= boundary && word.index! + word[0].length > boundary));
     }
     if (id === 'scroll_text') { chosen = options.find(option => question.criteria[option] === belief.scrollText); }
+    if (id === 'key') { chosen = options.find(option => question.criteria[option] === belief.key); }
+    if (id === 'times') { chosen = String(belief.times ?? 1); }
+    if (id === 'press_target') { chosen = belief.target ? 'element' : 'focus'; }
+    if (id === 'selection_text') { chosen = options.find(option => question.criteria[option] === belief.selectText); }
     if (id === 'value') { chosen = belief.value; }
     if (id === 'input_source') { chosen = belief.inputSource ?? (belief.pageValue !== undefined ? 'page' : Object.keys(view.values).length ? 'step' : 'clear'); }
     if (id === 'page_value') { chosen = options.find(key => question.criteria[key] === belief.pageValue); }

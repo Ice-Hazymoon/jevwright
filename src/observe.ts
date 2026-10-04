@@ -51,6 +51,9 @@ export interface PageElement {
     inputType?: string;
     autocomplete?: string;
     nativeSelect?: boolean;
+    ariaName?: string;
+    selection?: string;
+    dropTarget?: boolean;
     draggable?: boolean;
     scroll?: { top: number; height: number; viewport: number };
 }
@@ -137,6 +140,12 @@ export async function observe(page: Page, options: ObserveOptions = {}): Promise
             continue;
         }
         if (detail.context && element.ref?.startsWith('dom:')) { element.context = detail.context; }
+        if (detail.visibleName && element.name && !detail.visibleName.includes('••••') && !element.name.toLowerCase().includes(detail.visibleName.toLowerCase())) {
+            element.ariaName = element.name;
+            element.name = clipProtected(detail.visibleName, 160, options.redact);
+        }
+        if (detail.selection !== undefined) { element.selection = detail.inputType === 'password' || SECRET.test(`${element.name} ${element.ariaName ?? ''}`) ? '••••' : clipProtected(detail.selection, 300, options.redact); }
+        if (detail.dropTarget) { element.dropTarget = true; }
         if (detail.content) { element.content = clipProtected(detail.content, 160, options.redact); }
         if (detail.near) { element.near = clipProtected(detail.near, LIMITS.near, options.redact); }
         if (detail.value !== undefined) { element.value = options.redact?.contains(detail.value) ? detail.value : SECRET.test(element.name) ? '••••' : clipValue(detail.value, 300); }
@@ -150,7 +159,7 @@ export async function observe(page: Page, options: ObserveOptions = {}): Promise
     result.scrollable = surface.scrollable;
     result.canGoBack = await canGoBack(page).catch(() => false);
     result.scroll = surface.pageScroll;
-    result.signature = createHash('sha1').update(JSON.stringify([result.signature, result.text, result.elements.map(element => [element.content, element.near, element.value, element.scroll]), surface.busy, surface.pageScroll, result.canGoBack])).digest('hex').slice(0, 16);
+    result.signature = createHash('sha1').update(JSON.stringify([result.signature, result.text, result.elements.map(element => [element.content, element.near, element.value, element.selection, element.ariaName, element.dropTarget, element.scroll]), surface.busy, surface.pageScroll, result.canGoBack])).digest('hex').slice(0, 16);
     return result;
 }
 

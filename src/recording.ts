@@ -9,6 +9,8 @@ import { z } from 'zod';
 export interface TargetDescriptor {
     role: string;
     name: string;
+    /** Original accessible name when the visible label is primary. */
+    ariaName?: string;
     near?: string;
     context?: string;
     /** Position among elements that share every field above, in document order. */
@@ -33,6 +35,8 @@ export interface RecordedAction {
     pageValue?: PageValueDescriptor;
     /** Literal typed/selected value when it did not come from test data. */
     value?: string;
+    key?: string;
+    times?: number;
     /** Text built from several data values, e.g. `{first}\n\n{second}`; replay fills in the current data. */
     template?: string;
     double?: boolean;
@@ -62,7 +66,7 @@ export interface TestRecording {
     steps: StepRecording[];
 }
 
-const descriptorSchema = z.object({ role: z.string(), name: z.string(), near: z.string().optional(), context: z.string().optional(), nth: z.number().int().min(0) });
+const descriptorSchema = z.object({ role: z.string(), name: z.string(), ariaName: z.string().optional(), near: z.string().optional(), context: z.string().optional(), nth: z.number().int().min(0) });
 const recordingSchema = z.object({
     version: z.literal(1),
     test: z.string(),
@@ -79,11 +83,13 @@ const recordingSchema = z.object({
             gone: z.array(descriptorSchema).optional(),
         }).optional(),
         actions: z.array(z.object({
-            tool: z.enum(['click', 'type', 'press_enter', 'press_escape', 'select', 'scroll', 'wait', 'upload', 'hover', 'right_click', 'long_press', 'double_click', 'drag', 'back', 'scroll_to']),
+            tool: z.enum(['click', 'type', 'press', 'select_text', 'press_enter', 'press_escape', 'select', 'scroll', 'wait', 'upload', 'hover', 'right_click', 'long_press', 'double_click', 'drag', 'back', 'scroll_to']),
             target: descriptorSchema.optional(),
             valueKey: z.string().optional(),
             pageValue: z.object({ source: z.enum(['text', 'notice', 'name', 'content']), before: z.string(), after: z.string(), requiresModel: z.literal(true).optional() }).optional(),
             value: z.string().optional(),
+            key: z.string().min(1).optional(),
+            times: z.number().int().min(1).max(20).optional(),
             template: z.string().optional(),
             double: z.boolean().optional(),
             append: z.boolean().optional(),
@@ -104,6 +110,7 @@ export function describeTarget(element: PageElement, observation: Observation): 
     return {
         role: element.role,
         name: element.name,
+        ...(element.ariaName ? { ariaName: element.ariaName } : {}),
         ...(element.near ? { near: element.near } : {}),
         ...(element.context ? { context: element.context } : {}),
         nth: Math.max(0, same.findIndex(other => other.i === element.i)),
@@ -151,9 +158,9 @@ export function resolveTarget(target: TargetDescriptor, observation: Observation
 /** Unique means exact full identity, not a fallback or an nth among duplicates. */
 export function resolveTargetMatch(target: TargetDescriptor, observation: Observation, allowDisabled = false): { element?: PageElement; unique: boolean } {
     const actionable = observation.elements.filter(element => allowDisabled || ((element.ref || element.reveal) && !element.disabled));
-    const exact = actionable.filter(element => sameIdentity(element, target));
+    const exact = actionable.filter(element => sameIdentity(!target.ariaName && element.ariaName ? { ...element, name: element.ariaName } : element, target));
     if (exact.length > target.nth) { return { element: exact[target.nth], unique: exact.length === 1 && target.nth === 0 }; }
-    const named = actionable.filter(element => element.role === target.role && element.name === target.name && target.name !== '');
+    const named = actionable.filter(element => element.role === target.role && (element.name === target.name || element.ariaName === target.name) && target.name !== '');
     if (named.length === 1 && target.nth === 0) { return { element: named[0], unique: false }; }
     const near = target.near ? actionable.filter(element => element.role === target.role && element.near === target.near) : [];
     if (near.length === 1 && target.nth === 0) { return { element: near[0], unique: false }; }
@@ -206,5 +213,5 @@ export function learnedRecording(previous: TestRecording | undefined, steps: Ste
 }
 
 function actionSignature(actions: RecordedAction[]): string {
-    return JSON.stringify(actions.map(action => [action.tool, action.target ? [action.target.role, action.target.name, stable(action.target.near), stable(action.target.context), action.target.nth] : null, action.valueKey ?? null, action.value ?? null, action.template ?? null, action.pageValue ?? null, action.double ?? false, action.append ?? false, action.destination ? [action.destination.role, action.destination.name, stable(action.destination.near), stable(action.destination.context), action.destination.nth] : null, action.fileKeys ?? null, action.scrollText ?? null, action.scrollDirection ?? null]));
+    return JSON.stringify(actions.map(action => [action.tool, action.target ? [action.target.role, action.target.name, action.target.ariaName ?? null, stable(action.target.near), stable(action.target.context), action.target.nth] : null, action.valueKey ?? null, action.value ?? null, action.template ?? null, action.pageValue ?? null, action.double ?? false, action.append ?? false, action.destination ? [action.destination.role, action.destination.name, action.destination.ariaName ?? null, stable(action.destination.near), stable(action.destination.context), action.destination.nth] : null, action.fileKeys ?? null, action.scrollText ?? null, action.scrollDirection ?? null, action.key ?? null, action.times ?? null]));
 }

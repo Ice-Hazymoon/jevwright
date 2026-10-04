@@ -43,6 +43,8 @@ export interface ModelSettings {
     maxCallsPerTest?: number;
     /** Per-request timeout. Default 45 s. */
     timeoutMs?: number;
+    /** Confidence needed for a proposed action to compete with completion. Default 0.75. */
+    actionPriorityThreshold?: number;
     /**
      * AI SDK models to use instead of a gateway, e.g. the SDK's mock models in your own tests; `provider`,
      * `apiKey` and the model ids are then ignored.
@@ -128,6 +130,7 @@ export function modelIds(settings: Omit<ModelSettings, 'apiKey'>): { provider: M
 }
 
 export function createModels(settings: ModelSettings, runBudget?: RunBudget, redact: Redactor = createRedactor()) {
+    if (settings.actionPriorityThreshold !== undefined && (!(settings.actionPriorityThreshold >= 0.5) || settings.actionPriorityThreshold > 1)) { throw new JevwrightError('actionPriorityThreshold must be between 0.5 and 1'); }
     const ids = modelIds(settings);
     const jevModel = ids.jev;
     const llmModel = ids.llm;
@@ -158,6 +161,8 @@ export function createModels(settings: ModelSettings, runBudget?: RunBudget, red
         usage,
         calls,
         metadata: ids,
+        // Match the strong target-audit threshold; completion disputes must not promote weak action proposals.
+        actionPriorityThreshold: settings.actionPriorityThreshold ?? 0.75,
         /** Jev: typed answers and probabilities over one state; many questions per request. */
         async judge(state: Record<string, unknown>, questions: Record<string, Question>, signal: AbortSignal, purpose: string): Promise<Record<string, Answer>> {
             reserve();

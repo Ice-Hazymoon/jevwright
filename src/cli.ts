@@ -295,6 +295,7 @@ function modelOptions(loaded: LoadedConfig, env: CliIO['env']): SuiteOptions['mo
         ...(models.llmModel ? { llmModel: models.llmModel } : {}),
         ...(models.maxCallsPerTest ? { maxCallsPerTest: models.maxCallsPerTest } : {}),
         ...(models.timeoutMs ? { timeoutMs: models.timeoutMs } : {}),
+        ...(models.actionPriorityThreshold !== undefined ? { actionPriorityThreshold: models.actionPriorityThreshold } : {}),
     };
 }
 

@@ -101,6 +101,7 @@ models: {
     jevModel: 'typesafe-ai/jev',   // gateway model ids
     llmModel: 'deepseek/deepseek-v4.1-flash',
     maxCallsPerTest: 80,           // per test attempt, failed calls included
+    actionPriorityThreshold: 0.75, // tool and target confidence before pending-action review
     timeoutMs: 45_000,             // per request
 },
 ```

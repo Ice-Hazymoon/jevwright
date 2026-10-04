@@ -1,7 +1,7 @@
 import type { ResolvedDevice } from './devices.ts';
 import type { Monitor } from './monitor.ts';
 import type { Redactor } from './secrets.ts';
-import type { Browser, BrowserContext, Locator, Page } from 'playwright';
+import type { Browser, BrowserContext, ElementHandle, Locator, Page } from 'playwright';
 import { createRequire } from 'node:module';
 import { chromium } from 'playwright';
 import { RequestError, Server } from 'proxy-chain';
@@ -156,7 +156,7 @@ export async function settle(page: Page, monitor: Pick<Monitor, 'pendingRequests
     return Date.now() - started;
 }
 
-export type Tool = 'hover' | 'right_click' | 'long_press' | 'double_click' | 'drag' | 'back' | 'scroll_to' | 'click' | 'type' | 'press_enter' | 'press_escape' | 'select' | 'scroll' | 'wait' | 'upload';
+export type Tool = 'hover' | 'right_click' | 'long_press' | 'double_click' | 'drag' | 'back' | 'scroll_to' | 'click' | 'type' | 'press' | 'select_text' | 'press_enter' | 'press_escape' | 'select' | 'scroll' | 'wait' | 'upload';
 
 export interface ToolCall {
     tool: Tool;
@@ -165,6 +165,8 @@ export interface ToolCall {
     /** For an element without a ref (hover-revealed): its role, name and index among same-named elements. */
     locate?: { role: string; name: string; nth: number; inDialog: boolean };
     value?: string;
+    key?: string;
+    times?: number;
     double?: boolean;
     /** Type at the cursor instead of replacing the field's content. */
     append?: boolean;
@@ -212,23 +214,18 @@ export async function perform(page: Page, call: ToolCall): Promise<void> {
             return;
         case 'drag': {
             if (!call.destinationRef) { throw new Error('Drag needs a destination'); }
-            const destination = domLocator(page, call.destinationRef);
-            const source = await target().elementHandle({ timeout });
-            try {
-                if (source && await destination.evaluate((element, source) => element === source, source, { timeout })) { throw new Error('Drag source and destination must be different elements'); }
-            } finally { await source?.dispose(); }
-            await target().dragTo(destination, { timeout });
+            await pointerDrag(page, target(), domLocator(page, call.destinationRef), timeout);
             return;
         }
         case 'click':
             try {
                 if (call.hasTouch) {
-                    await target().tap({ timeout });
+                    await deliveredClick(target(), () => target().tap({ timeout }));
                     if (call.double) { await target().tap({ timeout }); }
                 } else if (call.double) {
                     await target().dblclick({ timeout });
                 } else {
-                    await target().click({ timeout });
+                    await deliveredClick(target(), () => target().click({ timeout }));
                 }
             } catch (error) {
                 throw await withCover(error, target());
@@ -279,6 +276,42 @@ export async function perform(page: Page, call: ToolCall): Promise<void> {
             if (written !== null && written !== call.value) { await locator.fill(call.value, { timeout }); }
             return;
         }
+        case 'press': {
+            const times = call.times ?? 1;
+            if (!call.key || !Number.isInteger(times) || times < 1 || times > 20) { throw new Error('Press requires a key and 1–20 repetitions'); }
+            const mac = await page.evaluate(() => /Mac|iPhone|iPad/.test(navigator.platform));
+            const key = call.key.replace(/ControlOrMeta|\b(?:Control|Meta)(?=\+)/g, mac ? 'Meta' : 'Control');
+            if (call.ref || call.locate) { await target().focus({ timeout }); }
+            for (let i = 0; i < times; i++) { call.signal?.throwIfAborted(); await page.keyboard.press(key); }
+            return;
+        }
+        case 'select_text':
+            if (!call.value) { throw new Error('Select text requires exact editable text'); }
+            await target().evaluate((element, wanted) => {
+                if (!(element instanceof HTMLElement) || !(element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement || element.isContentEditable)) { throw new Error('Select text needs an editable element'); }
+                if (element instanceof HTMLInputElement && element.type === 'password') { throw new Error('Select text cannot read a password'); }
+                element.focus();
+                if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) {
+                    const at = element.value.indexOf(wanted);
+                    if (at < 0 || element.value.indexOf(wanted, at + 1) >= 0) { throw new Error('Selection text is missing or ambiguous'); }
+                    element.setSelectionRange(at, at + wanted.length); return;
+                }
+                const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+                const nodes: Text[] = []; let node;
+                while ((node = walker.nextNode())) { nodes.push(node as Text); }
+                const text = nodes.map(node => node.data).join('');
+                const at = text.indexOf(wanted);
+                if (at < 0 || text.indexOf(wanted, at + 1) >= 0) { throw new Error('Selection text is missing or ambiguous'); }
+                const range = document.createRange(); let offset = 0;
+                for (const node of nodes) {
+                    if (at >= offset && at < offset + node.length) { range.setStart(node, at - offset); }
+                    if (at + wanted.length > offset && at + wanted.length <= offset + node.length) { range.setEnd(node, at + wanted.length - offset); break; }
+                    offset += node.length;
+                }
+                const selection = document.getSelection(); selection?.removeAllRanges(); selection?.addRange(range);
+                document.dispatchEvent(new Event('selectionchange'));
+            }, call.value, { timeout });
+            return;
         case 'press_enter':
             await target().press('Enter', { timeout });
             return;
@@ -370,40 +403,113 @@ export function actionError(error: unknown, redact?: Redactor): string {
     return (message.split('\n')[0] ?? message).slice(0, 180);
 }
 
-/** Search at viewport-sized intervals so windowed rows are not skipped; all searches have a time and iteration cap. */
-async function scrollPage(page: Page, call: ToolCall): Promise<void> {
-    const locator = call.ref ? domLocator(page, call.ref) : undefined;
-    const deadline = Date.now() + Math.min(30000, call.searchBudgetMs ?? 30000);
-    const direction = call.scrollDirection === 'up' ? -1 : 1;
-    const phrase = call.scrollText?.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const search = phrase ? new RegExp(`(?<![\\p{L}\\p{N}_])${phrase}(?![\\p{L}\\p{N}_])`, 'u') : undefined;
-    let stalled = 0;
-    let viewports = 0;
-    for (let attempt = 0; attempt < (call.scrollText ? 500 : 1) && Date.now() < deadline; attempt++) {
-        call.signal?.throwIfAborted();
-        viewports++;
-        if (search) {
-            const scope = locator ? await locator.elementHandle({ timeout: 5000 }) : undefined;
-            const text = (await readSurface(page, scope ?? undefined).finally(() => scope?.dispose())).text;
-            if (search.test(text)) { return; }
-        }
-        const move = (direction: number) => {
-            let area = document.scrollingElement;
-            if (!area || area.scrollHeight <= area.clientHeight + 1) {
-                const candidates = [...document.querySelectorAll('*')].filter(element => /auto|scroll/.test(getComputedStyle(element).overflowY) && element.scrollHeight > element.clientHeight + 1 && element.checkVisibility());
-                if (candidates.length === 1) { area = candidates[0]!; }
-            }
-            if (!area) { return { before: 0, after: 0 }; }
-            const before = area.scrollTop;
-            area.scrollTop += direction * Math.max(100, area.clientHeight * 0.9);
-            return { before, after: area.scrollTop };
-        };
-        const delta = locator
-            ? await locator.evaluate((element, direction) => { const before = element.scrollTop; element.scrollTop += direction * Math.max(100, element.clientHeight * 0.9); return { before, after: element.scrollTop }; }, direction)
-            : await page.evaluate(move, direction);
-        if (!call.scrollText && delta.before === delta.after) { throw new Error('Scroll did not move the page or target container'); }
-        await page.waitForTimeout(delta.before === delta.after ? 500 : 40);
-        if (delta.before === delta.after) { if (++stalled >= 5) { break; } } else { stalled = 0; }
+/** A click that reached its original element must not be replayed onto its replacement. */
+async function deliveredClick(locator: Locator, click: () => Promise<void>): Promise<void> {
+    const element = await locator.elementHandle({ timeout: 5000 });
+    if (!element) { throw new Error('Click target is not rendered'); }
+    const receipt = await element.evaluateHandle(element => {
+        const state = { delivered: false, remove: () => {} };
+        // An engine receipt must not add an application-event hint to the target element.
+        const root = element.getRootNode();
+        const listener = (event: Event) => { if (event.isTrusted && event.composedPath().includes(element)) { state.delivered = true; } };
+        root.addEventListener('click', listener, { capture: true });
+        state.remove = () => root.removeEventListener('click', listener, { capture: true });
+        return state;
+    });
+    try { await click(); } catch (error) {
+        const delivered = await receipt.evaluate(state => state.delivered).catch(() => false);
+        const detached = !await element.evaluate(element => element.isConnected).catch(() => false);
+        if (!delivered || !detached) { throw error; }
+    } finally {
+        await receipt.evaluate(state => state.remove()).catch(() => undefined);
+        await receipt.dispose(); await element.dispose();
     }
-    if (call.scrollText) { throw new Error(`Scroll search not found after ${viewports} viewports`); }
+}
+
+/** Both endpoints must remain onscreen; extra moves establish dragover and cross pointer activation thresholds. */
+async function pointerDrag(page: Page, source: Locator, destination: Locator, timeout: number): Promise<void> {
+    const handle = await source.elementHandle({ timeout });
+    if (!handle) { throw new Error('Drag source is not rendered'); }
+    const same = await destination.evaluate((element, source) => element === source, handle, { timeout });
+    if (same) { await handle.dispose(); throw new Error('Drag source and destination must be different elements'); }
+    try {
+        await source.hover({ timeout });
+        await destination.evaluate(element => element.scrollIntoView({ block: 'nearest', inline: 'nearest' }), undefined, { timeout });
+        const beforeUrl = page.url();
+        const before = await handle.evaluateHandle(element => ({ parent: element.parentElement, x: element.getBoundingClientRect().x, y: element.getBoundingClientRect().y, text: document.body.innerText }));
+        const start = await source.boundingBox(); const end = await destination.boundingBox(); const viewport = page.viewportSize();
+        if (!start || !end || !viewport) { throw new Error('Drag endpoints have no visible box'); }
+        const a = { x: start.x + start.width / 2, y: start.y + start.height / 2 };
+        const b = { x: end.x + end.width / 2, y: end.y + end.height / 2 };
+        if ([a, b].some(point => point.x < 0 || point.y < 0 || point.x >= viewport.width || point.y >= viewport.height)) { throw new Error('Drag source and destination cannot fit in the viewport together'); }
+        await page.mouse.move(a.x, a.y); await page.mouse.down();
+        try {
+            await page.mouse.move(a.x + (b.x - a.x) * 0.15, a.y + (b.y - a.y) * 0.15, { steps: 2 });
+            await page.mouse.move(b.x, b.y, { steps: 8 });
+            await page.waitForTimeout(50); await page.mouse.move(b.x, b.y);
+        } finally { await page.mouse.up(); }
+        await page.waitForTimeout(150);
+        const changed = await handle.evaluate((element, before) => !element.isConnected || element.parentElement !== before.parent || element.getBoundingClientRect().x !== before.x || element.getBoundingClientRect().y !== before.y || document.body.innerText !== before.text, before).catch(() => page.url() !== beforeUrl);
+        await before.dispose();
+        if (!changed) { throw new Error('Drag delivered no observed effect'); }
+    } finally { await handle.dispose(); }
+}
+
+/** Normalize entity searches, while keeping numeric tokens distinct (Record 12 cannot match Record 120). */
+export function searchTerms(text: string): string[] {
+    const normalize = (text: string) => text.toLowerCase().replace(/[^\p{L}\p{N}_]+/gu, ' ').trim().replace(/\s+/g, ' ');
+    const terms = [normalize(text), ...[...text.matchAll(/\(([^)]+)\)/g)].map(match => normalize(match[1]!)), ...[...text.matchAll(/[\p{L}_]+\s+\d+/gu)].map(match => normalize(match[0]))];
+    return [...new Set(terms)].filter(Boolean);
+}
+
+/** Probe mounted text only between pages; full observation runs after a match. */
+async function scrollPage(page: Page, call: ToolCall): Promise<void> {
+    const area = (call.ref ? await domLocator(page, call.ref).elementHandle({ timeout: 5000 }) : await page.evaluateHandle(() => {
+        const candidates = [...document.querySelectorAll('*')].filter(element => /auto|scroll/.test(getComputedStyle(element).overflowY) && element.scrollHeight > element.clientHeight + 1 && element.checkVisibility());
+        return document.scrollingElement && document.scrollingElement.scrollHeight > document.scrollingElement.clientHeight + 1 ? document.scrollingElement : candidates.length === 1 ? candidates[0]! : document.scrollingElement;
+    })) as ElementHandle<Element> | null;
+    if (!area) { throw new Error('No scrolling area is rendered'); }
+    const geometry = () => area.evaluate(element => ({ height: element?.scrollHeight ?? 0, viewport: element?.clientHeight ?? 0 }));
+    const initial = await geometry();
+    const pages = (height: number, viewport: number) => Math.min(500, Math.ceil(height / Math.max(100, viewport * 0.75)) + 5);
+    let cap = pages(initial.height, initial.viewport);
+    const budget = Math.min(120000, Math.max(30000, cap * 100));
+    const deadline = Date.now() + Math.min(budget, call.searchBudgetMs ?? 120000);
+    const direction = call.scrollDirection === 'up' ? -1 : 1;
+    const terms = call.scrollText ? searchTerms(call.scrollText) : [];
+    let stalled = 0; let viewports = 0;
+    try {
+        for (let attempt = 0; attempt < (call.scrollText ? cap : 1) && Date.now() < deadline; attempt++) {
+            call.signal?.throwIfAborted(); viewports++;
+            if (terms.length) {
+                const found = await area.evaluate((scope, terms) => {
+                    if (!scope) { return false; }
+                    const normalize = (text: string) => text.toLowerCase().replace(/[^\p{L}\p{N}_]+/gu, ' ').trim().replace(/\s+/g, ' ');
+                    const boundary = scope.getBoundingClientRect();
+                    const candidates = [...scope.querySelectorAll<HTMLElement>('*')];
+                    for (const element of candidates) {
+                        if (!element.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }) || element.closest('[hidden],[inert]')) { continue; }
+                        const box = element.getBoundingClientRect();
+                        if (box.bottom <= Math.max(0, boundary.top) || box.top >= Math.min(innerHeight, boundary.bottom)) { continue; }
+                        const texts = [normalize(element.innerText ?? ''), ...[...element.childNodes].filter(node => node.nodeType === Node.TEXT_NODE).map(node => normalize(node.textContent ?? ''))];
+                        if (texts.some(text => terms.some(term => text.length <= Math.max(term.length * 3, term.length + 24) && (` ${text} `).includes(` ${term} `)))) {
+                            element.scrollIntoView({ block: 'nearest', inline: 'nearest' }); return true;
+                        }
+                    }
+                    return false;
+                }, terms);
+                if (found) { await readSurface(page); return; }
+            }
+            const delta = await area.evaluate((element, direction) => {
+                if (!element) { return { before: 0, after: 0 }; }
+                const before = element.scrollTop; element.scrollTop += direction * Math.max(100, element.clientHeight * 0.75);
+                return { before, after: element.scrollTop };
+            }, direction);
+            if (!call.scrollText && delta.before === delta.after) { throw new Error('Scroll did not move the page or target container'); }
+            await page.waitForTimeout(delta.before === delta.after ? 500 : 40);
+            if (delta.before === delta.after) { if (++stalled >= 5) { break; } } else { stalled = 0; }
+            const size = await geometry(); cap = Math.max(cap, pages(size.height, size.viewport));
+        }
+        if (call.scrollText) { throw new Error(`Scroll search not found after ${viewports} viewports`); }
+    } finally { await area.dispose(); }
 }

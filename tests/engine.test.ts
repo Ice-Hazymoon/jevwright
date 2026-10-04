@@ -1471,3 +1471,38 @@ it('hardening waits before completion review instead of reviewing each idle poll
     expect(result.status, result.summary).toBe('passed');
     expect(test.calls.filter(call => call.view.review && call.view.history.filter(entry => entry.action === 'wait').length < 3)).toHaveLength(0);
 });
+
+it('reach2 performs a pending high-confidence activation before finishing across a next-step boundary', async () => {
+    const { pendingActionPolicy } = await import('./support/fixture-policy.ts');
+    const spec: TestSpec<void> = { id: 'pending-final-action', title: 'Finish the current entry', risk: 'Completion skips the final action', start: '/surface-replacement', steps: () => [act('Hover Add entry, then add the entry'), act('Leave the entry unchanged'), verify('added once', ({ page }) => page.locator('#count').textContent().then(value => value === '1'))] };
+    const summary = await suite([spec], { policy: pendingActionPolicy }).run;
+    expect(summary.results[0]?.status, summary.results[0]?.summary).toBe('passed');
+    expect(summary.results[0]?.attempts[0]?.steps[0]?.actions?.map(action => action.tool)).toEqual(['hover', 'click']);
+});
+
+it('reach2 rejects a helper back proposal carrying authorized input and retries the coherent type decision', async () => {
+    const spec: TestSpec<void> = { id: 'helper-input-tool', title: 'Filter entries', risk: 'Helper selects navigation while describing input', start: '/surface-labels', steps: () => [act('Filter entries to Notebook'), verify('query', ({ page }) => page.url().endsWith('?q=Notebook'))] };
+    const { run, calls } = suite([spec], {
+        policy: view => view.url.includes('q=Notebook') ? { done: 0.99 } : { tool: 'type', target: element => element.name === 'Filter entries', inputSource: 'step' },
+        helper: view => ({ outcome: 'act', tool: 'back', element: view.elements.find(element => element.name === 'Filter entries')!.i, value_key: null, text: 'Notebook', reason: 'Type the literal Notebook into the filter field' }),
+    });
+    const summary = await run;
+    expect(summary.results[0]?.status, summary.results[0]?.summary).toBe('passed');
+    expect(summary.results[0]?.attempts[0]?.steps[0]?.actions?.map(action => action.tool)).toEqual(['type']);
+    expect(calls.length).toBeGreaterThan(1);
+});
+
+it('reach2 refuses helper keyboard text absent from the step and observed page', async () => {
+    const spec: TestSpec<void> = { id: 'keyboard-text-authorization', title: 'Focus a message', risk: 'Keyboard text bypasses input authorization', start: '/surface-editor', steps: () => [act('Focus Message', { maxActions: 1 })] };
+    const result = (await suite([spec], { mode: 'ai', policy: () => ({ tool: 'none' }), helper: view => ({ outcome: 'act', tool: 'press', element: view.elements.find(element => element.role === 'textbox' && element.name?.startsWith('Message'))!.i, key: 'z', times: 1, value_key: null, text: null, reason: 'Insert an undeclared character' }) }).run).results[0]!;
+    expect(result.status, result.summary).toBe('failed');
+    expect(result.cause).toBe('agent');
+    expect(JSON.stringify(result)).toContain('Keyboard text requires an authorized literal');
+});
+
+it('reach2 keeps unobserved clipboard contents outside keyboard input authorization', async () => {
+    const spec: TestSpec<void> = { id: 'keyboard-clipboard-authorization', title: 'Focus a message', risk: 'Paste inserts a value absent from authorized inputs', start: '/surface-editor', ready: async ({ page }) => { await page.context().grantPermissions(['clipboard-read', 'clipboard-write']); await page.evaluate(() => navigator.clipboard.writeText('Undeclared-clipboard-6249')); }, steps: () => [act('Focus Message', { maxActions: 1 })] };
+    const result = (await suite([spec], { mode: 'ai', policy: () => ({ tool: 'none' }), helper: view => ({ outcome: 'act', tool: 'press', element: view.elements.find(element => element.role === 'textbox' && element.name === 'Message')!.i, key: 'ControlOrMeta+v', times: 1, value_key: null, text: null, reason: 'Paste clipboard contents' }) }).run).results[0]!;
+    expect(result.cause).toBe('agent');
+    expect(JSON.stringify(result)).toContain('Clipboard input requires the type tool and an authorized value');
+});

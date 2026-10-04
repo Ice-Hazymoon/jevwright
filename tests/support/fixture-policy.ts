@@ -187,3 +187,11 @@ export function deferredPolicy(view: View): Belief {
         : view.elements.some(is('button', 'Open workspace')) ? { tool: 'click', target: is('button', 'Open workspace') }
             : view.history.some(entry => entry.action === 'wait') ? { tool: 'none' } : { tool: 'wait' };
 }
+
+/** Reproduce a proposed final action competing with a confident completion, with a later step boundary. */
+export function pendingActionPolicy(view: View): Belief {
+    const added = view.history.some(entry => entry.action === 'click' && !entry.error);
+    if (view.step === 'Leave the entry unchanged') { return { done: 0.99 }; }
+    if (!view.history.length && !view.control) { return { tool: 'hover', target: is('button', 'Add entry') }; }
+    return { done: 0.89, achieved: 0.96, remaining: 0.12, tool: added ? 'none' : 'click', target: is('button', 'Add entry'), needed: added ? 0.02 : 0.95 };
+}

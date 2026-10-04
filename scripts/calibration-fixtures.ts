@@ -126,5 +126,12 @@ export function fixtureTests(app: App): Array<CalibrationTest> {
             ],
         });
     }
+    tests.push(
+        { id: 'document-formatting', expected: 'passed', module: 'fixture', title: 'Select and format exact text', risk: 'The wrong word receives formatting', start: '/surface-editor', data: { text: 'ship confirmed' }, steps: () => [act('Type {text} in Document and make exactly confirmed bold'), verify('only confirmed is bold', ({ page }) => page.locator('#editor').innerHTML().then(html => html === 'ship <b>confirmed</b>'))] },
+        { id: 'delegated-delivery', expected: 'passed', module: 'fixture', title: 'Move native and pointer items', risk: 'A missing container prevents delivery', start: '/surface-events', steps: () => [act('Drag Package into Receiving bay, then move Review draft into Completed'), verify('both containers', ({ page }) => page.locator('#drop #parcel').count().then(async count => count === 1 && await page.locator('#queue #task').count() === 1))] },
+        { id: 'delegated-document-menu', expected: 'passed', module: 'fixture', title: 'Open a delegated context menu', risk: 'The enclosing region absorbs the file target', start: '/surface-events', steps: () => [act('Rename ledger.csv through its right-click menu'), verify('renamed', ({ page }) => page.locator('#status').textContent().then(text => text === 'Document renamed'))] },
+        { id: 'visible-entry-labels', expected: 'passed', module: 'fixture', title: 'Follow visible input labels', risk: 'An accessible name directs input into the wrong field', start: '/surface-labels', steps: () => [act('Store the entry as the page instructs'), verify('stored', ({ page }) => page.locator('#status').textContent().then(text => text === 'Entry stored'))] },
+        { id: 'archive-entity-search', expected: 'passed', module: 'fixture', title: 'Find a windowed entity', risk: 'A hint or punctuation falsely ends search', start: '/surface-search', steps: () => [act('Scroll the archive until Special entry (record 812) is rendered, then Open entry'), verify('opened', ({ page }) => page.locator('#status').textContent().then(text => text === 'Entry opened'))] },
+    );
     return tests;
 }

@@ -52,7 +52,7 @@ async function open(path: string, run?: (page: Page) => Promise<void>, monitorOp
     return { observation, issues, writes };
 }
 
-const named = (observation: Observation, role: string, name: string) => observation.elements.filter(element => element.role === role && element.name === name);
+const named = (observation: Observation, role: string, name: string) => observation.elements.filter(element => element.role === role && (element.name === name || element.ariaName === name));
 
 describe('observe', () => {
     it('labels generically named switches with their visible row text', async () => {
@@ -1068,7 +1068,7 @@ describe('hardening surfaces', () => {
     });
     it('retains accessible-label replacements across a shadow component slot', async () => {
         const { observation } = await open('/hardening-slotted-content');
-        expect(observation.elements.find(element => element.name === 'Preview')?.content).toBe('Slotted draft');
+        expect(observation.elements.find(element => (element.name === 'Preview' || element.ariaName === 'Preview'))?.content).toBe('Slotted draft');
         expect(observation.text).toContain('Slotted draft');
     });
     it('excludes display:contents text assigned into a hidden shadow slot', async () => {
@@ -1088,7 +1088,7 @@ describe('hardening surfaces', () => {
     });
     it('retains aria-labelled card previews and visible body, prices, totals and errors', async () => {
         const { observation } = await open('/hardening-visible-content');
-        const cards = observation.elements.filter(element => element.name === 'Note');
+        const cards = observation.elements.filter(element => (element.name === 'Note' || element.ariaName === 'Note'));
         expect(cards.map(element => element.content)).toEqual(['Working draft Preview action', 'Revised draft']);
         for (const value of ['Working draft', 'Revised draft', 'The subscription renews monthly.', 'Unit price: $17.43', 'Revenue $69.72', 'Average $17.43', 'This account is still in use.']) {
             expect(observation.text).toContain(value);
@@ -1154,5 +1154,109 @@ describe('hardening surfaces', () => {
             await expect(perform(page, { tool: 'type', ref: target.ref, value: 'Protected-5921', sensitive: true })).rejects.toThrow(/password/);
             expect(await page.getByRole('textbox', { name: 'New credential', exact: true }).inputValue()).toBe('');
         } finally { await context.close(); }
+    });
+});
+
+it('reach2 exposes delegated context handlers inside named sections and generic drop containers', async () => {
+    const { observation } = await open('/surface-events');
+    for (const name of ['ledger.csv', 'schedule.csv', 'letter.csv']) { expect(observation.elements.find(element => element.name === name)?.ref, name).toBeDefined(); }
+    expect(observation.elements.find(element => element.name === 'Receiving bay')).toMatchObject({ dropTarget: true });
+    expect(observation.elements.find(element => element.name === 'Completed')).toMatchObject({ dropTarget: true });
+    expect(observation.elements.find(element => element.role === 'box')).toMatchObject({ dropTarget: true });
+});
+
+it('reach2 uses visible conflicting labels as primary names and retains replaced content and legacy identities', async () => {
+    const { observation } = await open('/surface-labels');
+    expect(named(observation, 'textbox', 'Cost')[0]).toMatchObject({ ariaName: 'Description' });
+    expect(named(observation, 'button', 'Store entry')[0]).toMatchObject({ ariaName: 'Discard entry', content: 'Store entry' });
+    expect(resolveTarget({ role: 'button', name: 'Discard entry', nth: 0 }, observation)?.name).toBe('Store entry');
+});
+
+it('reach2 reports input and editable selections and changes the observation signature when only selection changes', async () => {
+    await open('/surface-editor', async page => {
+        const before = await observe(page);
+        await page.locator('#message').focus();
+        await page.locator('#message').evaluate(element => (element as HTMLTextAreaElement).setSelectionRange(5, 14));
+        const selected = await observe(page);
+        expect(named(selected, 'textbox', 'Message')[0]).toMatchObject({ selection: 'confirmed' });
+        expect(selected.signature).not.toBe(before.signature);
+        await page.locator('#editor').fill('ship confirmed');
+        const editor = named(await observe(page), 'textbox', 'Document')[0]!;
+        await perform(page, { tool: 'select_text' as any, ref: editor.ref, value: 'confirmed' });
+        expect(named(await observe(page), 'textbox', 'Document')[0]).toMatchObject({ selection: 'confirmed' });
+    });
+});
+
+it('reach2 searches normalized parenthesized entities within the scrolling scope, not the page hint', async () => {
+    await open('/surface-search', async page => {
+        const archive = (await observe(page)).elements.find(element => element.scroll)!;
+        await perform(page, { tool: 'scroll', ref: archive.ref, scrollText: 'Special entry (record 812)' });
+        expect(await page.getByRole('button', { name: 'Open entry' }).isVisible()).toBe(true);
+        expect(await page.locator('#archive').evaluate(element => element.scrollTop)).toBeGreaterThan(20000);
+    });
+}, 40000);
+
+it('reach2 accepts a delivered click when its handler replaces the control, without clicking twice', async () => {
+    await open('/surface-replacement', async page => {
+        const element = named(await observe(page), 'button', 'Add entry')[0]!;
+        const original = page.locator.bind(page);
+        page.locator = ((...args: Parameters<Page['locator']>) => {
+            const locator = original(...args);
+            const click = locator.click.bind(locator);
+            locator.click = async options => { await click(options); throw new Error('Element is detached after click'); };
+            return locator;
+        }) as Page['locator'];
+        await perform(page, { tool: 'click', ref: element.ref });
+        expect(await page.locator('#count').textContent()).toBe('1');
+    });
+});
+
+it('reach2 repeats selection keys on the focused field and maps Control shortcuts to the browser platform', async () => {
+    await open('/surface-editor', async page => {
+        await page.locator('#message').focus();
+        await page.keyboard.press('End');
+        await perform(page, { tool: 'press', key: 'Shift+ArrowLeft', times: 9 });
+        expect(named(await observe(page), 'textbox', 'Message')[0]?.selection).toBe('confirmed');
+        await expect(perform(page, { tool: 'press', key: 'ArrowLeft', times: 21 })).rejects.toThrow(/1–20/);
+        await page.evaluate(() => {
+            Object.defineProperty(navigator, 'platform', { get: () => 'MacIntel' });
+            document.getElementById('message')!.addEventListener('keydown', e => { if ((e as KeyboardEvent).key === 'b') { document.getElementById('status')!.textContent = String((e as KeyboardEvent).metaKey) + ':' + String((e as KeyboardEvent).ctrlKey); } });
+        });
+        await perform(page, { tool: 'press', key: 'Control+b' });
+        expect(await page.locator('#status').textContent()).toBe('true:false');
+    });
+});
+
+it('reach2 refuses to record a delivered native drag with no observable effect', async () => {
+    await open('/surface-events?bug=no-drop', async page => {
+        await page.locator('#drop').evaluate(element => { element.setAttribute('aria-label', 'Receiving bay'); element.setAttribute('role', 'group'); });
+        const observation = await observe(page);
+        await expect(perform(page, { tool: 'drag', ref: observation.elements.find(element => element.name === 'Package')?.ref, destinationRef: observation.elements.find(element => element.name === 'Receiving bay')?.ref })).rejects.toThrow(/no observed effect/);
+    });
+});
+
+it('reach2 excludes delegated root listeners from ancestor interactivity and drag sources', async () => {
+    const { observation } = await open('/surface-events?root');
+    expect(observation.elements.find(element => element.name === 'ledger.csv')?.ref).toBeDefined();
+    expect(observation.elements.find(element => element.name === 'Receiving bay')).toMatchObject({ dropTarget: true });
+    expect(observation.elements.filter(element => element.draggable).map(element => element.name)).toEqual(['Package', 'Review draft']);
+});
+
+it('reach2 keeps textarea initial text out of its visible label', async () => {
+    const { observation } = await open('/surface-editor');
+    expect(observation.elements.find(element => element.role === 'textbox' && element.value === 'ship confirmed')?.name).toBe('Message');
+});
+
+it('reach2 prioritizes rendered labels on custom controls and checkbox fields', async () => {
+    const { observation } = await open('/surface-editor');
+    expect(observation.elements.find(element => element.ariaName === 'Close tools')).toMatchObject({ name: 'Open tools', content: 'Open tools' });
+    expect(observation.elements.find(element => element.ariaName === 'Cancel alerts')).toMatchObject({ name: 'Receive alerts' });
+});
+
+it('reach2 keeps engine click receipts from making a named region absorb its document targets', async () => {
+    await open('/surface-events', async page => {
+        const region = (await observe(page)).elements.find(element => element.name === 'Documents')!;
+        await perform(page, { tool: 'click', ref: region.ref });
+        expect((await observe(page)).elements.find(element => element.name === 'ledger.csv')?.ref).toBeDefined();
     });
 });

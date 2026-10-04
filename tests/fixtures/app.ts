@@ -121,6 +121,45 @@ root.getElementById('nested').attachShadow({mode:'closed'}).innerHTML = '<label>
 window.fixtureRoot = root;
 window.rootStillClosed = document.getElementById('closed').shadowRoot === null;
 `);
+        case '/surface-editor':
+            return layout('Document formatting', '<label>Message<textarea id="message">ship confirmed</textarea></label><div contenteditable="true" aria-label="Document" id="editor" style="min-height:80px;border:1px solid;padding:12px"></div><button id="bold">Bold</button><div role="button" tabindex="0" aria-label="Close tools">Open tools</div><label>Receive alerts<input type="checkbox" aria-label="Cancel alerts"></label><button id="inspect">Inspect document</button>', `
+document.getElementById('bold').onmousedown = e => e.preventDefault();
+document.getElementById('bold').onclick = () => document.execCommand('bold');
+document.getElementById('inspect').onclick = () => toast(document.getElementById('editor').innerHTML);
+`);
+        case '/surface-events':
+            return layout('Delegated workspace', '<section aria-label="Documents"><span id="react-file">ledger.csv</span> <span id="vue-file">schedule.csv</span> <span id="native-file">letter.csv</span></section><button id="rename" hidden>Rename document</button><div style="display:flex;gap:50px"><div id="parcel" draggable="true">Package</div><div id="drop" data-testid="receiving-bay" style="border:2px solid;padding:35px">Receiving bay</div><div id="task" style="padding:20px">Review draft</div><div data-testid="queue" id="queue" style="padding:35px;border:2px solid"><h2>Completed</h2></div><div id="empty" style="width:40px;height:40px;background:teal"></div></div>', `
+if (location.search.includes('root')) { const root = document.querySelector('main'); root.__reactContainer$fixture = {}; for (const type of ['click','pointerdown','pointermove','pointerup','dragstart','dragover','drop','contextmenu']) root.addEventListener(type, () => {}); }
+const menu = e => { e.preventDefault(); document.getElementById('rename').hidden = false; };
+document.getElementById('react-file').__reactProps$fixture = { onContextMenu: menu };
+document.getElementById('vue-file')._vei = { onContextmenu: menu };
+document.getElementById('native-file').addEventListener('contextmenu', menu);
+document.querySelector('main').addEventListener('contextmenu', e => { if(e.target.id === 'react-file' || e.target.id === 'vue-file') menu(e); });
+document.getElementById('rename').onclick = () => toast('Document renamed');
+const parcel = document.getElementById('parcel'); parcel.addEventListener('dragstart', e => e.dataTransfer.setData('text/plain', 'package'));
+const drop = document.getElementById('drop');
+drop.__reactProps$fixture = { onDragOver: e => e.preventDefault(), onDrop: e => { e.preventDefault(); if(e.dataTransfer.getData('text/plain') === 'package' && !location.search.includes('no-drop')) { drop.append(parcel); toast('Package received'); } } };
+document.querySelector('main').addEventListener('dragover', e => { if(drop.contains(e.target)) drop.__reactProps$fixture.onDragOver(e); });
+document.querySelector('main').addEventListener('drop', e => { if(drop.contains(e.target)) drop.__reactProps$fixture.onDrop(e); });
+const task = document.getElementById('task'); let start, moves = 0;
+task._vei = { onPointerdown: e => { start = [e.clientX,e.clientY]; moves = 0; task.setPointerCapture(e.pointerId); } };
+task.addEventListener('pointerdown', task._vei.onPointerdown);
+task.addEventListener('pointermove', e => { if(start && Math.hypot(e.clientX-start[0],e.clientY-start[1]) > 8) moves++; });
+task.addEventListener('pointerup', e => { const b = document.getElementById('queue').getBoundingClientRect(); if(start && moves >= 2 && e.clientX > b.left && e.clientX < b.right && e.clientY > b.top && e.clientY < b.bottom) { document.getElementById('queue').append(task); toast('Review completed'); } start = null; });
+`);
+        case '/surface-labels':
+            return layout('Visible field labels', '<p>Enter 17.25 in Cost, leave Description empty, then Store entry.</p><label for="cost">Cost</label><input id="cost" aria-label="Description"><label for="description">Description</label><input id="description" aria-label="Cost"><button id="store" aria-label="Discard entry">Store entry</button><label>Filter entries<input id="filter"></label><p>Notebook</p>', `
+document.getElementById('store').onclick = () => toast(document.getElementById('cost').value === '17.25' && !document.getElementById('description').value ? 'Entry stored' : 'Could not store entry');
+document.getElementById('filter').oninput = e => history.replaceState(null,'','?q='+e.target.value);
+`);
+        case '/surface-replacement':
+            return layout('Replacing controls', '<button id="replace">Add entry</button><output id="count">0</output>', `
+document.getElementById('replace').onclick = e => { document.getElementById('count').textContent = Number(document.getElementById('count').textContent)+1; const button = document.createElement('button'); button.textContent = 'Entry added'; e.target.replaceWith(button); toast('Entry added'); };
+`);
+        case '/surface-search':
+            return layout('Archive search', '<p>Find Special entry (record 812) in the archive.</p><div id="archive" aria-label="Archive" style="height:240px;overflow:auto"><div id="spacer" style="height:30000px;position:relative"></div></div>', `
+const archive = document.getElementById('archive'); const draw = () => { const n = Math.floor(archive.scrollTop/30); document.getElementById('spacer').innerHTML = Array.from({length:10},(_,i) => '<div style="position:absolute;top:'+(n+i)*30+'px">Record '+(n+i+1)+(n+i===811 ? ' — Special entry<button onclick="toast(\\'Entry opened\\')">Open entry</button>' : '')+'</div>').join(''); }; archive.addEventListener('scroll',draw); draw();
+`);
         case '/reach-actions':
             return layout('Gestures', '<button id="hold">Hold action</button><button id="double">Open twice</button><div id="file">notes.txt</div><button id="rename" hidden>Rename file</button><label>Documents<input id="files" type="file" multiple></label><div style="display:flex;gap:60px"><div draggable="true" id="source">Parcel</div><div id="drop" style="padding:40px;border:1px solid">Receiving area</div><div id="pointer" style="cursor:grab;padding:20px">Task</div><div id="destination" style="padding:40px;border:1px solid">Finished</div></div><a href="/reach-details">View details</a><p id="end" style="margin-top:1600px">End notes</p><output id="events"></output>', `
 const events = document.getElementById('events'); const note = text => events.textContent += text + '|';
