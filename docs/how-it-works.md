@@ -145,15 +145,32 @@ A `check` asks Jev three independent questions: does the claim hold, how does th
 
 With a `reference`, the judge compares the page with your trusted data.
 
+In auto/AI mode, a separate evidence choice records the exact quoted page text and its visible region
+when one candidate directly supports the whole claim. This choice does not change the existing verdict.
+Replay deterministically checks that quote, its recorded container/nearby context and any field value/state.
+Its source is `replay`. Quotes ending in an ellipsis are conservatively treated as clipped and unusable;
+use `verify` when the page itself ends its literal evidence with an ellipsis.
+Checks without sufficient evidence, with changed interpolated claims, or with runtime references are
+`unverified`. Legacy recordings without check evidence are also unverified. Any unverified check prevents
+the test from being passed; the CLI exits 1 unless `--allow-unverified` is supplied. JSON, HTML, Markdown
+and JUnit retain the unverified count even with that exit override. Negative claims often have no
+recheckable positive quote; use a code `verify` for exact absence or a runtime reference.
+
 ## Recordings and healing
 
 This engine reads 0.1.x–0.6.0 recordings. New gestures and optional `fileKeys`, `scrollText`, `pageValue`, `key`, `times` and target `ariaName` fields require this Unreleased engine, or 0.7.0+ once released. Older 0.6.0 readers can reject new tools or silently discard these fields. Recordings retain schema version 1; waits are runtime timing decisions and are no longer recorded.
 
 Legacy accessible-name targets remain resolvable after visible-label promotion. New targets retain the original aria name to disambiguate swapped labels.
 
-Successful act steps record semantic targets, optional drag destinations, file-key lists and scroll searches, and an optional end state: a normalized changed path,
-up to four appeared anchors and up to two disappeared controls. Toasts, numeric names and unstable
-names are excluded; typing-only steps record no anchors. A `likely-done` step records no end state.
+Successful act steps record semantic targets, optional drag destinations, file-key lists and scroll searches.
+New end states compare origin, normalized path and query parameters sorted by key. All appeared anchors
+must remain visible and every gone control must disappear. New appeared anchors also record their absence
+before the step; replay rejects effects already present before its actions. Dates, durations, live counters
+and generated ids are filtered when recording; ordinary numeric result text remains evidence.
+Changed field values and checked, selected, expanded or pressed states are recorded, including typing-only
+steps. Keyed inputs recheck current data; page inputs recheck their recorded source. A step without an
+observable effect records `effect: 'none'`, so replay verifies action delivery without claiming an effect.
+A `likely-done` step records no end state.
 
 Inputs read from the page record an optional `pageValue` descriptor: observation source and the text before and after the value. Replay reads between those anchors in the current observation. Missing or ambiguous anchors trigger fresh grounding in auto mode; replay mode fails as `agent` with “Page value needs model grounding (source is missing or ambiguous)”. Target descriptions replace only complete value tokens with at least three characters. Action logs mark these inputs with `page:`. Existing recordings remain valid.
 
@@ -162,24 +179,34 @@ Only a requested page source enables subsequent page-value vocabularies. Short p
 events; model history identifies their starting field and notes that automatic focus can advance between
 fields. That history does not replace an independent check of the accepted result.
 
-Replay first checks a declared expectation. Otherwise, recorded end states must match the path,
-at least half of the appeared anchors, and every disappeared control. The engine polls for up to
-five seconds. An empty end state provides no additional evidence and is labeled in the report.
+Replay checks declared expectations and recorded end states. The engine polls end states for up to
+five seconds. New alerts, invalid fields and visible validation error regions stop replay in both replay and auto modes.
+An observed rejected declared request retains its expectation failure even when a validation message appears.
+Healing receives the actual missing conditions and current route. A cached route difference alone does
+not establish a missing product effect when all other recorded conditions match.
+Legacy recordings without end states still verify action delivery; their missing evidence is not reconstructed.
 
 - In auto mode a missing target or mismatched end state triggers AI healing from the current page.
   Healing must perform a new successful action before it counts. A step healed after a mismatched end
   state is then dropped from the recording rather than saved: its actions started from a page the
   misfired replay had already changed. The next auto run grounds the step from its start and records it.
 - In replay mode a missing target fails as `agent`; a failed declared expectation fails as `product`.
-  A mismatched end state is annotated and execution continues, leaving the verdict to later checks.
-  Even a passing test retains that annotation so its recording can be reviewed.
+  A mismatched end state fails immediately as `agent`, with the missing anchors listed.
+  A stale recording alone does not establish a product defect.
 - End state mismatch alone does not establish a product defect. Failed healing can be attributed
   to `product` only when every recorded target matched a unique full identity and the action review
   supports the intended control with probability at least 0.75 (or an expectation failed).
 - Legacy recordings without end states still replay. Auto may backfill an end state only if a later
-  verify or write/URL expectation passes and the whole attempt passes. Invariants alone do not qualify.
+  verify, check or write/URL expectation passes. Invariants alone do not qualify.
 - Recording writes require a changed, added or dropped step, or a newly added end state. Unchanged replay and
-  unchanged AI paths do not rewrite the file.
+  unchanged AI paths do not rewrite the file. Changed check evidence also updates its recording.
+
+Repeated identical instructions get separate occurrence keys. The first occurrence retains the legacy key.
+Recorded duplicate targets include their original count; a changed count requires healing rather than
+using the old ordinal. A failed attempt saves only the successful prefix confirmed by a passed verification
+or declared expectation, and marks the recording `partial`. The failed step is never saved. Auto replays
+that prefix and grounds the remaining unrecorded steps. Existing complete recordings remain unchanged
+when the failed attempt learned no new verified recipe.
 
 After a product failure involving replay, auto may use one fresh AI retry. It needs at least 20% of
 the run budget left; otherwise the report records why it stayed with replay. A fresh pass remains
@@ -198,7 +225,15 @@ Every failed attempt gets one cause:
 | `model` | Gateway errors, or the call or cost budget ran out, including tests the run budget kept from starting |
 | `timeout` | The test exceeded `timeoutMs` (default 240 s) |
 
+Thrown Node assertions and Playwright matcher errors inside `verify` are product assertions. Other
+exceptions remain environment failures; classification uses error types and matcher metadata.
+
 An error or rejection noticed during an unfinished `act` defaults to `agent`: the agent may have submitted incomplete input. A rejected declared request or a monitored high-severity issue supplies deterministic failure evidence. `expectError` still accepts the explicitly declared rejection; an unexpected request status remains `product`.
+
+An agent failure is audited against same-step request evidence: an unexpected 5xx response, or a
+rejected write with a validation response body, can establish a product failure. Action-triggered
+validation errors retain agent attribution. The existing target audit also excludes requests triggered
+by actions on the wrong control, including server failures.
 
 Before a product-looking failure is reported, the engine checks the earlier AI-driven `act` steps. One Jev request asks, for each step, whether its actions operated on the control the step names or on a different one. If any step is unlikely to have acted on its target (probability below 0.25), the failure becomes `agent`, and the summary names the control the step actually touched.
 
@@ -211,7 +246,7 @@ A failed test is retried (`retries`, default 1):
 - A pass on a later attempt is reported as `flaky`.
 - A test marked `knownIssue` that fails on the product is reported as `known` and is not retried.
 - Cancelled runs, reached cost budgets and missing recordings are never retried.
-- A test cancelled by Ctrl-C is reported as `skipped`.
+- A test cancelled by Ctrl-C is reported as `interrupted`; explicit skips remain `skipped`.
 
 ## Budgets
 
@@ -261,3 +296,7 @@ a declared secret use deterministic aliases that are checked for secret content 
 helper answers resolve back to the original key before browser execution. Dynamic descriptions and
 reference evidence are redacted. Report display paths may be redacted, while writers use the separate
 physical directory. A stable hashed selection key preserves `--last-failed` when a test ID is redacted.
+
+Partial reruns retain unresolved failures that were not selected. Interrupted runs do not resolve earlier
+failures. `--last-failed` reads completed publications in finish order and removes a failure only after
+a later pass or known product result. The run manifest lists failures carried outside the selected set.

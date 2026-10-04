@@ -704,7 +704,7 @@ describe('stable CI selection', () => {
 });
 
 describe('cI reports', () => {
-    it('reads failed and flaky ids only from the latest completed publication', async () => {
+    it('reads failures from completed publications and ignores running or interrupted runs', async () => {
         const { lastFailedIds } = await import('../src/last-failed.ts');
         const directory = await mkdtemp(join(tmpdir(), 'jevwright-last-failed-'));
         try {
@@ -745,7 +745,7 @@ describe('cI reports', () => {
             manifest: { runId: 'fixture', engine: 'fixture', startedAt: '2026-01-01T00:00:00Z', mode: 'auto', git: null, models: null, origin: app.origin, concurrency: 1, retries: 1, tests: results.map(result => result.id), command: 'jevwright run --shard 1/3' },
             results,
             directory: '.',
-            totals: { tests: 7, passed: 1, flaky: 1, failed: 3, known: 1, skipped: 1, issues: 0, models: emptyUsage(), durationMs: 8400 },
+            totals: { tests: 7, passed: 1, flaky: 1, failed: 3, known: 1, skipped: 1, unverified: 0, interrupted: 0, issues: 0, models: emptyUsage(), durationMs: 8400 },
         };
         const page = await browser.newPage();
         try {
@@ -762,7 +762,7 @@ it('rebuilds JUnit through the report command and removes stale selection from r
     const { writeReports, reproduceCommand } = await import('../src/report.ts');
     const { emptyUsage } = await import('../src/models.ts');
     const directory = await mkdtemp(join(tmpdir(), 'jevwright-rebuild-'));
-    const summary: import('../src/suite.ts').RunSummary = { manifest: { runId: 'rebuild', engine: 'fixture', startedAt: '2026-01-01T00:00:00Z', mode: 'replay', git: null, models: null, origin: app.origin, concurrency: 1, retries: 0, tests: [] }, results: [], directory, totals: { tests: 0, passed: 0, failed: 0, flaky: 0, known: 0, skipped: 0, issues: 0, models: emptyUsage(), durationMs: 0 } };
+    const summary: import('../src/suite.ts').RunSummary = { manifest: { runId: 'rebuild', engine: 'fixture', startedAt: '2026-01-01T00:00:00Z', mode: 'replay', git: null, models: null, origin: app.origin, concurrency: 1, retries: 0, tests: [] }, results: [], directory, totals: { tests: 0, passed: 0, failed: 0, flaky: 0, known: 0, skipped: 0, unverified: 0, interrupted: 0, issues: 0, models: emptyUsage(), durationMs: 0 } };
     try {
         await writeReports(summary);
         await rm(join(directory, 'junit.xml'));
@@ -773,13 +773,92 @@ it('rebuilds JUnit through the report command and removes stale selection from r
 });
 
 describe('recorded end states', () => {
-    it('normalizes dynamic paths and requires half the appeared anchors', async () => {
+    it('normalizes dynamic paths and requires all appeared anchors', async () => {
         const { endMatches, normalizedPath } = await import('../src/end-state.ts');
         expect(normalizedPath('/items/123/ab12cd34')).toBe('/items/:id/:id');
         const observation: Observation = { url: 'http://localhost/items/456/ef56gh78', title: '', notices: [], headings: ['Saved', 'Ready'], text: '', elements: [], omitted: 0, signature: '' };
         const end = { path: '/items/:id/:id', appeared: ['Saved', 'Ready', 'Done', 'Complete'].map(text => ({ kind: 'heading' as const, text })) };
-        expect(endMatches(end, observation).matched).toBe(true);
+        expect(endMatches(end, observation).matched).toBe(false);
+        expect(endMatches(end, { ...observation, headings: ['Saved', 'Ready', 'Done', 'Complete'] }).matched).toBe(true);
         expect(endMatches(end, { ...observation, headings: ['Saved'] }).matched).toBe(false);
+    });
+});
+
+describe('integrity regressions', () => {
+    const observation: Observation = { url: '/draft', title: '', notices: [], headings: [], text: '', elements: [], omitted: 0, signature: '' };
+    it('records field values and toggle states instead of empty typing effects', async () => {
+        const { recordEnd, endMatches } = await import('../src/end-state.ts');
+        const before = { ...observation, elements: [{ i: 0, ref: 'e1', role: 'textbox', name: 'Draft', value: 'Before' }, { i: 1, ref: 'e2', role: 'checkbox', name: 'Enabled', states: ['unchecked'] }] };
+        const after = { ...before, elements: [{ ...before.elements[0]!, value: 'After' }, { ...before.elements[1]!, states: ['checked'] }] };
+        const end = recordEnd(before, after, [{ tool: 'type' }]);
+        expect(endMatches(end, after).matched).toBe(true);
+        expect(endMatches(end, before).matched).toBe(false);
+    });
+    it('compares origin and sorted query keys, while keeping old path recordings readable', async () => {
+        const { recordEnd, endMatches } = await import('../src/end-state.ts');
+        const before = { ...observation, url: 'https://app.test/draft?view=edit' };
+        const after = { ...before, url: 'https://app.test/draft?z=2&a=1' };
+        const end = recordEnd(before, after, [{ tool: 'click' }]);
+        expect(endMatches(end, { ...after, url: 'https://app.test/draft?a=1&z=2' }).matched).toBe(true);
+        expect(endMatches(end, { ...after, url: 'https://other.test/draft?a=1&z=2' }).matched).toBe(false);
+        expect(endMatches(end, { ...after, url: 'https://app.test/draft?a=1&z=3' }).matched).toBe(false);
+    });
+    it('rejects changed counts of identical controls before applying nth', () => {
+        const before = { ...observation, elements: [0, 1].map(i => ({ i, ref: `e${i}`, role: 'button', name: 'Remove' })) };
+        const target = describeTarget(before.elements[1]!, before);
+        expect(resolveTarget(target, before)?.i).toBe(1);
+        expect(resolveTarget(target, { ...before, elements: [...before.elements, { i: 2, ref: 'e3', role: 'button', name: 'Remove' }] })).toBeUndefined();
+    });
+    it('retains failures omitted from a later partial rerun', async () => {
+        const { lastFailedIds } = await import('../src/last-failed.ts');
+        const directory = await mkdtemp(join(tmpdir(), 'integrity-history-'));
+        try {
+            for (const [name, finishedAt, results] of [
+                ['first', '2026-01-01T00:00:00Z', [{ id: 'one', status: 'failed' }, { id: 'two', status: 'failed' }]],
+                ['second', '2026-01-02T00:00:00Z', [{ id: 'one', status: 'passed' }]],
+            ] as const) {
+                await mkdir(join(directory, name));
+                await writeFile(join(directory, name, 'run.json'), JSON.stringify({ finishedAt }));
+                await writeFile(join(directory, name, 'summary.json'), JSON.stringify({ manifest: { finishedAt }, results }));
+            }
+            expect([...await lastFailedIds(directory)]).toEqual(['two']);
+        } finally { await rm(directory, { recursive: true, force: true }); }
+    });
+    it('does not leak a secret prefix through DOM label truncation', async () => {
+        const { createRedactor, secret } = await import('../src/secrets.ts');
+        const raw = 'private-sequence-829173';
+        const context = await newTestContext(browser, { viewport: { width: 1280, height: 900 }, dialogs: 'accept' });
+        try {
+            const page = await context.newPage();
+            await page.goto(app.origin + '/integrity');
+            await page.locator('label').evaluate((label, raw) => { label.firstChild!.textContent = 'x'.repeat(70) + raw; }, raw);
+            const shown = createRedactor([secret(raw)]).value(await observe(page, { redact: createRedactor([secret(raw)]) }));
+            expect(JSON.stringify(shown)).not.toContain('private-se');
+        } finally { await context.close(); }
+    });
+    it('keeps numeric result anchors while filtering clocks and generated ids', async () => {
+        const { recordEnd } = await import('../src/end-state.ts');
+        const end = recordEnd(observation, { ...observation, headings: ['Receipt 42', '3 records imported', 'Elapsed 42 seconds', 'Created 2026-10-04', 'ab82cd73ef94'] }, [{ tool: 'click' }]);
+        expect(end.appeared?.map(anchor => anchor.kind !== 'element' && anchor.text)).toEqual(['Receipt 42', '3 records imported']);
+    });
+    it('binds field evidence to its original visible region', async () => {
+        const { checkEvidenceCandidates, checkEvidenceMatches } = await import('../src/judge.ts');
+        const field = { i: 0, ref: 'e1', role: 'textbox', name: 'Draft', value: 'Original', context: 'Draft area' };
+        const before = { ...observation, elements: [field] };
+        const evidence = checkEvidenceCandidates(before).filter(entry => entry.source === 'element');
+        expect(checkEvidenceMatches(evidence, before)).toBe(true);
+        expect(checkEvidenceMatches(evidence, { ...before, elements: [{ ...field, context: 'Review area' }] })).toBe(false);
+    });
+    it('does not record clipped observation text as literal check evidence', async () => {
+        const { checkEvidenceCandidates } = await import('../src/judge.ts');
+        const clipped = { ...observation, text: 'Long content…', notices: ['Long notice…'], headings: ['Long heading…'], elements: [{ i: 0, ref: 'e1', role: 'textbox', name: 'Draft', value: 'Long value…' }] };
+        expect(checkEvidenceCandidates(clipped)).toEqual([]);
+    });
+    it('marks a step with no observable effect explicitly', async () => {
+        const { recordEnd } = await import('../src/end-state.ts');
+        expect(recordEnd(observation, observation, [{ tool: 'hover' }])).toEqual({ effect: 'none' });
+        const { createRedactor, secret } = await import('../src/secrets.ts');
+        expect(recordEnd(observation, { ...observation, url: '/draft?token=opaque-sequence-9127' }, [], createRedactor([secret('opaque-sequence-9127')]))).toEqual({ effect: 'none' });
     });
 });
 

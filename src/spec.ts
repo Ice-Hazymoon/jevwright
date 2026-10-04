@@ -48,6 +48,8 @@ export interface WriteRecord {
     path: string;
     status: number | 'pending' | 'failed';
     durationMs?: number;
+    /** Redacted validation response, used as request evidence rather than a model's guess. */
+    validationError?: string;
 }
 
 export interface DownloadRecord { filename: string; path: string; bytes: number; withheld?: true }

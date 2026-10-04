@@ -26,7 +26,7 @@ import { VERSION } from './version.ts';
 const artifactDirectories = new WeakMap<RunSummary, string>();
 
 /** `known`: failed on the product the way the test's `knownIssue` describes; it does not fail the run. */
-export type TestStatus = 'passed' | 'failed' | 'flaky' | 'known' | 'skipped';
+export type TestStatus = 'passed' | 'failed' | 'flaky' | 'known' | 'skipped' | 'unverified' | 'interrupted';
 
 export interface TestResult {
     id: string;
@@ -73,6 +73,7 @@ export interface RunManifest {
     /** Requests the browser tried to make outside the allowed origins. */
     blockedRequests?: string[];
     metadata?: Record<string, unknown>;
+    carriedFailures?: string[];
 }
 
 export interface RunSummary {
@@ -145,6 +146,9 @@ export interface SuiteOptions {
     log?: (line: string) => void;
     /** Called as each test finishes. */
     onResult?: (result: TestResult) => void;
+    /** A CLI-only exit override; reports still count unresolved checks separately. */
+    allowUnverified?: boolean;
+    carriedFailures?: string[];
 }
 
 /**
@@ -196,7 +200,7 @@ export async function runSuite(specs: ReadonlyArray<TestSpec<unknown>>, options:
         const worker = async () => {
             for (let spec = queue.shift(); spec; spec = queue.shift()) {
                 if (signal.aborted) {
-                    results.push(skipped(spec, 'Run cancelled before this test started'));
+                    results.push({ ...unrun(spec), status: 'interrupted', summary: 'Run cancelled before this test started' });
                     continue;
                 }
                 // Not a pass: the run did not test it. Charged to the model budget like a test it stopped mid-way.
@@ -253,7 +257,7 @@ export async function runSuite(specs: ReadonlyArray<TestSpec<unknown>>, options:
             if (isFinalAttempt(result, spec, runBudget)) { break; }
         }
         // Cancelled while the recording loaded, before any attempt started.
-        if (!attempts.length) { return skipped(spec, 'Run cancelled before this test started'); }
+        if (!attempts.length) { return { ...unrun(spec), status: 'interrupted', summary: 'Run cancelled before this test started' }; }
         const result = testResult(spec, attempts, recordingUpdated);
         if (rerouted) { result.rerouted = rerouted; result.summary += `; attempt ${attempts.length} took a different path at step ${rerouted.steps.join(', ')}${recordingUpdated ? '; the recording was updated' : '; recording updates were disabled'}`; }
         if (freshRetrySkipped) { result.freshRetrySkipped = freshRetrySkipped; result.summary += `; ${freshRetrySkipped}`; }
@@ -291,10 +295,13 @@ export async function runSuite(specs: ReadonlyArray<TestSpec<unknown>>, options:
         log(`${result.status === 'passed' ? '✓' : '✗'} ${spec.id} ${result.status}${result.cause ? ` (${result.cause})` : ''} ${(result.durationMs / 1000).toFixed(1)}s — ${result.summary}`);
         // Step indices, not recording positions: unrecorded steps leave gaps in the recording.
         const changed = steps ? changedActionSteps(recording, steps).map(position => recordedSteps![position]!) : [];
-        const learned = steps && (learnedRecording(recording, steps) || recording?.steps.some(entry => redact.contains(JSON.stringify(entry))));
+        const partial = result.status === 'failed';
+        const learned = steps && (partial && recording && !recording.partial
+            ? steps.some(step => learnedRecording({ ...recording, steps: recording.steps.filter(entry => entry.key === step.key) }, [step]))
+            : learnedRecording(recording, steps) || recording?.partial !== (partial || undefined) || recording?.steps.some(entry => redact.contains(JSON.stringify(entry))));
         const keep = options.updateRecordings ?? mode !== 'replay';
         if (!steps || !learned || options.dryRun || !keep || !store.enabled) { return { result, saved: false, changed }; }
-        await store.save({ version: 1, test: spec.id, updatedAt: new Date().toISOString(), steps }, devices.get(spec.id)!.key);
+        await store.save({ version: 1, test: spec.id, updatedAt: new Date().toISOString(), steps, ...(partial ? { partial: true } : {}) }, devices.get(spec.id)!.key);
         return { result, saved: true, changed };
     }
 }
@@ -318,7 +325,7 @@ function testResult(spec: TestSpec<unknown>, attempts: AttemptResult[], recordin
         risk: spec.risk,
         tags: spec.tags ?? [],
         status,
-        ...(status === 'passed' || status === 'skipped' ? {} : { cause: attributed.cause }),
+        ...(status === 'passed' || status === 'skipped' || status === 'unverified' || status === 'interrupted' ? {} : { cause: attributed.cause }),
         ...(status === 'skipped' ? { skipReason: last.summary } : {}),
         summary: status === 'flaky' ? `Passed on attempt ${attempts.length} after: ${failures[0]!.summary}` : last.summary,
         ...(failures.length ? { reproduced: `${failures.length}/${attempts.length}` } : {}),
@@ -338,7 +345,7 @@ function isCancelled(attempt: AttemptResult): boolean {
 
 /** True once another attempt cannot change the outcome, so the retry loop should stop. */
 function isFinalAttempt(result: AttemptResult, spec: TestSpec<unknown>, runBudget: RunBudget | undefined): boolean {
-    if (result.status === 'passed') { return true; }
+    if (result.status === 'passed' || result.status === 'unverified') { return true; }
     // A known defect that reproduces needs no retry to prove it.
     if (spec.knownIssue && result.cause === 'product') { return true; }
     // Stopped by Ctrl-C; another attempt would be cancelled too.
@@ -352,7 +359,8 @@ function isFinalAttempt(result: AttemptResult, spec: TestSpec<unknown>, runBudge
 /** A test's overall status from its last attempt and how many attempts before it failed. */
 function finalStatus(last: AttemptResult, failures: AttemptResult[], spec: TestSpec<unknown>): TestStatus {
     // Stopped by Ctrl-C: nothing was learned about the app.
-    if (isCancelled(last)) { return 'skipped'; }
+    if (isCancelled(last)) { return 'interrupted'; }
+    if (last.status === 'unverified') { return 'unverified'; }
     if (last.status === 'passed') { return failures.length ? 'flaky' : 'passed'; }
     return spec.knownIssue && last.cause === 'product' ? 'known' : 'failed';
 }
@@ -386,6 +394,7 @@ function buildManifest({ runId, startedAt, git, mode, models, runBudget, specs, 
         tests: specs.map(spec => spec.id),
         ...(options.command ? { command: options.command } : {}),
         ...(options.metadata ? { metadata: options.metadata } : {}),
+        ...(options.carriedFailures?.length ? { carriedFailures: options.carriedFailures } : {}),
     };
 }
 
@@ -422,6 +431,8 @@ function totals(results: TestResult[]): RunSummary['totals'] {
         flaky: results.filter(result => result.status === 'flaky').length,
         known: results.filter(result => result.status === 'known').length,
         skipped: results.filter(result => result.status === 'skipped').length,
+        unverified: results.filter(result => result.status === 'unverified').length,
+        interrupted: results.filter(result => result.status === 'interrupted').length,
         issues: results.reduce((sum, result) => sum + result.issues.length, 0),
         models: usage,
         durationMs: results.reduce((sum, result) => sum + result.durationMs, 0),

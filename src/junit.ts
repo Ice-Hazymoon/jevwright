@@ -22,12 +22,14 @@ export function junitReport(summary: RunSummary): string {
         modules.set(name, group);
     }
     const suites = [...modules].map(([name, tests]) => {
-        const errors = tests.filter(isError).length;
-        const failures = tests.filter(test => test.status === 'failed').length - errors;
+        const errors = tests.filter(isError).length + tests.filter(test => test.status === 'unverified' || test.status === 'interrupted').length;
+        const failures = tests.filter(test => test.status === 'failed').length - tests.filter(isError).length;
         const skipped = tests.filter(test => test.status === 'known' || test.status === 'skipped').length;
         const cases = tests.map((test) => {
             let result = '';
-            if (test.status === 'failed') {
+            if (test.status === 'unverified' || test.status === 'interrupted') {
+                result = `<error type="${test.status}" message="${xml(test.summary)}"/>`;
+            } else if (test.status === 'failed') {
                 const tag = isError(test) ? 'error' : 'failure';
                 const reproduce = summary.manifest.command ? reproduceCommand(summary.manifest.command, test.id) : '';
                 result = `<${tag} type="${xml(test.cause ?? 'unknown')}" message="${xml(test.summary)}">${xml(reproduce)}</${tag}>`;
@@ -40,7 +42,7 @@ export function junitReport(summary: RunSummary): string {
             }
             return `    <testcase name="${xml(test.id)}" classname="${xml(name)}" time="${(test.durationMs / 1000).toFixed(3)}">${result}</testcase>`;
         });
-        return [`  <testsuite name="${xml(name)}" tests="${tests.length}" failures="${failures}" errors="${errors}" skipped="${skipped}" time="${(tests.reduce((sum, test) => sum + test.durationMs, 0) / 1000).toFixed(3)}">`, ...cases, '  </testsuite>'].join('\n');
+        return [`  <testsuite name="${xml(name)}" tests="${tests.length}" failures="${failures}" errors="${errors}" skipped="${skipped}" unverified="${tests.filter(test => test.status === 'unverified').length}" interrupted="${tests.filter(test => test.status === 'interrupted').length}" time="${(tests.reduce((sum, test) => sum + test.durationMs, 0) / 1000).toFixed(3)}">`, ...cases, '  </testsuite>'].join('\n');
     });
     return ['<?xml version="1.0" encoding="UTF-8"?>', `<testsuites tests="${summary.results.length}">`, ...suites, '</testsuites>', ''].join('\n');
 }

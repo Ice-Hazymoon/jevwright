@@ -138,7 +138,7 @@ export async function readSurface(page: Page | Frame, scope?: ElementHandle<Elem
             if (element.matches('html,body,main,header,footer,nav')) { return ''; }
             const heading = [...element.children].find(child => child.matches('h1,h2,h3,h4,h5,h6,[role=heading]'));
             const name = element.matches('section, [role=region], [role=list], [role=group]') || heading
-                ? element.getAttribute('aria-label') || (heading ? text(heading).slice(0, 80) : '') : '';
+                ? element.getAttribute('aria-label') || (heading ? text(heading) : '') : '';
             groups.set(element, name); return name;
         };
         const actionRoles = new Set(['button', 'link', 'textbox', 'searchbox', 'combobox', 'checkbox', 'radio', 'switch', 'tab', 'menuitem', 'menuitemcheckbox', 'menuitemradio', 'option', 'slider', 'spinbutton', 'treeitem', 'listbox']);
@@ -214,9 +214,9 @@ export async function readSurface(page: Page | Frame, scope?: ElementHandle<Elem
             const labels = field || select ? [...element.labels ?? []].map(labelText).join(' ') : '';
             const labelled = element.getAttribute('aria-labelledby')?.split(/\s+/).map(id => text((element.getRootNode() as Document | ShadowRoot).getElementById(id) ?? element)).join(' ');
             const preceding = element.previousElementSibling;
-            const near = (labels || (preceding?.matches('label, span') && !preceding.children.length ? text(preceding) : '')).slice(0, 80);
+            const near = labels || (preceding?.matches('label, span') && !preceding.children.length ? text(preceding) : '');
             const scrolling = /auto|scroll/.test(css.overflowY) && element.scrollHeight > element.clientHeight + 1;
-            const name = label || labelled || labels || group || (field ? element.getAttribute('placeholder') ?? '' : rendered.length <= 160 ? rendered : scrolling ? text(element.firstElementChild ?? element).slice(0, 60) : '');
+            const name = label || labelled || labels || group || (field ? element.getAttribute('placeholder') ?? '' : rendered.length <= 160 ? rendered : scrolling ? text(element.firstElementChild ?? element) : '');
             const draggable = element instanceof HTMLElement && draggableOf(element);
             const painted = css.backgroundColor !== 'rgba(0, 0, 0, 0)' || ['borderTopWidth', 'borderRightWidth', 'borderBottomWidth', 'borderLeftWidth', 'outlineWidth'].some(key => parseFloat(Reflect.get(css, key) as string) > 0);
             const container = !nativeRole && !actionRoles.has(role) && !draggable && !interactiveParent(element) && b.width >= 24 && b.height >= 24 && !element.matches('html,body,main,header,footer,nav');
@@ -272,7 +272,7 @@ export async function readSurface(page: Page | Frame, scope?: ElementHandle<Elem
         }
         // Main content gets the bounded observation budget before navigation and surrounding chrome.
         const shown = [...mainText, ...otherText].join(' ').replace(/\s+/g, ' ').trim();
-        return { nodes, details, text: shown, ...(dialog ? { dialog: { role: dialog.getAttribute('role') ?? 'dialog', name: dialog.getAttribute('aria-label') ?? text(dialog.querySelector('h1,h2,h3,[role=heading]') ?? dialog).slice(0, 120), children: [...nodes, shown] } } : {}), busy: false, scrollable, pageScroll: { top: document.scrollingElement?.scrollTop ?? 0, height: document.scrollingElement?.scrollHeight ?? innerHeight, viewport: innerHeight } };
+        return { nodes, details, text: shown, ...(dialog ? { dialog: { role: dialog.getAttribute('role') ?? 'dialog', name: dialog.getAttribute('aria-label') ?? text(dialog.querySelector('h1,h2,h3,[role=heading]') ?? dialog), children: [...nodes, shown] } } : {}), busy: false, scrollable, pageScroll: { top: document.scrollingElement?.scrollTop ?? 0, height: document.scrollingElement?.scrollHeight ?? innerHeight, viewport: innerHeight } };
     }, { scope, instruction });
     surface.busy = await readBusy(page);
     return surface;

@@ -57,6 +57,28 @@ function escapeHtml(text: string): string {
 function pages(state: FixtureState, url: URL): string | undefined {
     const bug = url.searchParams.get('bug');
     switch (url.pathname) {
+        case '/integrity-audit':
+            return layout('Draft editor', '<label>Draft<input id="draft"></label><label>Reference<input id="reference"></label><button id="store">Store draft</button>', `document.getElementById('store').onclick = () => send('/api/draft-validation', { draft: document.getElementById('draft').value });`);
+        case '/integrity-region':
+            return layout('Draft workspace', '<section aria-label="' + (bug === 'moved' ? 'Review area' : 'Draft area') + '"><label>Draft<input value="Original"></label></section>');
+        case '/integrity':
+            return layout('Request workspace', '<label>Draft<input id="draft" value="Original"></label><button id="save">Save draft</button><button id="toggle" aria-expanded="false">Details</button><output id="receipt"></output><div id="error"></div>', `
+                const bug = ${JSON.stringify(bug)};
+                document.getElementById('toggle').onclick = e => { if (bug !== 'state') e.target.setAttribute('aria-expanded', 'true'); };
+                document.getElementById('save').onclick = async () => {
+                    if (bug === '500') await fetch('/api/integrity', { method: 'POST' });
+                    if (bug === '422' || bug === 'validation') await fetch('/api/integrity-validation', { method: 'POST' });
+                    if (bug === 'validation') document.getElementById('error').innerHTML = '<p role="alert">Required input missing</p>';
+                    if (bug === 'alert') document.getElementById('error').innerHTML = '<p role="alert">Request rejected</p>';
+                    if (bug === 'shadow-alert') { const host = document.createElement('div'); document.body.append(host); host.attachShadow({ mode: 'closed' }).innerHTML = '<p role=alert>Request rejected</p>'; }
+                    if (bug === 'frame-alert') { const frame = document.createElement('iframe'); frame.srcdoc = '<p role=alert>Request rejected</p>'; document.body.append(frame); }
+                    if (bug === 'hidden-alert') document.getElementById('error').innerHTML = '<p role=alert style=visibility:hidden>Decorative error</p>';
+                    if (bug === 'invalid') document.getElementById('draft').setAttribute('aria-invalid', 'true');
+                    if (bug !== 'missing') document.getElementById('receipt').innerHTML = '<h2>Draft stored</h2><h3>Receipt 42</h3>';
+                    if (bug === 'half') document.querySelector('h3').remove();
+                    if (bug === 'query') history.replaceState({}, '', '?view=other');
+                };
+            `);
         case '/attribution-regions': {
             const region = url.searchParams.get('region') ?? 'loading';
             const content = '<section aria-label="Delivery records"><p>' + (region === 'loading' ? 'Fetching records…' : region === 'empty' ? 'Nothing has arrived' : 'Record ZX-71') + '</p></section>';
@@ -399,6 +421,12 @@ async function api(state: FixtureState, url: URL, request: IncomingMessage, resp
     const payload = await body(request);
     state.requests.push({ method: request.method ?? 'GET', path: url.pathname });
     const json = (status: number, value: unknown) => response.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(value));
+    if (url.pathname === '/api/draft-validation') {
+        json(bug === '500' ? 500 : !payload.draft || bug === '422' ? 422 : 200, { validation: 'draft required' });
+        return;
+    }
+    if (url.pathname === '/api/integrity') { json(500, { error: 'storage unavailable' }); return; }
+    if (url.pathname === '/api/integrity-validation') { json(422, { validation: 'record invalid' }); return; }
     if (url.pathname === '/api/profile') {
         if (bug === '500') { json(500, { error: 'boom' }); return; }
         if (bug === 'fail-once' && !state.failedOnce) { state.failedOnce = true; json(503, { error: 'unavailable' }); return; }

@@ -61,14 +61,14 @@ function encodings(value: string): string[] {
 
 /** Engine-owned grammar stays valid; user strings and evidence are still redacted. */
 const grammar: Record<string, ReadonlySet<string>> = Object.fromEntries(Object.entries({
-    status: ['passed', 'failed', 'flaky', 'known', 'skipped', 'pending'],
+    status: ['passed', 'failed', 'flaky', 'known', 'skipped', 'unverified', 'interrupted', 'pending'],
     cause: ['product', 'agent', 'environment', 'model', 'timeout'],
     source: ['replay', 'ai', 'healed', 'code', 'jev', 'llm'],
     mode: ['replay', 'auto', 'ai'],
     kind: ['act', 'check', 'verify', 'goto', 'reload', 'back', 'run', 'jev', 'llm', 'page-error', 'asset-load', 'app-unreachable', 'console-error', 'hydration-mismatch', 'http-5xx', 'http-4xx', 'request-failed', 'raw-i18n-key', 'text-anomaly', 'ui-error', 'semantic', 'accessibility'],
     tool: ['click', 'type', 'press', 'select_text', 'select', 'press_enter', 'press_escape', 'wait', 'scroll', 'none', 'upload', 'hover', 'right_click', 'long_press', 'double_click', 'drag', 'back', 'scroll_to'],
     severity: ['low', 'medium', 'high'],
-    failure: ['assertion', 'invariant', 'exception', 'blocking-issue', 'not-recorded', 'timeout', 'expectation', 'not-found', 'ambiguous', 'stuck', 'max-actions', 'model', 'error-shown'],
+    failure: ['assertion', 'invariant', 'exception', 'blocking-issue', 'not-recorded', 'timeout', 'expectation', 'not-found', 'ambiguous', 'stuck', 'max-actions', 'model', 'error-shown', 'end-mismatch'],
 }).map(([key, values]) => [key, new Set(values)]));
 
 export function createRedactor(secrets: Iterable<Secret> = []) {

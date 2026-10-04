@@ -195,3 +195,7 @@ export function pendingActionPolicy(view: View): Belief {
     if (!view.history.length && !view.control) { return { tool: 'hover', target: is('button', 'Add entry') }; }
     return { done: 0.89, achieved: 0.96, remaining: 0.12, tool: added ? 'none' : 'click', target: is('button', 'Add entry'), needed: added ? 0.02 : 0.95 };
 }
+/** Reproduce a completion claim after delivery, even when the fixture withholds its receipt. */
+export const integrityPolicy = (view: View): Belief => view.history.some(entry => entry.action === 'click')
+    ? { done: 0.99 }
+    : { tool: 'click', target: is('button', 'Save draft') };

@@ -8,13 +8,14 @@ import type { CheckOutcome, Env, FixtureContext, MaybePromise, RunContext, Step,
 import type { Browser, Page } from 'playwright';
 import { mkdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
+import { AssertionError } from 'node:assert';
 import { pageState, runAct } from './act.ts';
 import { redactTrace, writeArtifact } from './artifacts.ts';
 import { newTestContext, settle } from './browser.ts';
 import { createDownloads } from './downloads.ts';
 import { JevwrightError } from './errors.ts';
 import { secretSurface } from './dom.ts';
-import { actedOnTarget, adjudicateClaim, judgeClaim } from './judge.ts';
+import { actedOnTarget, adjudicateClaim, checkEvidenceMatches, judgeClaim, replayableCheckEvidence } from './judge.ts';
 import { createModels, emptyUsage, ModelError } from './models.ts';
 import { createMonitor } from './monitor.ts';
 import { observe, shortUrl } from './observe.ts';
@@ -23,7 +24,7 @@ import { createRedactor, forResults, reveal, secretPurpose } from './secrets.ts'
 import { secretCheckProblems } from './select.ts';
 import { describeStep, fillTemplate, templateKeys, writeRules } from './spec.ts';
 
-export type StepStatus = 'passed' | 'failed' | 'skipped';
+export type StepStatus = 'passed' | 'failed' | 'skipped' | 'unverified' | 'interrupted';
 export type StepFailure = ActFailure | 'assertion' | 'invariant' | 'exception' | 'blocking-issue' | 'not-recorded' | 'not-shown' | 'timeout';
 
 export interface StepResult {
@@ -59,7 +60,7 @@ export interface StepResult {
 
 export type Cause = 'product' | 'agent' | 'environment' | 'model' | 'timeout';
 
-const STEP_MARK: Record<StepStatus, string> = { passed: '✓', failed: '✗', skipped: '–' };
+const STEP_MARK: Record<StepStatus, string> = { passed: '✓', failed: '✗', skipped: '–', unverified: '?', interrupted: '⏹' };
 
 /**
  * Who a blocking issue is charged to. The app failing to download its own code, or not answering at all, is the
@@ -78,8 +79,8 @@ export interface AttemptResult {
     id: string;
     attempt: number;
     fresh?: true;
-    status: 'passed' | 'failed';
-    /** Stopped by Ctrl-C; the test is reported as skipped. */
+    status: 'passed' | 'failed' | 'unverified' | 'interrupted';
+    /** Stopped by Ctrl-C; no conclusion about the product. */
     cancelled?: true;
     cause?: Cause;
     summary: string;
@@ -163,6 +164,8 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
     const recordedSteps: number[] = [];
     const pendingEnds: Array<{ entry: StepRecording; index: number; end: NonNullable<StepRecording['end']> }> = [];
     const deterministicChecks: number[] = [];
+    const occurrences = new Map<string, number>();
+    const keysByIndex = new Map<number, { key: string; occurrence: number }>();
     const counts = { total: 0, replayed: 0, healed: 0, ai: 0 };
     let page: Page | undefined;
     let trace: string | undefined;
@@ -236,6 +239,14 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
         }
 
         const definition = spec.steps(fixture as F);
+        for (const [index, step] of definition.entries()) {
+            if (step.kind !== 'act' && step.kind !== 'check') { continue; }
+            const identity = step.kind === 'act' ? step : { instruction: `check:${step.assertion}` };
+            const base = stepKey(identity);
+            const occurrence = (occurrences.get(base) ?? 0) + 1;
+            occurrences.set(base, occurrence);
+            keysByIndex.set(index, { key: stepKey(identity, occurrence), occurrence });
+        }
         const secretProblems = secretCheckProblems(definition, secrets);
         if (secretProblems.length) { throw new JevwrightError(secretProblems.join('; ')); }
         for (const [index, step] of definition.entries()) {
@@ -283,11 +294,12 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
                 if (signal.aborted) { throw error; }
                 result.status = 'failed';
                 // A check or verify that could not get a model answer is a model-service failure, not test code.
-                result.failure = error instanceof ModelError ? 'model' : 'exception';
+                result.failure = error instanceof ModelError ? 'model' : step.kind === 'verify' && isAssertionError(error) ? 'assertion' : 'exception';
                 result.error = message(error);
             }
             await settle(page, monitor, { maxMs: 3000 }).catch(() => 0);
             await monitor.scanText(page);
+            await monitor.flushEvidence();
             result.url = shortUrl(page.url());
             await downloads.flush();
             if (step.kind === 'act' && step.expect?.download && result.status === 'passed') {
@@ -302,7 +314,6 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
             result.screenshot = screenshotsWithheld || await showsSecret(page, redact) ? undefined : await screenshot(page, directory, index);
             if (!result.screenshot && !screenshotsWithheld && redact.active) { secretShown = true; }
             steps.push(result);
-            if (result.status === 'passed' && (step.kind === 'verify' || (step.kind === 'act' && (step.expect?.write || step.expect?.url || step.expect?.download)))) { deterministicChecks.push(index); }
             log(`     ${STEP_MARK[result.status]} ${result.source ? `[${result.source}] ` : ''}${result.durationMs}ms${result.error ? ` — ${result.error}` : ''}`);
             if (result.status === 'failed') {
                 failedStep = index;
@@ -314,6 +325,16 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
                     if (result.misstep) {
                         cause = 'agent';
                         summary = `${summary}. Not counted against the product: ${result.misstep}`;
+                    }
+                }
+                if (cause === 'agent' && result.failure !== 'error-shown' && !result.misstep && !(step.kind === 'act' && step.expectError)) {
+                    const server = monitor.issues().find(issue => issue.step === index && issue.kind === 'http-5xx');
+                    const rejected = result.writes.find(write => write.validationError);
+                    if (server || rejected) {
+                        result.misstep = await misstep(index);
+                        if (result.misstep) { summary += `. Not counted against the product: ${result.misstep}`; }
+                        else if (server) { cause = 'product'; summary += `. Request evidence: ${server.message}`; }
+                        else if (rejected) { cause = 'product'; summary += `. Request evidence: ${rejected.method} ${rejected.path} → ${rejected.status}: ${rejected.validationError}`; }
                     }
                 }
                 break;
@@ -348,6 +369,7 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
                 result.error = summary;
                 break;
             }
+            if (result.status === 'passed' && (step.kind === 'verify' || step.kind === 'check' || (step.kind === 'act' && (step.expect?.write || step.expect?.url || step.expect?.download)))) { deterministicChecks.push(index); }
             previousLabel = label;
         }
     } catch (error) {
@@ -389,8 +411,9 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
         cause = 'environment';
         if (summary !== 'Run cancelled') { summary = `Run cancelled (${summary})`; }
     }
-    const status = cause ? 'failed' : 'passed';
-    if (status === 'passed') {
+    const status = cancelled ? 'interrupted' : cause ? 'failed' : steps.some(step => step.status === 'unverified') ? 'unverified' : 'passed';
+    if (status === 'unverified') { summary = `${steps.filter(step => step.status === 'unverified').length} check(s) lack replayable evidence`; }
+    if (status === 'passed' || status === 'failed') {
         for (const pending of pendingEnds) {
             if (deterministicChecks.some(index => index > pending.index)) { pending.entry.end = pending.end; }
         }
@@ -422,14 +445,15 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
         ...(traceWithheld ? { traceWithheld: true } : {}),
     };
     await writeArtifact(join(directory, 'result.json'), result, forResults(redact));
-    return { result, ...(status === 'passed' && counts.total ? { recording: newRecording, recordedSteps } : {}) };
+    const verified = newRecording.flatMap((entry, position) => status === 'passed' || (status === 'failed' && deterministicChecks.some(index => index >= recordedSteps[position]!) && recordedSteps[position]! < (failedStep ?? Infinity)) ? [{ entry, index: recordedSteps[position]! }] : []);
+    return { result, ...((status === 'passed' && (counts.total || newRecording.length)) || verified.length ? { recording: verified.map(item => item.entry), recordedSteps: verified.map(item => item.index) } : {}) };
 
     async function runStep(step: Step<F>, index: number, result: StepResult, previousLabel: string | undefined): Promise<void> {
         switch (step.kind) {
             case 'act': {
                 const keys = templateKeys(step.instruction);
                 const stepValues = Object.fromEntries(keys.filter(key => Object.hasOwn(values, key)).map(key => [key, values[key]!]));
-                const key = stepKey(step);
+                const { key, occurrence } = keysByIndex.get(index)!;
                 const recorded = options.fresh ? undefined : options.recording?.steps.find(entry => entry.key === key);
                 if (!models && recorded === undefined) {
                     // Replay has no model to fall back on. A new test, or a step reworded since it was recorded.
@@ -480,7 +504,7 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
                     result.failure = outcome.failure;
                     result.error = outcome.reason;
                 } else {
-                    const entry: StepRecording = { key, instruction: step.instruction, actions: outcome.source === 'replay' && recorded ? recorded.actions : outcome.recording as RecordedAction[] };
+                    const entry: StepRecording = { key, occurrence, instruction: step.instruction, actions: outcome.source === 'replay' && recorded ? recorded.actions : outcome.recording as RecordedAction[] };
                     if (outcome.recordedEnd !== undefined) {
                         if (outcome.source === 'replay' && recorded?.end === undefined) { pendingEnds.push({ entry, index, end: outcome.recordedEnd }); } else { entry.end = outcome.recordedEnd; }
                     }
@@ -499,13 +523,24 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
                 return;
             }
             case 'check': {
+                const { key, occurrence } = keysByIndex.get(index)!;
+                const claim = fillTemplate(step.assertion, displayData);
                 if (!models) {
-                    result.status = 'skipped';
-                    result.error = 'Semantic checks need a model; replay mode makes no model calls';
+                    result.source = 'replay';
+                    const recorded = options.recording?.steps.find(entry => entry.key === key);
+                    if (!recorded?.checkEvidence?.length || !replayableCheckEvidence(recorded.checkEvidence) || recorded.checkClaim !== claim || step.reference) {
+                        result.status = 'unverified';
+                        result.error = 'Check has no directly recheckable evidence for this claim; record it with an auto run';
+                    } else {
+                        const observed = await observe(page!, { redact });
+                        result.evidence = { claim, checked: recorded.checkEvidence };
+                        if (!checkEvidenceMatches(recorded.checkEvidence, observed)) {
+                            result.status = 'failed'; result.failure = 'assertion'; result.error = `Recorded check evidence is no longer visible: ${claim}`;
+                        }
+                    }
                     return;
                 }
                 result.source = 'ai';
-                const claim = fillTemplate(step.assertion, displayData);
                 const reference = step.reference ? await step.reference(runContext(index)) : undefined;
                 const priorActions = steps.filter(entry => entry.kind === 'act' && entry.status === 'passed' && entry.actions?.some(action => action.ok)).slice(-3).map(entry => ({ step: entry.label, history: entry.actions!.filter(action => action.ok).slice(-12).map(action => ({ action: action.tool, ...(action.element ? { element: action.element } : {}), ...(action.destination ? { destination: action.destination } : {}) })) }));
                 let observed = await observe(page!, { redact });
@@ -526,7 +561,7 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
                     observed = await observe(page!, { redact });
                     const tie = await adjudicateClaim(models, observed, claim, reference, signal, priorActions);
                     attempts.push({ adjudicated: tie });
-                    verdict = { ...verdict, passed: tie.passed, support: tie.support, note: tie.reason, ...(tie.region ? { region: tie.region, pRegion: 1 } : {}) };
+                    verdict = { ...verdict, evidence: undefined, passed: tie.passed, support: tie.support, note: tie.reason, ...(tie.region ? { region: tie.region, pRegion: 1 } : {}) };
                 }
                 // Exactly what the claim was judged against, so a verdict can be audited without re-running.
                 result.observation = `step-${String(index + 1).padStart(2, '0')}-observation.json`;
@@ -538,6 +573,10 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
                     result.failure = verdict.support === 'contradicts' || openMissing ? 'assertion' : 'not-shown';
                     const location = verdict.support === 'contradicts' ? 'Visible evidence contradicts the claim' : verdict.region === 'closed' ? 'Relevant region is not open in the current view' : openMissing ? 'Expected content is missing from the open visible region' : 'Claim not shown on the page';
                     result.error = `${location}: ${claim} (holds=${verdict.holds}, ${verdict.support} ${verdict.pSupport}, region=${verdict.region})`;
+                } else {
+                    const evidence = verdict.evidence?.filter(entry => !redact.contains(JSON.stringify(entry)) && !JSON.stringify(entry).includes('{secret}'));
+                    const entry: StepRecording = { key, occurrence, instruction: step.assertion, actions: [], checkClaim: claim, ...(evidence?.length && !step.reference ? { checkEvidence: evidence } : {}) };
+                    if (!redact.contains(JSON.stringify(entry))) { newRecording.push(entry); recordedSteps.push(index); }
                 }
                 return;
             }
@@ -581,6 +620,11 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
 }
 
 class DryRunComplete extends Error {}
+
+/** Matcher metadata distinguishes assertion failures from unrelated Playwright or user-code exceptions. */
+function isAssertionError(error: unknown): boolean {
+    return error instanceof AssertionError || (error instanceof Error && (error.name === 'AssertionError' || ('matcherResult' in error && typeof error.matcherResult === 'object' && error.matcherResult !== null)));
+}
 
 class AttemptError extends Error {
     constructor(override readonly cause: Cause, message: string) {

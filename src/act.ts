@@ -56,7 +56,7 @@ export interface Round {
     elements: number;
 }
 
-export type ActFailure = 'stuck' | 'ambiguous' | 'error-shown' | 'max-actions' | 'not-found' | 'expectation' | 'model';
+export type ActFailure = 'stuck' | 'ambiguous' | 'error-shown' | 'max-actions' | 'not-found' | 'expectation' | 'model' | 'end-mismatch';
 
 export interface ActResult {
     status: 'done' | 'likely-done' | 'failed';
@@ -147,28 +147,37 @@ export async function runAct(input: ActInput): Promise<ActResult> {
         const recordedEnd = result.endMismatch
             ? input.recorded?.end
             : result.status === 'done' && start.observation
-                ? result.source === 'replay' && input.recorded?.end !== undefined ? input.recorded.end : recordEnd(start.observation, await observe(input.page, { redact: input.redact, instruction: input.instruction }), recording, input.redact)
+                ? result.source === 'replay' && input.recorded?.end !== undefined ? input.recorded.end : recordEnd(start.observation, await observeEnd(input), recording, input.redact, input.values)
                 : undefined;
-        return { ...result, actions, rounds, recording, end: { ...end, ...(result.status === 'done' ? { recorded: recordedEnd !== undefined && Boolean(recordedEnd.path || recordedEnd.appeared?.length || recordedEnd.gone?.length) } : {}) }, ...(recordedEnd !== undefined ? { recordedEnd } : {}), ...(replayMiss ? { replayMiss } : {}) };
+        return { ...result, actions, rounds, recording, end: { ...end, ...(recordedEnd?.effect ? { effect: recordedEnd.effect } : {}), ...(result.status === 'done' ? { recorded: recordedEnd !== undefined && Boolean(recordedEnd.path || recordedEnd.route || recordedEnd.appeared?.length || recordedEnd.gone?.length || recordedEnd.values?.length) } : {}) }, ...(recordedEnd !== undefined ? { recordedEnd } : {}), ...(replayMiss ? { replayMiss } : {}) };
     };
     // An empty recorded path is valid: the step was already achieved when it was recorded.
     if (input.recorded) {
+        start.observation = await observeEnd(input);
+        start.errors = await replayErrors(input.page);
         const replay = await replaySteps(input, input.recorded.actions, actions, recording, start);
         unique = replay.unique === true;
+        if (replay.failure) {
+            // An observed rejected declared request remains an oracle; an unsent request does not prove a product failure.
+            const expectation = await awaitExpectation(input, false);
+            if (expectation.violated) { return finish({ status: 'failed', source: 'replay', failure: 'expectation', reason: expectation.reason }); }
+            return finish({ status: 'failed', source: 'replay', failure: replay.failure, reason: replay.reason });
+        }
         if (replay.ok) {
             const expectation = await awaitExpectation(input, true);
             if (!expectation.ok) {
                 replayMiss = `expectation after replay: ${expectation.reason}`;
                 if (!input.models) { return finish({ status: 'failed', source: 'replay', failure: 'expectation', reason: replayMiss }); }
-            } else if (input.expect?.write || input.expect?.url || input.expect?.download || input.recorded.end === undefined) {
+            } else if (input.recorded.end === undefined) {
                 return finish({ status: 'done', source: 'replay' });
             } else {
-                end = await awaitEnd(input, input.recorded.end);
+                end = await awaitEnd(input, input.recorded.end, start.observation, start.errors);
                 if (end.matched) { return finish({ status: 'done', source: 'replay' }); }
+                if (end.failure) { return finish({ status: 'failed', source: 'replay', failure: end.failure, reason: end.missing?.join(', ') }); }
                 mismatch = true;
                 replayMiss = `recorded end state missing: ${end.missing?.join(', ')}`;
-                if (!input.models) { return finish({ status: 'done', source: 'replay', endMismatch: true }); }
-                input.events.push('replayed actions ran but the recorded effect did not appear');
+                if (!input.models) { return finish({ status: 'failed', source: 'replay', failure: 'end-mismatch', reason: replayMiss, endMismatch: true }); }
+                input.events.push(`${replayMiss}; current route ${input.redact?.text(input.page.url()) ?? input.page.url()}${end.missing?.every(anchor => anchor.startsWith('route ')) ? '; all other recorded end conditions matched' : ''}`);
             }
         } else { replayMiss = replay.reason; }
         input.log?.(`    replay miss: ${replayMiss}`);
@@ -177,6 +186,7 @@ export async function runAct(input: ActInput): Promise<ActResult> {
         }
     }
     if (!input.models) { return finish({ status: 'failed', source: 'ai', failure: 'model', reason: 'No recording for this step and no model configured' }); }
+    start.observation ??= await observeEnd(input);
     const result = await decideLoop(input, input.models, actions, rounds, recording, start);
     if (mismatch && result.status !== 'failed' && !actions.some(action => action.ok && action.source !== 'replay')) {
         return finish({ status: 'done', source: 'replay', endMismatch: true });
@@ -186,7 +196,8 @@ export async function runAct(input: ActInput): Promise<ActResult> {
         return finish({ ...result, source: 'healed', discardRecording: true });
     }
     if (mismatch && result.status === 'failed') {
-        if (unique && ['stuck', 'max-actions', 'not-found', 'ambiguous'].includes(result.failure ?? '')) {
+        // A cached route difference alone does not prove that the product failed to show the action's effect.
+        if (unique && end.missing?.some(anchor => !anchor.startsWith('route ')) && ['stuck', 'max-actions', 'not-found', 'ambiguous'].includes(result.failure ?? '')) {
             const history = actions.filter(action => action.source === 'replay' && action.ok).map(action => ({ action: action.tool, ...(action.element ? { element: action.element } : {}) }));
             const probability = await actedOnTarget(input.models, [{ step: input.instruction, history }], input.signal, 0).catch(() => []);
             if ((probability[0] ?? 0) >= 0.75) {
@@ -197,24 +208,39 @@ export async function runAct(input: ActInput): Promise<ActResult> {
     return finish({ ...result, source: replayMiss ? 'healed' : 'ai' });
 }
 
-async function awaitEnd(input: ActInput, end: import('./recording.ts').StepEnd): Promise<EndCheck> {
+async function awaitEnd(input: ActInput, end: import('./recording.ts').StepEnd, start?: Observation, priorErrors?: string[]): Promise<EndCheck> {
     const deadline = performance.now() + 5000;
     for (;;) {
         input.signal.throwIfAborted();
-        const result = endMatches(end, await observe(input.page, { redact: input.redact, instruction: input.instruction }));
+        if (!input.expectError) {
+            const errors = (await replayErrors(input.page)).filter(error => !priorErrors?.includes(error));
+            if (errors.length) { return { checked: true, matched: false, failure: 'error-shown', missing: ['new error during replay: ' + (input.redact?.text(errors.join(' | ')) ?? errors.join(' | '))] }; }
+        }
+        const result = endMatches(end, await observeEnd(input), start, input.values);
         if (result.matched || performance.now() >= deadline) { return result; }
         await input.page.waitForTimeout(Math.min(500, Math.max(0, deadline - performance.now())));
     }
 }
 
+/** Full field values are deterministic evidence; clipped model observations cannot prove the tail of an input. */
+async function observeEnd(input: ActInput): Promise<Observation> {
+    const observation = await observe(input.page, { redact: input.redact, instruction: input.instruction });
+    for (const element of observation.elements.filter(element => element.ref && ['textbox', 'searchbox', 'spinbutton'].includes(element.role))) {
+        const locator = domLocator(input.page, element.ref!);
+        element.value = await locator.inputValue({ timeout: 500 }).catch(() => locator.innerText({ timeout: 500 }).catch(() => element.value));
+    }
+    return observation;
+}
+
 interface StepStart {
     observation?: Observation;
     notices?: string[];
+    errors?: string[];
     /** Value keys already shown when the step began: they name what to act on, not what to enter. */
     shown?: ReadonlySet<string>;
 }
 
-async function replaySteps(input: ActInput, recorded: RecordedAction[], actions: ActionRecord[], recording: RecordedAction[], start: StepStart): Promise<{ ok: boolean; reason?: string; unique?: boolean }> {
+async function replaySteps(input: ActInput, recorded: RecordedAction[], actions: ActionRecord[], recording: RecordedAction[], start: StepStart): Promise<{ ok: boolean; reason?: string; unique?: boolean; failure?: 'error-shown' }> {
     let unique = recorded.some(action => action.target);
     let searchSpentMs = 0;
     for (const action of recorded) {
@@ -258,9 +284,45 @@ async function replaySteps(input: ActInput, recorded: RecordedAction[], actions:
             actions.push({ tool: action.tool, element: element ? describeElement(element) : undefined, source: 'replay', ok: false, error: actionError(error, input.redact), durationMs: Math.round(performance.now() - started) });
             return { ok: false, reason: `${action.tool} failed: ${actionError(error, input.redact)}` };
         }
+        if (!input.expectError) {
+            const errors = (await replayErrors(input.page)).filter(error => !start.errors?.includes(error));
+            if (errors.length) { return { ok: false, failure: 'error-shown', reason: `new error during replay: ${input.redact?.text(errors.join(' | ')) ?? errors.join(' | ')}` }; }
+        }
     }
     await settle(input.page, input.monitor);
+    if (!input.expectError) {
+        const errors = (await replayErrors(input.page)).filter(error => !start.errors?.includes(error));
+        if (errors.length) { return { ok: false, failure: 'error-shown', reason: `new error during replay: ${input.redact?.text(errors.join(' | ')) ?? errors.join(' | ')}` }; }
+    }
     return { ok: true, unique };
+}
+
+/** Read error surfaces before and after replay, so a stale validation message does not fail a later step. */
+async function replayErrors(page: Page): Promise<string[]> {
+    const errors = await Promise.all(page.frames().map(async frame => {
+        if (frame !== page.mainFrame()) {
+            const host = await frame.frameElement().catch(() => undefined);
+            if (!host) { return []; }
+            const visible = await host.evaluate(element => element instanceof Element && !element.closest('[aria-hidden=true], [inert]') && element.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })).catch(() => false);
+            await host.dispose();
+            if (!visible) { return []; }
+        }
+        return frame.evaluate(() => {
+            const captured = Reflect.get(window, '__jevwrightRoots') as WeakMap<Element, ShadowRoot> | undefined;
+            const errors: string[] = [];
+            const walk = (root: Document | ShadowRoot) => {
+                for (const element of root.querySelectorAll('*')) {
+                    const shadow = element.shadowRoot ?? captured?.get(element);
+                    if (shadow) { walk(shadow); }
+                    if (!element.matches('[role=alert], [aria-invalid=true], .error, .field-error, .validation-error, [data-error]') || element.closest('[aria-hidden=true], [inert]') || !element.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) { continue; }
+                    errors.push(`${element.getAttribute('role') ?? element.tagName}:${element.getAttribute('aria-label') ?? ''}:${(element as HTMLElement).innerText ?? ''}:${element.getAttribute('aria-invalid') ?? ''}`);
+                }
+            };
+            walk(document);
+            return errors;
+        }).catch(() => []);
+    }));
+    return errors.flat();
 }
 
 interface Decision {

@@ -96,6 +96,7 @@ export function createMonitor(context: BrowserContext, options: MonitorOptions) 
     const byRequest = new Map<Request, WriteRecord>();
     let step = -1;
     let writeId = 0;
+    const responseEvidence = new Set<Promise<void>>();
 
     const add = (issue: Omit<Issue, 'count' | 'step'>) => {
         const key = `${issue.kind}|${issue.message}`;
@@ -177,6 +178,13 @@ export function createMonitor(context: BrowserContext, options: MonitorOptions) 
         if (record?.status === 'pending') { record.status = response.status(); }
         if (!ofApp(request.url())) { return; }
         const status = response.status();
+        if (record && status >= 400 && status < 500 && !expected(request.method(), record.path, status, record.step)) {
+            const evidence = response.text().then(body => {
+                if (/validation|invalid|required|unprocessable/i.test(body)) { record.validationError = safe(body).slice(0, 600); }
+            }).catch(() => undefined);
+            responseEvidence.add(evidence);
+            void evidence.finally(() => responseEvidence.delete(evidence));
+        }
         const url = new URL(request.url());
         const path = url.pathname;
         const line = `${request.method()} ${where(url)} → ${status}`;
@@ -224,6 +232,7 @@ export function createMonitor(context: BrowserContext, options: MonitorOptions) 
         settleCaps: settleCaps as ReadonlyArray<{ step: number; reason: string }>,
         noteSettleCap(reason: string) { settleCaps.push({ step, reason }); },
         writes: writes as readonly WriteRecord[],
+        async flushEvidence() { await Promise.race([Promise.all([...responseEvidence]), new Promise(resolve => setTimeout(resolve, 1000))]); },
         setStep(value: number) { step = value; },
         expectDuring(stepIndex: number, rules: readonly WriteExpectation[]) { stepExpectations.set(stepIndex, rules); },
         report: add,

@@ -35,10 +35,10 @@ Filters:
   --module <names>     Comma-separated modules
   --tag <names>        Comma-separated tags
   --shard <i/n>        Select a stable hash partition (also supported by list)
-  --last-failed        Select failed and flaky tests from the latest completed run
+  --last-failed        Select unresolved failed, flaky and unverified tests from completed runs
 
 Run options:
-  --mode <mode>        auto (default) | replay: recordings only, no model calls, checks skipped
+  --mode <mode>        auto (default) | replay: recordings only, no model calls, checks recheck evidence
                        | ai: ignore recordings and ground every step fresh
   --new                Author new tests: an AI run that records (no retries), then a replay of that
                        recording in the same environment. Needs --test
@@ -47,6 +47,7 @@ Run options:
   --max-cost <usd>     Stop once the run's model cost reaches this (config default 1)
   --dry-run            Run fixtures, open start pages and check initial invariants only
   --no-record          Do not write recordings
+  --allow-unverified   Allow checks without replay evidence to leave exit code 0; still reported separately
   --base-url <origin>  Test an app already running here instead of calling the config's setup
   --device <desktop|mobile>  Override test and config device
   --headed             Show the browser
@@ -71,6 +72,7 @@ const OPTIONS = {
     'tag': { type: 'string' },
     'shard': { type: 'string' },
     'last-failed': { type: 'boolean' },
+    'allow-unverified': { type: 'boolean' },
     'mode': { type: 'string' },
     'new': { type: 'boolean' },
     'retries': { type: 'string' },
@@ -167,6 +169,10 @@ async function runCommand(flags: Flags, io: CliIO): Promise<number> {
         const app = await startApp(loaded, flags, tests, controller.signal, log, (stop) => { teardown = stop; });
         if (controller.signal.aborted) { return 130; }
         const options = suiteOptions(loaded, flags, app, { ...(models ? { models } : {}), translationKeys, signal: controller.signal, log });
+        if (flags['last-failed']) {
+            const selected = new Set(tests.flatMap(test => [test.id, testSelectionKey(test.id)]));
+            options.carriedFailures = [...await lastFailedIds(loaded.outputDir)].filter(key => !selected.has(key));
+        }
         return await runPasses(tests, passes, options, app, io);
     } catch (error) {
         if (controller.signal.aborted) { return 130; }
@@ -197,7 +203,8 @@ async function runPasses(tests: LoadedConfig['config']['tests'], passes: readonl
         if (app.serverLog) { await writeArtifact(join(artifactDirectory(summary), 'server.log'), await app.serverLog(), createRedactor(tests.flatMap(test => Object.values(test.secrets ?? {})))).catch(() => undefined); }
         io.stdout(summaryLine(summary, passes.length > 1 ? `pass ${index + 1}/${passes.length} (${pass.mode}${pass.record ? ', recording' : ''}): ` : '', io.cwd));
         if (options.signal?.aborted) { return 130; }
-        if (summary.totals.failed > 0) { return runFailureExitCode(summary, passes.length === 1); }
+        const code = runFailureExitCode(summary, passes.length === 1, options.allowUnverified);
+        if (code) { return code; }
     }
     return 0;
 }
@@ -216,6 +223,7 @@ function suiteOptions(loaded: LoadedConfig, flags: Flags, app: Omit<SetupResult,
         headless: !flags.headed,
         probe: flags.probe,
         dryRun: flags['dry-run'],
+        allowUnverified: flags['allow-unverified'],
         failOnIssues: config.failOnIssues,
         viewport: config.viewport,
         rootDir: dirname(loaded.file),
@@ -340,13 +348,14 @@ function reproducibleArgs(flags: Flags): string {
     }
     if (flags['dry-run']) { parts.push('--dry-run'); }
     if (flags['last-failed']) { parts.push('--last-failed'); }
+    if (flags['allow-unverified']) { parts.push('--allow-unverified'); }
     return parts.join(' ');
 }
 
 function summaryLine(summary: RunSummary, label: string, cwd: string): string {
     const { totals, manifest } = summary;
     const budget = manifest.maxCostUsd !== undefined && totals.models.cost >= manifest.maxCostUsd ? ` · run budget of $${manifest.maxCostUsd} reached` : '';
-    const counts = [`${totals.passed} passed`, `${totals.failed} failed`, totals.flaky && `${totals.flaky} flaky`, totals.known && `${totals.known} known`, totals.skipped && `${totals.skipped} skipped`].filter(Boolean).join(', ');
+    const counts = [`${totals.passed} passed`, `${totals.failed} failed`, totals.flaky && `${totals.flaky} flaky`, totals.known && `${totals.known} known`, totals.skipped && `${totals.skipped} skipped`, totals.unverified && `${totals.unverified} unverified`, totals.interrupted && `${totals.interrupted} interrupted`].filter(Boolean).join(', ');
     const models = totals.models.jevCalls + totals.models.llmCalls ? ` · ${totals.models.jevCalls} Jev / ${totals.models.llmCalls} LLM calls · $${totals.models.cost.toFixed(4)}` : '';
     return `\n${label}${counts} · ${totals.issues} issue${totals.issues === 1 ? '' : 's'}${models}${budget}\nReport: ${relative(cwd, join(summary.directory, 'report.html'))}\n`;
 }
@@ -445,7 +454,9 @@ async function selectedTests(loaded: LoadedConfig, flags: Flags) {
 }
 
 /** Missing recordings alone are a maintenance outcome; missing targets can be real regressions. */
-export function runFailureExitCode(summary: RunSummary, standalone = true): number {
+export function runFailureExitCode(summary: RunSummary, standalone = true, allowUnverified = false): number {
+    if (summary.totals.interrupted) { return 130; }
+    if (summary.totals.unverified && !allowUnverified) { return 1; }
     const failed = summary.results.filter(result => result.status === 'failed');
     if (!failed.length) { return 0; }
     return standalone && summary.manifest.mode === 'replay' && !failed.some(result => result.attempts.some(attempt => attempt.steps.some(step => step.endMismatch))) && failed.every(result => result.attempts.length > 0 && result.attempts.every(attempt => attempt.steps.some(step => step.failure === 'not-recorded') && attempt.steps.filter(step => step.status === 'failed').every(step => step.failure === 'not-recorded')))

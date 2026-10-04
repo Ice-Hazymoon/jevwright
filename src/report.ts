@@ -29,7 +29,7 @@ export async function loadSummary(directory: string): Promise<RunSummary> {
 }
 
 function statusIcon(status: string): string {
-    return ({ passed: '✓', failed: '✗', flaky: '≈', known: '!', skipped: '–' } as Record<string, string>)[status] ?? '?';
+    return ({ passed: '✓', failed: '✗', flaky: '≈', known: '!', skipped: '–', unverified: '?', interrupted: '⏹' } as Record<string, string>)[status] ?? '?';
 }
 
 function seconds(ms: number): string {
@@ -43,7 +43,7 @@ export function markdownReport(summary: RunSummary): string {
     lines.push(`${manifest.mode} mode${manifest.dryRun ? ' (dry run)' : ''} · ${manifest.engine} · git ${manifest.git ? `${manifest.git.sha.slice(0, 10)}${manifest.git.dirty ? ' (dirty)' : ''}` : 'unknown'} · started ${manifest.startedAt}${manifest.finishedAt ? ` · finished ${manifest.finishedAt}` : ' · running'}`);
     if (manifest.command) { lines.push('', `Command: \`${manifest.command}\``); }
     lines.push('');
-    lines.push(`**${totals.tests} tests**: ${totals.passed} passed, ${totals.failed} failed, ${totals.flaky} flaky, ${totals.known ?? 0} known, ${totals.skipped} skipped · ${totals.issues} implicit issues · model calls ${totals.models.jevCalls} Jev / ${totals.models.llmCalls} LLM · ${totals.models.inputTokens.toLocaleString('en-US')} input tokens${totals.models.cost ? ` · $${totals.models.cost.toFixed(4)}` : ''} · test time ${seconds(totals.durationMs)}`);
+    lines.push(`**${totals.tests} tests**: ${totals.passed} passed, ${totals.failed} failed, ${totals.flaky} flaky, ${totals.known ?? 0} known, ${totals.skipped} skipped, ${totals.unverified ?? 0} unverified, ${totals.interrupted ?? 0} interrupted · ${totals.issues} implicit issues · model calls ${totals.models.jevCalls} Jev / ${totals.models.llmCalls} LLM · ${totals.models.inputTokens.toLocaleString('en-US')} input tokens${totals.models.cost ? ` · $${totals.models.cost.toFixed(4)}` : ''} · test time ${seconds(totals.durationMs)}`);
     lines.push('');
     lines.push(...budgetLines(manifest, totals));
     lines.push(...failuresSection(results, manifest));
@@ -56,7 +56,7 @@ export function markdownReport(summary: RunSummary): string {
             if (attempt.screenshotsWithheld) { lines.push(`- ${result.id}: screenshots withheld: a declared secret was entered or shown`); }
             if (attempt.traceWithheld) { lines.push(`- ${result.id}: trace withheld because redaction failed`); }
             for (const step of attempt.steps.filter(entry => entry.kind === 'act')) {
-                lines.push(`- ${result.id}, attempt ${attempt.attempt}, step ${step.index + 1}: ${step.end?.recorded === false ? 'no end state recorded' : step.end?.checked ? `end state ${step.end.matched ? 'matched' : 'mismatched'}${step.end.missing?.length ? ` (${step.end.missing.join(', ')})` : ''}` : 'no end state checked'}${step.endMismatch ? '; endMismatch — confirm with an auto run' : ''}${step.notRecorded ? `; ${step.notRecorded}` : ''}`);
+                lines.push(`- ${result.id}, attempt ${attempt.attempt}, step ${step.index + 1}: ${step.end?.effect === 'none' ? 'no observable effect; action delivery only' : step.end?.recorded === false ? 'no end state recorded' : step.end?.checked ? `end state ${step.end.matched ? 'matched' : 'mismatched'}${step.end.missing?.length ? ` (${step.end.missing.join(', ')})` : ''}` : 'no end state checked'}${step.endMismatch ? '; endMismatch — confirm with an auto run' : ''}${step.notRecorded ? `; ${step.notRecorded}` : ''}`);
             }
         }
     }
@@ -239,14 +239,14 @@ dialog { border:0; padding:0; background:transparent; max-width:95vw; } dialog i
 <script>
 const data = JSON.parse(document.getElementById('data').textContent);
 const el = (tag, attrs = {}, ...children) => { const node = document.createElement(tag); for (const [k, v] of Object.entries(attrs)) { if (v === undefined || v === false) continue; if (k === 'class') node.className = v; else if (k.startsWith('on')) node.addEventListener(k.slice(2), v); else node.setAttribute(k, v); } for (const child of children.flat()) { if (child == null || child === false) continue; node.append(child instanceof Node ? child : document.createTextNode(String(child))); } return node; };
-const icon = s => ({ passed: '✓', failed: '✗', flaky: '≈', known: '!', skipped: '–' })[s] || '?';
+const icon = s => ({ passed: '✓', failed: '✗', flaky: '≈', known: '!', skipped: '–', unverified: '?', interrupted: '⏹' })[s] || '?';
 const secs = ms => (ms / 1000).toFixed(1) + 's';
 const m = data.manifest, t = data.totals;
 document.getElementById('title').textContent = 'jevwright · ' + m.runId + (data.live ? ' · running' : '');
 document.getElementById('meta').textContent = [m.mode + ' mode' + (m.dryRun ? ' (dry run)' : ''), m.engine, m.git ? 'git ' + m.git.sha.slice(0, 10) + (m.git.dirty ? ' (dirty)' : '') : '', m.models ? m.models.jev + ' + ' + m.models.llm : 'no models', 'origin ' + m.origin, 'started ' + m.startedAt].filter(Boolean).join(' · ');
 let filter = 'all';
 const totals = document.getElementById('totals');
-for (const [key, label] of [['all', t.tests + ' tests'], ['passed', t.passed + ' passed'], ['failed', t.failed + ' failed'], ['flaky', t.flaky + ' flaky'], ['known', (t.known || 0) + ' known'], ['skipped', t.skipped + ' skipped']]) {
+for (const [key, label] of [['all', t.tests + ' tests'], ['passed', t.passed + ' passed'], ['failed', t.failed + ' failed'], ['flaky', t.flaky + ' flaky'], ['known', (t.known || 0) + ' known'], ['skipped', t.skipped + ' skipped'], ['unverified', (t.unverified || 0) + ' unverified'], ['interrupted', (t.interrupted || 0) + ' interrupted']]) {
   totals.append(el('button', { class: 'chip', 'aria-pressed': String(key === 'all'), onclick: e => { filter = key; for (const c of totals.querySelectorAll('.chip')) c.setAttribute('aria-pressed', String(c === e.currentTarget)); render(); } }, label));
 }
 totals.append(el('span', { class: 'chip' }, t.models.jevCalls + ' Jev / ' + t.models.llmCalls + ' LLM calls · ' + t.models.inputTokens.toLocaleString() + ' input tokens' + (t.models.cost ? ' · $' + t.models.cost.toFixed(4) : '')));
