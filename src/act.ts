@@ -44,6 +44,7 @@ export interface Round {
     remaining?: number;
     navigation?: number;
     needed?: number;
+    targetAudit?: number;
     error?: number;
     anomaly?: number;
     tool: string;
@@ -409,10 +410,10 @@ async function decideLoop(input: ActInput, models: Models, actions: ActionRecord
         let decision = resolveDecision(observation, answers, input);
         const plainScrolls = recording.filter(action => action.tool === 'scroll' && !action.scrollText).length;
         const entities = searchEntities(input.instruction);
-        if (decision.tool === 'scroll' && !decision.scrollText && plainScrolls >= 2 && entities.length && observation.scrollable) {
+        if (((decision.tool === 'scroll' && !decision.scrollText) || (decision.tool === 'scroll_to' && decision.target?.scroll)) && plainScrolls >= 2 && entities.length && observation.scrollable) {
             // After two viewports, reuse the instruction entity instead of spending another model action per page.
             const selected = entities[Number(choiceOf(answers.scroll_entity)?.choice)] ?? entities[0];
-            decision = { ...decision, scrollText: selected };
+            decision = { ...decision, tool: 'scroll', scrollText: selected };
         }
         const tool = choiceOf(answers.tool);
         const target = choiceOf(answers.target);
@@ -463,9 +464,10 @@ async function decideLoop(input: ActInput, models: Models, actions: ActionRecord
         const controlCandidate = !missing.length && candidate && (candidate.ref || candidate.reveal) && ACTIVATION_ROLES.has(candidate.role) && (target?.probabilities[String(candidate.i)] ?? 0) >= 0.5 ? candidate : undefined;
         const activations = controlCandidate?.ref ? actions.filter(action => action.ok && actionTargets.get(action) === controlCandidate.ref && ['click', 'double_click', 'press_enter', 'upload'].includes(action.tool)).map(action => ({ action: action.tool, element: action.element ?? describeElement(controlCandidate), ...(action.fileKeys?.length ? { file_keys: JSON.stringify(action.fileKeys) } : {}) })) : [];
         const auditAction = (proposal: Decision, controlActivations: Array<Record<string, string>> = [], controlReview?: string) => actedOnTarget(models, [{
-            step: input.instruction, ...(input.next ? { next_step: input.next } : {}),
-            history: [{ action: proposal.tool, ...(proposal.target ? { element: describeElement(proposal.target) } : {}) }],
-            context: { page: pageState(observation), target: proposal.target?.i, ...(input.previous ? { previous_step: input.previous } : {}), prior_actions: history.filter(entry => entry.action && !entry.error), control_activations: controlActivations, ...(controlReview ? { control_review: controlReview } : {}) },
+            step: input.instruction, next_step: input.next ?? null,
+            history: history.filter(entry => entry.action && !entry.error),
+            proposal: { action: proposal.tool, ...(proposal.target ? { element: describeElement(proposal.target) } : {}) },
+            context: { page: pageState(observation), target: proposal.target?.i, ...(input.previous ? { previous_step: input.previous } : {}), control_activations: controlActivations, ...(controlReview ? { control_review: controlReview } : {}) },
         }], input.signal, 0);
         const completionProposed = done >= 0.35 || decision.tool === 'none' || activations.length > 0;
         if (saved && !missing.length && completionProposed && (acted() || done < 0.9 || proposedAction)) {
@@ -497,7 +499,7 @@ async function decideLoop(input: ActInput, models: Models, actions: ActionRecord
         if (!missing.length && (decision.tool === 'none' || (canFinish && (decision.tool === 'click' || proposedAction))) && candidate && (candidate.ref || candidate.reveal) && ACTIVATION_ROLES.has(candidate.role) && (target?.probabilities[String(candidate.i)] ?? 0) >= 0.5) {
             try {
                 const control = describeElement(candidate);
-                const answer = reviewNeeded === undefined ? await models.judge({ task: { step: input.instruction, values: modelValues(input), ...(input.next ? { next_step: input.next } : {}), history: history.filter(entry => entry.action && !entry.error) }, control, control_activations: activations }, { needed: controlQuestion(control) }, input.signal, 'control') : undefined;
+                const answer = reviewNeeded === undefined ? await models.judge({ task: { step: input.instruction, values: modelValues(input), next_step: input.next ?? null, action_scope: actionAuthorizationQuestion('Authorize only missing current-step actions.').instructions, history: history.filter(entry => entry.action && !entry.error) }, control, control_activations: activations }, { needed: controlQuestion(control) }, input.signal, 'control') : undefined;
                 const needed = reviewNeeded ?? choiceOf(answer?.needed)?.probabilities.activate;
                 if (needed === undefined) { throw new Error('Model returned no control-activation judgment'); }
                 trace.needed = round2(needed);
@@ -505,9 +507,12 @@ async function decideLoop(input: ActInput, models: Models, actions: ActionRecord
                 let activate = needed >= 0.5;
                 let controlSource: Decision['source'] = 'jev';
                 let controlReview: string | undefined;
-                if (needed > 0.15 && needed < 0.5 && escalations < 2) {
+                // An untouched concrete control can contradict completion; audit its scope before consulting the helper.
+                const unperformedCandidate = canFinish && decision.tool === 'none' && !activations.length;
+                const pendingCandidate = needed <= 0.15 && unperformedCandidate ? ((await auditAction({ tool: 'click', target: candidate, source: 'jev' }, activations))[0] ?? 0) > 0.25 : unperformedCandidate;
+                if (needed < 0.5 && (needed > 0.15 || pendingCandidate) && escalations < 2) {
                     escalations++;
-                    const review = await models.generate(`${actionAuthorizationQuestion('Review whether this observed control must be activated for the current step.', control).instructions} control_activations identifies successful actions on this exact connected DOM element despite label/count changes. First explain in reason which requested activations are still pending after control_activations. Then choose activation: finished when the requested actions were already delivered; activate only for a still-pending authorized action. Missing product content does not authorize repeating a delivered action. Count requested repeats. Judge user actions, not whether product content is correct.`, JSON.stringify({ step: input.instruction, values: modelValues(input), ...(input.next ? { next_step: input.next } : {}), history: history.filter(entry => entry.action && !entry.error), control, control_activations: activations }), z.object({ reason: z.string().max(400), activation: z.enum(['activate', 'finished']) }), input.signal, 'control');
+                    const review = await models.generate(`${actionAuthorizationQuestion('Review whether this observed control must be activated for the current step.', control).instructions} control_activations identifies successful actions on this exact connected DOM element despite label/count changes. An empty list does not negate successful history on a replaced control; inspect history and the current page before proposing a repeat. First explain in reason, in one short sentence, which requested activations remain pending after control_activations. Then choose activation: finished when the requested actions were already delivered; activate only for a still-pending authorized action. Missing product content does not authorize repeating a delivered action. Count requested repeats. Judge user actions, not whether product content is correct.`, JSON.stringify({ step: input.instruction, values: modelValues(input), next_step: input.next ?? null, history: history.filter(entry => entry.action && !entry.error), control, control_activations: activations, page: pageState(observation) }), z.object({ reason: z.string(), activation: z.enum(['activate', 'finished']) }), input.signal, 'control');
                     activate = review.activation === 'activate';
                     controlReview = review.reason;
                     controlSource = 'llm';
@@ -516,6 +521,8 @@ async function decideLoop(input: ActInput, models: Models, actions: ActionRecord
                 if (activate) {
                     // Audit this proposed action; corrected earlier mistakes must not reject the next valid control.
                     const named = await auditAction(proposedAction ? decision : { tool: 'click', target: candidate, source: controlSource }, activations, controlReview);
+                    trace.targetAudit = round2(named[0] ?? 0);
+                    input.log?.(`    control audit: ${trace.targetAudit}`);
                     // An uncertain required activation cannot establish completion; a clearly unrelated one can be ignored.
                     if ((named[0] ?? 0) > 0.25) { canFinish = false; }
                     if ((named[0] ?? 0) >= 0.75) {
@@ -533,7 +540,7 @@ async function decideLoop(input: ActInput, models: Models, actions: ActionRecord
             }
         }
         if (!canFinish && done >= THRESHOLDS.doneAt && saved && !missing.length) {
-            history.push({ event: 'Review task.step and perform only its missing requested actions. Do not add submission, confirmation, purchase or deletion that the instruction did not request.' });
+            history.push({ event: 'Review task.step and perform its missing authorized actions, including necessary final controls for its requested committed result. Respect next_step and do not repeat delivered actions.' });
         }
         const everything = acted() || round > 0;
 
@@ -822,10 +829,11 @@ function decisionState(input: ActInput, observation: Observation, history: Array
         task: {
             test: input.test,
             step: input.instruction,
+            action_scope: actionAuthorizationQuestion('Authorize only missing current-step actions.').instructions,
             ...(pageValues.length ? { page_values: pageValues } : {}),
             ...(values ? { values } : {}),
             ...(input.previous ? { previous_step: input.previous } : {}),
-            ...(input.next ? { next_step: input.next } : {}),
+            next_step: input.next ?? null,
             ...(input.double ? { note: 'Clicks in this step are performed as rapid double clicks.' } : {}),
             ...(input.expectError ? { expected_outcome: 'This step is expected to end with an error or rejection message on the page.' } : {}),
             history: history.slice(-12),
@@ -895,6 +903,7 @@ export function pageState(observation: Observation, options: { values?: boolean 
 function decisionQuestions(input: ActInput, observation: Observation, afterAction: boolean, stale: boolean): Record<string, Question> {
     const hasValues = Object.keys(input.values).length > 0;
     const pageValues = input.readPageValues ? pageValueChoices(observation, input.redact) : [];
+    const scope = actionAuthorizationQuestion('A requested committed result authorizes its necessary final control; selection or editing alone does not.', undefined, true).instructions;
     const later = input.next ? ' Work that belongs to `task.next_step` is a later step and not required here.' : '';
     const withValues = hasValues ? ', using task.values; values_entered are exact current matches, values_supplied are successful earlier inputs even after fields disappear; secret text is hidden' : '';
     const actionable = observation.elements.filter(element => (element.ref || element.reveal) && !element.disabled);
@@ -914,10 +923,10 @@ function decisionQuestions(input: ActInput, observation: Observation, afterActio
     tools.none = TOOLS.none;
     const questions: Record<string, Question> = {
         done: { type: 'boolean', instructions: `Does \`page\` show that \`task.step\` has been achieved${withValues}? Judge from \`page.text\`, \`page.notices\` and \`page.elements\`.${later}` },
-        remaining: { type: 'choice', instructions: `Have ALL requested actions in task.step been performed? Use page and task.history.${later}`, criteria: { complete: 'Every requested action is finished; checks judge product content later.', unfinished: 'A requested action is missing; never add an unrequested commit.' } },
-        navigation: { type: 'choice', instructions: 'For every navigation clause, including then open a view, was that view activated or established as current? Use successful requested activations or explicit selected/current state. A global title, URL or badge alone does not prove another view is open. Empty/loading content does not undo navigation.', criteria: { not_required: 'No view navigation requested.', reached: 'Requested views activated or current.', pending: 'A requested view is not established as current.' } },
+        remaining: { type: 'choice', instructions: `Have ALL authorized actions in task.step been performed? Use page and task.history.${later}${scope}`, criteria: { complete: 'Every requested action is finished; checks judge product content later.', unfinished: 'An authorized action remains, including a necessary final control for the requested committed result.' } },
+        navigation: { type: 'choice', instructions: 'Does task.step request a destination view to remain open at the end, including then open a view? Judge only that requested destination. Menus and pickers opened to perform later actions are prerequisites; normal closing after a choice is not missing navigation. Gestures, editing and file attachment alone require no destination view. Use successful requested navigation or selected/current state. A global title, URL or badge alone cannot prove another view is open. Empty/loading content does not undo navigation.', criteria: { not_required: 'No final destination view requested; prerequisite menus and pickers need not remain open.', reached: 'Requested views activated or current.', pending: 'A requested view is not established as current.' } },
         error: { type: 'boolean', instructions: `Does \`page\` show an error or rejection message (e.g. a validation error, a failure notice, not found, forbidden) caused by the actions in \`task.history\`?${stale ? ' Messages listed in `task.shown_before_step` were already on the page before this step began and do not count.' : ''}` },
-        tool: { type: 'choice', instructions: `What is the next action toward \`task.step\` on \`page\`, given what \`task.history\` already did? Only this step matters, not later work${input.next ? ' such as `task.next_step`' : ''}.`, criteria: tools },
+        tool: { type: 'choice', instructions: `What is the next action toward \`task.step\` on \`page\`, given what \`task.history\` already did? Only this step matters, not later work${input.next ? ' such as `task.next_step`' : ''}.${scope}`, criteria: tools },
     };
     if (afterAction) {
         questions.done_change = { type: 'boolean', instructions: `Does \`page\` show that \`task.step\` has been achieved${withValues}? Judge from \`page.text\`, \`page.elements\` and \`task.last_change\` (what the last action changed).${later}` };
@@ -1029,17 +1038,17 @@ function bestOption(options: string[], wanted: string): string {
 }
 
 function controlQuestion(control: string): Question {
-    return actionAuthorizationQuestion('Does task.step require control now? A requested result includes its necessary commit; selection/editing alone does not. next_step is later work.', control);
+    return actionAuthorizationQuestion('Does task.step require control now? A requested result includes its necessary commit; selection/editing alone does not. next_step is later work.', control, true);
 }
 
 async function confirmDone(input: ActInput, models: Models, observation: Observation, history: Array<Record<string, string>>, change: Record<string, unknown> | undefined, control?: PageElement, activations: Array<Record<string, string>> = []): Promise<{ confidence: number; decision: Decision; pTool: number; pTarget: number; navigation: number; needed?: number }> {
     const all = decisionQuestions(input, observation, true, false);
     const questions = Object.fromEntries(Object.entries(all).filter(([key]) => ['navigation', 'tool', 'target', 'value', 'option', 'input_source', 'page_value', 'key', 'times', 'press_target', 'selection_text'].includes(key)));
-    questions.complete = { type: 'choice', instructions: 'Review only actions requested by task.step, excluding all work reserved by next_step. Opening a confirmation dialog completes an initiation step when next_step confirms it. Use history, last_change and values_supplied even after fields disappear. Secrets are hidden. next_step is later work; checks judge content.', criteria: {
-        achieved: 'Requested UI actions performed; their effects are checked later. A committed result requires its necessary final control; selection/input/opening alone needs no extra commit. Tool prerequisites count.',
-        pending: 'A requested UI action is missing, not merely its expected product content. Never add an unrequested commit. Establish requested navigation by successful activation or current-view evidence.',
+    questions.complete = { type: 'choice', instructions: `${actionAuthorizationQuestion('Review whether every authorized action for task.step has been delivered.', undefined, true).instructions} Use history, last_change and values_supplied even after fields disappear. Secrets are hidden. Checks judge resulting product content.`, criteria: {
+        achieved: 'All authorized UI actions delivered, including the necessary final control for a requested committed result; code checks their effects later. Tool prerequisites count.',
+        pending: 'An authorized UI action has not been delivered; absent product content after delivery alone is not a missing action.',
     } };
-    questions.tool = { ...questions.tool!, instructions: 'If pending, choose only the next missing action requested by task.step. Never add an unrequested commit or repeat a completed action. Otherwise choose none.' };
+    questions.tool = { ...questions.tool!, instructions: `${actionAuthorizationQuestion('If pending, choose the next missing authorized action for task.step. Otherwise choose none.', undefined, true).instructions}` };
     if (control) { questions.needed = controlQuestion(describeElement(control)); }
     const summary = input.redact?.contains(observation.text) ? observation.text : observation.text.slice(0, 500);
     const state = { ...decisionState(input, { ...observation, text: summary }, history, change, []), ...(control ? { control: describeElement(control), control_activations: activations } : {}) };

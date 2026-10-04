@@ -12,7 +12,7 @@ import { act, check, reload, run, runSuite, secret, verify } from '../src/index.
 import { describePageValue, pageValueChoices, readPageValue } from '../src/page-values.ts';
 import { createRedactor } from '../src/secrets.ts';
 import { startFixtureApp } from './fixtures/app.ts';
-import { deferredPolicy, fixturePolicy, integrityPolicy, reservationPolicy, savedViewPolicy, singlePageSearchPolicy } from './support/fixture-policy.ts';
+import { deferredPolicy, fixturePolicy, gestureNavigationPolicy, integrityPolicy, reservationPolicy, reservationScopePolicy, savedViewPolicy, singlePageSearchPolicy } from './support/fixture-policy.ts';
 import { scriptedModels } from './support/scripted-models.ts';
 
 type App = Awaited<ReturnType<typeof startFixtureApp>>;
@@ -1342,7 +1342,7 @@ describe('page values and complete intentions', () => {
             steps: () => [act('Finalize the choice of the entry dated 2026-01-01'), verify('confirmed', async ({ page }) => page.getByRole('heading', { name: 'Alpha chosen and confirmed', exact: true }).isVisible())],
         };
         const result = (await suite([spec], { policy: view => {
-            if (view.history.some(entry => entry.element === 'link "Profile"')) { return { done: 0.99, achieved: 0.99, onTarget: 0.02 }; }
+            if (view.proposal?.element === 'link "Profile"' || view.history.some(entry => entry.element === 'link "Profile"')) { return { done: 0.99, achieved: 0.99, onTarget: 0.02 }; }
             if (view.text.includes('Alpha chosen')) { return view.review ? { achieved: 0.02, tool: 'click', target: element => element.role === 'link' && element.name === 'Profile' } : { done: 0.98, remaining: 0.98 }; }
             return { tool: 'click', target: element => element.name === 'Choose' };
         } }).run).results[0]!;
@@ -1454,7 +1454,7 @@ describe('integration secret purposes', () => {
 
 it('integration preserves the explicit next-step boundary at observed confidence 0.64', async () => {
     const spec: TestSpec<void> = { id: 'borderline-next-stage', title: 'Prepare and confirm separately', risk: 'A prepared dialog is rejected before the defect check', start: '/items?bug=wrong-row', fixture: async () => { app.reset(); }, invariants: [{ name: 'Other entries stay active', check: () => app.state.items.filter(item => item.id !== 'b').every(item => !item.archived) }], steps: () => [act('Start archiving the Beta plan'), act('Confirm archiving in the dialog', { expect: { write: { path: /\/archive$/ } } })] };
-    const result = (await suite([spec], { mode: 'ai', policy: view => view.step === 'Start archiving the Beta plan' && view.dialog ? { done: 0.65, remaining: 0.51, achieved: 0.64, navigation: 0.03, tool: 'none' } : fixturePolicy(view), helper: () => ({ outcome: 'step_already_done', tool: null, element: null, value_key: null, text: null, reason: 'The current action opened the confirmation dialog; confirmation is the next step' }) }).run).results[0]!;
+    const result = (await suite([spec], { mode: 'ai', policy: view => view.step === 'Start archiving the Beta plan' && view.dialog ? { done: 0.65, remaining: 0.51, achieved: 0.64, navigation: 0.03, tool: 'none' } : fixturePolicy(view), helper: view => view.control ? { reason: 'The required dialog is already open; the next step reserves confirmation', activation: 'finished' } : { outcome: 'step_already_done', tool: null, element: null, value_key: null, text: null, reason: 'The current action opened the confirmation dialog; confirmation is the next step' } }).run).results[0]!;
     expect(result.cause, result.summary).toBe('product');
     expect(result.attempts[0]!.steps[0]!.status).toBe('passed');
     expect(result.attempts[0]!.steps[1]!.failure).toBe('invariant');
@@ -1680,7 +1680,7 @@ it('reach2 preserves helper text selection when Jev proposes typing into the sam
 it('reach2 audits a pending activation independently from corrected earlier input', async () => {
     const spec: TestSpec<void> = { id: 'corrected-input-commit', title: 'Correct and store a cost', risk: 'An earlier input mistake suppresses the required commit', start: '/surface-labels', data: { cost: '17.25', mistake: '9.00' }, steps: () => [act('Correct Cost to {cost}, then Store entry'), verify('stored', ({ page }) => page.locator('#status').textContent().then(text => text === 'Entry stored'), { timeoutMs: 500 })] };
     const result = (await suite([spec], { mode: 'ai', policy: view => {
-        if (!view.url && !view.control && view.history.length) { return { onTarget: view.history.some(entry => entry.action === 'type') ? 0.01 : 0.99 }; }
+        if (!view.url && !view.control && (view.proposal || view.history.length)) { return { onTarget: (view.proposal ? [view.proposal] : view.history).some(entry => entry.action === 'type') ? 0.01 : 0.99 }; }
         if (view.notices.includes('Entry stored')) { return { done: 0.99 }; }
         const types = view.history.filter(entry => entry.action === 'type').length;
         return types < 3 ? { tool: 'type', target: element => element.name === 'Cost', value: types ? 'cost' : 'mistake' } : { tool: 'click', target: element => element.name === 'Store entry', done: 0.9, achieved: 0.7, remaining: 0.1, needed: 0.95 };
@@ -1713,6 +1713,64 @@ describe('merge completion regressions', () => {
         if (bug === 'missing') { expect(result.cause).toBe('product'); }
         expect(result.attempts[0]?.steps[0]?.actions?.map(action => action.element)).toEqual(['button "Open calendar"', 'button "4" near "August 2027"', 'button "Confirm reservation"']);
     });
+    it.each(['healthy', 'missing'])('uses shared authorization before accepting a strong selection-only completion: %s', async bug => {
+        const spec: TestSpec<void> = { id: 'reservation-scope', title: 'Commit the requested reservation', risk: 'Completion and control reviews disagree about necessary final actions', start: '/completion-calendar?bug=' + bug, steps: () => [act('Reserve the date requested on the page'), verify('reservation committed', ({ page }) => page.locator('#receipt').textContent().then(text => text === 'Reservation confirmed'), { timeoutMs: 1 })] };
+        const result = (await suite([spec], { mode: 'ai', policy: reservationScopePolicy }).run).results[0]!;
+        expect(result.status, result.summary).toBe(bug === 'healthy' ? 'passed' : 'failed');
+        if (bug === 'missing') { expect(result.cause).toBe('product'); }
+        expect(result.attempts[0]?.steps[0]?.actions?.map(action => action.element)).toEqual(['button "Open calendar"', 'button "4" near "August 2027"', 'button "Confirm reservation"']);
+    });
+    it.each(['healthy', 'missing'])('reviews an unactivated confident candidate despite a low necessity guess: %s', async bug => {
+        const spec: TestSpec<void> = { id: 'reservation-low-necessity', title: 'Commit a reservation', risk: 'A confident target conflicts with selection-only completion', start: '/completion-calendar?bug=' + bug, steps: () => [act('Reserve the date requested on the page'), verify('reservation committed', ({ page }) => page.locator('#receipt').textContent().then(text => text === 'Reservation confirmed'), { timeoutMs: 1 })] };
+        const policy = (view: Parameters<typeof reservationPolicy>[0]) => view.control ? { needed: 0.06 } : { ...reservationPolicy(view), pTarget: 0.69 };
+        const result = (await suite([spec], { mode: 'ai', policy, helper: () => ({ activation: 'activate', reason: 'The requested reservation requires its unperformed final confirmation' }) }).run).results[0]!;
+        expect(result.status, result.summary).toBe(bug === 'healthy' ? 'passed' : 'failed');
+        if (bug === 'missing') { expect(result.cause).toBe('product'); }
+        expect(result.attempts[0]?.steps[0]?.actions?.map(action => action.element)).toEqual(['button "Open calendar"', 'button "4" near "August 2027"', 'button "Confirm reservation"']);
+    });
+    it('accepts a complete control judgment with a long explanation before auditing its action', async () => {
+        const spec: TestSpec<void> = { id: 'reservation-control-reason', title: 'Confirm a reservation', risk: 'A valid activation is rejected because its explanation is verbose', start: '/completion-calendar', steps: () => [act('Reserve the date requested on the page'), verify('reservation committed', ({ page }) => page.locator('#receipt').textContent().then(text => text === 'Reservation confirmed'), { timeoutMs: 1 })] };
+        const result = (await suite([spec], { mode: 'ai', policy: reservationPolicy, helper: () => ({ reason: 'The requested final confirmation is still pending. '.repeat(12), activation: 'activate' }) }).run).results[0]!;
+        expect(result.status, result.summary).toBe('passed');
+        expect(result.attempts[0]?.steps[0]?.actions?.map(action => action.element)).toEqual(['button "Open calendar"', 'button "4" near "August 2027"', 'button "Confirm reservation"']);
+    });
+    it.each(['healthy', 'missing'])('states that no later action step reserves the necessary confirmation: %s', async bug => {
+        const spec: TestSpec<void> = { id: 'reservation-no-next', title: 'Reserve without a later action', risk: 'An invented later step forbids the necessary confirmation', start: '/completion-calendar?bug=' + bug, steps: () => [act('Reserve the date requested on the page'), verify('reservation committed', ({ page }) => page.locator('#receipt').textContent().then(text => text === 'Reservation confirmed'), { timeoutMs: 1 })] };
+        const policy = (view: Parameters<typeof reservationPolicy>[0]) => {
+            if (view.next !== null && !view.history.some(entry => entry.element?.includes('Confirm reservation'))) {
+                if (view.control) { return { needed: 0.02 }; }
+                if (view.history.some(entry => entry.element?.includes('button "4"'))) { return { done: 0.96, achieved: 0.98, remaining: 0.02, tool: 'none' as const, target: (element: import('./support/scripted-models.ts').ViewElement) => element.name === 'Confirm reservation' }; }
+            }
+            return reservationPolicy(view);
+        };
+        const result = (await suite([spec], { mode: 'ai', policy, helper: view => ({ reason: view.next === null ? 'No later action reserves the required final confirmation' : 'A presumed later action reserves confirmation', activation: view.next === null ? 'activate' : 'finished' }) }).run).results[0]!;
+        expect(result.status, result.summary).toBe(bug === 'healthy' ? 'passed' : 'failed');
+        if (bug === 'missing') { expect(result.cause).toBe('product'); }
+        expect(result.attempts[0]?.steps[0]?.actions?.map(action => action.element)).toEqual(['button "Open calendar"', 'button "4" near "August 2027"', 'button "Confirm reservation"']);
+    });
+    it.each(['healthy', 'missing'])('audits necessary unnamed final controls as authorized actions: %s', async bug => {
+        const spec: TestSpec<void> = { id: 'reservation-authorized-audit', title: 'Authorize final reservation control', risk: 'Literal target naming conflicts with the authorized requested outcome', start: '/completion-calendar?bug=' + bug, steps: () => [act('Reserve the date requested on the page'), verify('reservation committed', ({ page }) => page.locator('#receipt').textContent().then(text => text === 'Reservation confirmed'), { timeoutMs: 1 })] };
+        const policy = (view: View) => !view.url && !view.control ? { onTarget: /"authorized":/.test(view.instructions ?? '') ? 0.98 : 0.68 } : reservationPolicy(view);
+        const result = (await suite([spec], { mode: 'ai', policy, helper: () => ({ reason: 'The final confirmation is required by the requested result', activation: 'activate' }) }).run).results[0]!;
+        expect(result.status, result.summary).toBe(bug === 'healthy' ? 'passed' : 'failed');
+        if (bug === 'missing') { expect(result.cause).toBe('product'); }
+        expect(result.attempts[0]?.steps[0]?.actions?.map(action => action.element)).toEqual(['button "Open calendar"', 'button "4" near "August 2027"', 'button "Confirm reservation"']);
+    });
+    it.each(['healthy', 'missing'])('keeps a proposed confirmation separate from delivered history: %s', async bug => {
+        const spec: TestSpec<void> = { id: 'reservation-pending-proposal', title: 'Review a pending confirmation', risk: 'The audit treats its own proposed click as already delivered', start: '/completion-calendar?bug=' + bug, steps: () => [act('Reserve the date requested on the page'), verify('reservation committed', ({ page }) => page.locator('#receipt').textContent().then(text => text === 'Reservation confirmed'), { timeoutMs: 1 })] };
+        const policy = (view: View) => !view.url && !view.control ? { onTarget: view.proposal ? /Otherwise audit/.test(view.instructions ?? '') ? 0.48 : 0.98 : !view.history.some(entry => entry.element?.includes('Confirm reservation')) ? 0.98 : 0.25 } : reservationPolicy(view);
+        const result = (await suite([spec], { mode: 'ai', policy, helper: () => ({ reason: 'The final confirmation is pending', activation: 'activate' }) }).run).results[0]!;
+        expect(result.status, result.summary).toBe(bug === 'healthy' ? 'passed' : 'failed');
+        if (bug === 'missing') { expect(result.cause).toBe('product'); }
+        expect(result.attempts[0]?.steps[0]?.actions?.map(action => action.element)).toEqual(['button "Open calendar"', 'button "4" near "August 2027"', 'button "Confirm reservation"']);
+    });
+    it.each(['healthy', 'missing'])('does not require a destination view after delivered compound gestures: %s', async bug => {
+        const spec: TestSpec<void> = { id: 'gesture-navigation', title: 'Hold and inspect an item', risk: 'Navigation review blocks a completed action without a requested view', start: '/completion-gestures?bug=' + bug, steps: () => [act('Long-press Hold item, then double-click Inspect item'), verify('gestures applied', async ({ page }) => await page.locator('#held').textContent() === 'Held' && await page.locator('#inspected').textContent() === 'Inspected', { timeoutMs: 1 })] };
+        const result = (await suite([spec], { mode: 'ai', policy: gestureNavigationPolicy }).run).results[0]!;
+        expect(result.status, result.summary).toBe(bug === 'healthy' ? 'passed' : 'failed');
+        if (bug === 'missing') { expect(result.cause).toBe('product'); }
+        expect(result.attempts[0]?.steps[0]?.actions?.map(action => action.tool)).toEqual(['long_press', 'double_click']);
+    });
     it.each(['healthy', 'empty'])('opens the requested list after saving before checking content: %s', async bug => {
         const spec: TestSpec<void> = { id: 'saved-view-flow', title: 'Save and open a list', risk: 'A badge hides unopened content', start: '/completion-list?bug=' + bug, steps: () => [act('Save the entry, then open the Saved entries view'), verify('list contains the entry', ({ page }) => page.locator('#panel').textContent().then(text => text === 'Saved entriesField notes'), { timeoutMs: 1 })] };
         const result = (await suite([spec], { mode: 'ai', policy: savedViewPolicy }).run).results[0]!;
@@ -1720,15 +1778,16 @@ describe('merge completion regressions', () => {
         if (bug === 'empty') { expect(result.cause).toBe('product'); }
         expect(result.attempts[0]?.steps[0]?.actions?.map(action => action.element)).toEqual(['button "Save entry"', 'button "Saved entries (1)"']);
     });
-    it('switches from two single-page scrolls to an instruction entity search', async () => {
+    it.each(['scroll', 'scroll_to'])('switches from two single-page scrolls to an instruction entity search despite %s', async tool => {
         const spec: TestSpec<void> = { id: 'search-after-scrolls', title: 'Find an archive entity', risk: 'Single pages exhaust the action budget', start: '/surface-search', steps: () => [act('Find Special entry (record 812), then open the entry', { maxActions: 5 }), verify('entry opened', ({ page }) => page.getByRole('status').textContent().then(text => text === 'Entry opened'), { timeoutMs: 1 })] };
-        const recordingsDir = join(root, 'search-after-scrolls');
-        const result = (await suite([spec], { policy: singlePageSearchPolicy, recordingsDir }).run).results[0]!;
+        const recordingsDir = join(root, 'search-after-scrolls-' + tool);
+        const policy = (view: Parameters<typeof singlePageSearchPolicy>[0]) => { const decision = singlePageSearchPolicy(view); return tool === 'scroll_to' && decision.tool === 'scroll' && view.history.filter(entry => entry.action === 'scroll').length >= 2 ? { ...decision, tool: 'scroll_to' as const } : decision; };
+        const result = (await suite([spec], { policy, recordingsDir }).run).results[0]!;
         expect(result.status, result.summary).toBe('passed');
         const stored = JSON.parse(await readFile(join(recordingsDir, spec.id + '.json'), 'utf8'));
         expect(stored.steps[0].actions[2]).toMatchObject({ tool: 'scroll', scrollText: 'record 812' });
         expect((await suite([spec], { mode: 'replay', recordingsDir }).run).totals.passed).toBe(1);
-    });
+    }, 90_000);
 });
 
 describe('merge origin binding', () => {

@@ -57,6 +57,12 @@ function escapeHtml(text: string): string {
 function pages(state: FixtureState, url: URL): string | undefined {
     const bug = url.searchParams.get('bug');
     switch (url.pathname) {
+        case '/completion-gestures':
+            return layout('Item gestures', '<button id="hold">Hold item</button><output id="held">Ready</output><button id="inspect">Inspect item</button><output id="inspected">Ready</output>', `
+let down = 0; document.getElementById('hold').onpointerdown = () => { down = Date.now(); };
+document.getElementById('hold').onpointerup = () => { if (Date.now() - down >= 600) document.getElementById('held').textContent = 'Held'; };
+document.getElementById('inspect').ondblclick = () => { if (!location.search.includes('missing')) document.getElementById('inspected').textContent = 'Inspected'; };
+`);
         case '/completion-calendar':
             return layout('Reservation desk', '<p>Reserve August 4, 2027.</p><form aria-label="Reservation"><label>Date<output id="date"></output></label><button type="button" id="calendar">Open calendar</button><div id="picker" role="dialog" aria-label="August 2027" hidden><h2>August 2027</h2><button type="button" id="day">4</button></div><button type="button" id="confirm">Confirm reservation</button></form><output id="receipt"></output>', `
 document.getElementById('calendar').onclick = () => document.getElementById('picker').hidden = false;

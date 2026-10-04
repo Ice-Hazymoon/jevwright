@@ -15,9 +15,11 @@ export interface View {
     auditContext?: { prior_actions?: Array<Record<string, string>>; control_activations?: Array<Record<string, string>> };
     review?: boolean;
     instructions?: string;
+    actionScope?: string;
+    proposal?: Record<string, string>;
     change?: Record<string, unknown>;
     /** The following act step, when the engine shares it. */
-    next?: string;
+    next?: string | null;
     claim?: string;
     priorActions: Array<{ step: string; history: Array<Record<string, string>> }>;
     pageValues: string[];
@@ -57,6 +59,7 @@ export interface Belief {
     remaining?: number;
     navigation?: number;
     needed?: number;
+    pTarget?: number;
     pageValue?: string;
     inputSource?: 'step' | 'page' | 'clear';
     error?: number;
@@ -82,7 +85,7 @@ export interface Belief {
 
 export interface ScriptedCall { questions: string[]; view: View }
 
-const onTarget = (p: number): Answer => ({ type: 'choice', choice: p >= 0.5 ? 'named' : 'different', probabilities: { named: p, different: 1 - p } });
+const onTarget = (p: number, authorized = false): Answer => { const key = authorized ? 'authorized' : 'named'; return { type: 'choice', choice: p >= 0.5 ? key : 'different', probabilities: { [key]: p, different: 1 - p } }; };
 
 /**
  * Deterministic stand-in for Jev and the helper LLM, driven through the real AI SDK
@@ -105,7 +108,7 @@ export function scriptedModels(policy: (view: View) => Belief, helper?: (view: V
             const audited = ((state as { steps?: Array<Record<string, unknown>> }).steps ?? []).map(entry => policy({ ...toView({ task: entry }), instructions: JSON.stringify(questions) }));
             for (const [id, question] of Object.entries(questions)) {
                 const step = /^on_target_(\d+)$/.exec(id);
-                answers[id] = step ? onTarget(audited[Number(step[1])]?.onTarget ?? 0.95) : answer(id, question, id === 'needed' ? controlBelief : belief, view);
+                answers[id] = step ? onTarget(audited[Number(step[1])]?.onTarget ?? 0.95, question.type === 'choice' && Object.hasOwn(question.criteria, 'authorized')) : answer(id, question, id === 'needed' ? controlBelief : belief, view);
             }
             return { answers, usage: { inputTokens: 1000, outputTokens: 10 }, warnings: [], ...cost };
         },
@@ -115,7 +118,7 @@ export function scriptedModels(policy: (view: View) => Belief, helper?: (view: V
             const text = JSON.stringify(prompt);
             const payload = JSON.parse(extractJson(text)) as Record<string, unknown>;
             const view = toView({ task: { step: payload.step, values: payload.values, history: payload.history, next_step: payload.next_step }, page: payload.page, claim: payload.claim, prior_actions: payload.prior_actions, control: payload.control, control_activations: payload.control_activations });
-            const output = helper?.(view, String(payload.why_you_are_asked ?? '')) ?? { outcome: 'impossible', tool: null, element: null, value_key: null, text: null, reason: 'scripted helper has no answer' };
+            const output = helper?.(view, String(payload.why_you_are_asked ?? '')) ?? (payload.control ? { reason: 'The fixture policy requested no pending activation of this control', activation: 'finished' } : { outcome: 'impossible', tool: null, element: null, value_key: null, text: null, reason: 'scripted helper has no answer' });
             return {
                 content: [{ type: 'text', text: JSON.stringify(output) }],
                 finishReason: { unified: 'stop', raw: 'stop' },
@@ -179,7 +182,7 @@ function answer(id: string, question: EvaluationQuestion, belief: Belief, view: 
         chosen = belief.support === 'supports' && (belief.holds ?? 0) >= 0.7 ? field ?? options.find(option => quoted(option).source === 'text') ?? 'none' : 'none';
     }
     if (id === 'region') { chosen = belief.region ?? 'unknown'; }
-    return distribution(options, chosen && options.includes(chosen) ? chosen : undefined, id === 'support' ? belief.pSupport : undefined);
+    return distribution(options, chosen && options.includes(chosen) ? chosen : undefined, id === 'support' ? belief.pSupport : id === 'target' ? belief.pTarget : undefined);
 }
 
 /** A confident choice, or a flat distribution when the script has no opinion. */
@@ -196,9 +199,11 @@ function toView(state: Record<string, unknown>): View {
     const page = (state.page ?? {}) as Record<string, unknown>;
     return {
         ...(typeof task.step === 'string' ? { step: task.step } : {}),
+        ...(typeof task.action_scope === 'string' ? { actionScope: task.action_scope } : {}),
+        ...(task.proposal ? { proposal: task.proposal as Record<string, string> } : {}),
         ...(typeof state.field === 'string' ? { field: state.field } : {}),
         ...(typeof state.control === 'string' ? { control: state.control } : {}),
-        ...(typeof task.next_step === 'string' ? { next: task.next_step } : {}),
+        ...(task.next_step === null || typeof task.next_step === 'string' ? { next: task.next_step } : {}),
         ...(typeof state.claim === 'string' ? { claim: state.claim } : {}),
         priorActions: (state.prior_actions ?? []) as View['priorActions'],
         pageValues: (task.page_values ?? []) as string[],

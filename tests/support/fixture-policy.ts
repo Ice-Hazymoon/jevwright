@@ -214,6 +214,18 @@ export function reservationPolicy(view: View): Belief {
         ? { tool: 'click', target: is('button', '4') } : { tool: 'click', target: is('button', 'Open calendar') };
 }
 
+/** Reproduce a strong completion guess when the completion question omits the shared action scope. */
+export function reservationScopePolicy(view: View): Belief {
+    const confirms = view.history.some(entry => entry.element?.includes('Confirm reservation'));
+    if (view.control && !confirms) { return { needed: 0.06 }; }
+    if (view.url && !confirms && view.history.some(entry => entry.element?.includes('button "4"'))) {
+        const question = JSON.parse(view.instructions ?? '{}').complete;
+        const shared = question?.instructions?.includes('Only the current step authorizes actions.') || (question?.instructions?.includes('Apply task.action_scope.') && view.actionScope?.includes('Only the current step authorizes actions.'));
+        return { done: 0.96, achieved: shared ? 0.02 : 0.98, remaining: 0.02, tool: shared ? 'click' : 'none', target: is('button', 'Confirm reservation') };
+    }
+    return reservationPolicy(view);
+}
+
 /** Reproduce a badge/global-heading completion guess before the requested view is opened. */
 export function savedViewPolicy(view: View): Belief {
     const opened = view.history.some(entry => entry.element?.includes('Saved entries (1)'));
@@ -230,4 +242,13 @@ export function singlePageSearchPolicy(view: View): Belief {
     if (view.notices.includes('Entry opened')) { return { done: 0.99 }; }
     if (view.elements.some(is('button', 'Open entry'))) { return { tool: 'click', target: is('button', 'Open entry') }; }
     return { tool: 'scroll', target: element => Boolean(element.scroll) };
+}
+
+/** Reproduce navigation uncertainty after a compound gesture that has no destination view. */
+export function gestureNavigationPolicy(view: View): Belief {
+    if (!view.history.some(entry => entry.action === 'long_press')) { return { tool: 'long_press', target: is('button', 'Hold item') }; }
+    if (!view.history.some(entry => entry.action === 'double_click')) { return { tool: 'double_click', target: is('button', 'Inspect item') }; }
+    const question = JSON.parse(view.instructions ?? '{}').navigation;
+    const scoped = question?.instructions?.includes('prerequisites');
+    return { done: 0.97, achieved: 0.99, remaining: 0.02, navigation: view.review && !scoped ? 0.64 : 0.01, tool: 'none' };
 }

@@ -3,9 +3,14 @@
 ## Unreleased
 
 - Bind newly recorded app routes to the current baseURL while enforcing literal third-party origins and retaining legacy path-only replay.
-- Share action authorization between control review and target audit; retain flow, prior activation and next-step context so required confirmations and view navigation execute before completion.
+- Pass explicit absent next-step boundaries and current-page evidence to completion/control reviews; never infer a later confirmation step.
+- Separate not-yet-executed audit proposals from delivered action history, retaining corrected-input and repeat-count context.
+- Share action authorization across decisions, completion, control review and target audit; retain flow, prior activation and next-step context so required confirmations and view navigation execute before completion.
+- Review confident unactivated completion candidates with the helper even when necessity is low; audit every helper-proposed activation.
+- Accept valid control judgments with verbose explanations within the existing output-token budget instead of rejecting their activation solely on explanation length.
 - Ask the control helper to explain pending work before selecting activate/finished, keeping delivered actions distinct from missing product content.
-- Redirect repeated single-page scrolling toward literal instruction-entity search after two moves.
+- Redirect repeated single-page scrolling and container-only scroll_to toward literal instruction-entity search after two moves.
+- Require current-view evidence only for requested destination views; completed gestures, uploads and closed prerequisite menus do not create missing navigation.
 
 - Mask password selections before DOM data returns, preserving protection in traceable reads.
 
