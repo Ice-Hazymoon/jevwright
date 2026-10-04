@@ -7,6 +7,7 @@
 - Record repeated instructions separately, reject changed duplicate counts, and save verified prefixes of failed attempts as partial recordings.
 - Attribute thrown verification assertions and same-step server rejection evidence correctly. Preserve omitted failures across partial reruns and report interruption separately.
 - Keep DOM text intact until secret protection can run before truncation.
+- Report actual replay mismatches to healing, and exclude cached route differences alone from missing-effect product attribution. Cross-origin healing remains a known limitation.
 
 - Judge whether a check's expected region is open and visible independently from its content. Attribute missing content in an open region to the product, and unopened or unknown regions to the agent after review. Preserve prior successful action evidence to identify the asserted object.
 - Exclude native folded detail contents even when the browser retains their earlier layout dimensions.

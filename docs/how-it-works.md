@@ -180,6 +180,8 @@ fields. That history does not replace an independent check of the accepted resul
 Replay checks declared expectations and recorded end states. The engine polls end states for up to
 five seconds. New alerts, invalid fields and visible validation error regions stop replay in both replay and auto modes.
 An observed rejected declared request retains its expectation failure even when a validation message appears.
+Healing receives the actual missing conditions and current route. A cached route difference alone does
+not establish a missing product effect when all other recorded conditions match.
 Legacy recordings without end states still verify action delivery; their missing evidence is not reconstructed.
 
 - In auto mode a missing target or mismatched end state triggers AI healing from the current page.

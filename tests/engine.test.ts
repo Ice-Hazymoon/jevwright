@@ -162,6 +162,34 @@ describe('integrity regression paths', () => {
         expect(replay.results[0]?.status).toBe('failed');
         expect(replay.results[0]?.summary).toContain('already present before replay');
     });
+    it('does not call a route-only replay mismatch a missing product effect', async () => {
+        const recordingsDir = join(root, 'integrity-route-attribution');
+        const spec = { ...base, steps: () => [act('Save draft', { maxActions: 1 })] };
+        expect((await suite([spec], { recordingsDir, policy }).run).totals.passed).toBe(1);
+        const path = join(recordingsDir, base.id + '.json');
+        const recording = JSON.parse(await readFile(path, 'utf8'));
+        recording.steps[0].end.route = 'http://127.0.0.1:1/integrity';
+        await writeFile(path, JSON.stringify(recording));
+        const auto = await suite([spec], { recordingsDir, policy: () => ({ done: 0.01, tool: 'none', onTarget: 0.99 }) }).run;
+        expect(auto.results[0]?.cause).toBe('agent');
+        const replay = await suite([spec], { recordingsDir, mode: 'replay' }).run;
+        expect(replay.results[0]?.status).toBe('failed');
+        expect(replay.results[0]?.attempts[0]?.steps[0]?.failure).toBe('end-mismatch');
+    });
+    it('tells healing which end condition mismatched instead of claiming all effects are missing', async () => {
+        const recordingsDir = join(root, 'integrity-route-history');
+        const spec = { ...base, steps: () => [act('Save draft'), verify('receipt', ({ page }) => page.getByRole('heading', { name: 'Draft stored', exact: true }).isVisible())] };
+        expect((await suite([spec], { recordingsDir, policy }).run).totals.passed).toBe(1);
+        const path = join(recordingsDir, base.id + '.json');
+        const recording = JSON.parse(await readFile(path, 'utf8'));
+        recording.steps[0].end.route = 'http://127.0.0.1:1/integrity';
+        await writeFile(path, JSON.stringify(recording));
+        const informed = (view: View) => view.history.some(entry => entry.event?.includes('recorded end state missing: route ')) ? { done: 0.99 } : { done: 0.01, tool: 'none' };
+        const auto = await suite([spec], { recordingsDir, policy: informed }).run;
+        expect(auto.results[0]?.status).toBe('passed');
+        expect(auto.results[0]?.attempts[0]?.steps[0]?.endMismatch).toBe(true);
+        expect(await readFile(path, 'utf8')).toBe(JSON.stringify(recording));
+    });
     it.each(['replay', 'auto'] as const)('retains replay validation as agent with a validation body in %s', async mode => {
         const recordingsDir = join(root, 'integrity-replay-validation');
         const spec = { ...base, steps: () => [act('Save draft')] };

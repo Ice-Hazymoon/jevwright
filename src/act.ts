@@ -172,7 +172,7 @@ export async function runAct(input: ActInput): Promise<ActResult> {
                 mismatch = true;
                 replayMiss = `recorded end state missing: ${end.missing?.join(', ')}`;
                 if (!input.models) { return finish({ status: 'failed', source: 'replay', failure: 'end-mismatch', reason: replayMiss, endMismatch: true }); }
-                input.events.push('replayed actions ran but the recorded effect did not appear');
+                input.events.push(`${replayMiss}; current route ${input.redact?.text(input.page.url()) ?? input.page.url()}${end.missing?.every(anchor => anchor.startsWith('route ')) ? '; all other recorded end conditions matched' : ''}`);
             }
         } else { replayMiss = replay.reason; }
         input.log?.(`    replay miss: ${replayMiss}`);
@@ -191,7 +191,8 @@ export async function runAct(input: ActInput): Promise<ActResult> {
         return finish({ ...result, source: 'healed', discardRecording: true });
     }
     if (mismatch && result.status === 'failed') {
-        if (unique && ['stuck', 'max-actions', 'not-found', 'ambiguous'].includes(result.failure ?? '')) {
+        // A cached route difference alone does not prove that the product failed to show the action's effect.
+        if (unique && end.missing?.some(anchor => !anchor.startsWith('route ')) && ['stuck', 'max-actions', 'not-found', 'ambiguous'].includes(result.failure ?? '')) {
             const history = actions.filter(action => action.source === 'replay' && action.ok).map(action => ({ action: action.tool, ...(action.element ? { element: action.element } : {}) }));
             const probability = await actedOnTarget(input.models, [{ step: input.instruction, history }], input.signal, 0).catch(() => []);
             if ((probability[0] ?? 0) >= 0.75) {
