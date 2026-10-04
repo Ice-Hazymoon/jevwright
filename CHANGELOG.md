@@ -2,11 +2,18 @@
 
 ## Unreleased
 
+- Permit editor/selection prerequisites that reveal required final controls; an individual action need not finish the whole step.
+- Observe computed bold/italic/underline ranges in exact editable values, and bind new recording/check evidence to those ranges. Preserve legacy evidence behavior. Keep inline editor text whole for secret protection.
+
+- Review required actions separately from merely permitted actions; retain necessary final controls and code verification of their effects.
+
+- Match requested entities and values through visible control context; state the actual reserved next action in shared authorization judgments; evaluate successful delivery separately from absent product effects and corrected failed attempts. Historical target audits judge the delivered sequence without requiring product success. Completion reviews use successful deliveries while full decision history retains failed attempts.
+
 - Bind newly recorded app routes to the current baseURL while enforcing literal third-party origins and retaining legacy path-only replay.
 - Pass explicit absent next-step boundaries and current-page evidence to completion/control reviews; never infer a later confirmation step.
 - Separate not-yet-executed audit proposals from delivered action history, retaining corrected-input and repeat-count context.
 - Share action authorization across decisions, completion, control review and target audit; retain flow, prior activation and next-step context so required confirmations and view navigation execute before completion.
-- Review confident unactivated completion candidates with the helper even when necessity is low; audit every helper-proposed activation.
+- Review confident unactivated completion candidates with the helper even when necessity is low; audit every activation proposed by the control helper.
 - Accept valid control judgments with verbose explanations within the existing output-token budget instead of rejecting their activation solely on explanation length.
 - Ask the control helper to explain pending work before selecting activate/finished, keeping delivered actions distinct from missing product content.
 - Redirect repeated single-page scrolling and container-only scroll_to toward literal instruction-entity search after two moves.

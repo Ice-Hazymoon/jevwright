@@ -1387,3 +1387,50 @@ describe('merge route contracts', () => {
         expect(endMatches({ path: '/draft' }, page).matched).toBe(true);
     });
 });
+
+
+it('merge observes editable formatting and binds replay evidence to its exact ranges', async () => {
+    const { checkEvidenceCandidates, checkEvidenceMatches } = await import('../src/judge.ts');
+    const { recordEnd, endMatches } = await import('../src/end-state.ts');
+    await open('/surface-editor', async page => {
+        await page.locator('#editor').fill('ship confirmed');
+        const before = await observe(page);
+        await page.locator('#editor').evaluate(element => { element.innerHTML = 'ship <b>confirmed</b>'; });
+        const after = await observe(page);
+        const field = named(after, 'textbox', 'Document')[0]!;
+        expect(field).toHaveProperty('formatting', [
+            { start: 0, end: 5, bold: false, italic: false, underline: false },
+            { start: 5, end: 14, bold: true, italic: false, underline: false },
+        ]);
+        expect(after.signature).not.toBe(before.signature);
+        const evidence = checkEvidenceCandidates(after).filter(entry => entry.target?.name === 'Document');
+        expect(checkEvidenceMatches(evidence, after)).toBe(true);
+        expect(checkEvidenceMatches(evidence, before)).toBe(false);
+        const end = recordEnd(before, after, []);
+        const { createRecordingStore } = await import('../src/recording.ts');
+        const directory = await mkdtemp(join(tmpdir(), 'formatting-recording-'));
+        try {
+            const store = createRecordingStore(directory);
+            await store.save({ version: 1, test: 'formatting', updatedAt: new Date().toISOString(), steps: [{ key: 'formatting', instruction: 'Format the selected word', actions: [], end, checkEvidence: evidence }] });
+            const loaded = await store.load('formatting');
+            expect(loaded?.steps[0]?.end).toEqual(end);
+            expect(loaded?.steps[0]?.checkEvidence).toEqual(evidence);
+        } finally { await rm(directory, { recursive: true, force: true }); }
+        expect(endMatches(end, after, before).matched).toBe(true);
+        expect(endMatches(end, before, before).matched).toBe(false);
+        const legacy = { ...end, values: end.values?.map(({ formatting: _, ...value }) => value) };
+        expect(endMatches(legacy, before, before).matched).toBe(true);
+    });
+});
+
+it('merge does not split protected editable values into formatted text fragments', async () => {
+    const { createRedactor, secret } = await import('../src/secrets.ts');
+    await open('/surface-editor', async page => {
+        await page.locator('#editor').evaluate(element => { element.innerHTML = 'private-<b>sequence-829173</b>'; });
+        const redact = createRedactor([secret('private-sequence-829173')]);
+        const observation = redact.value(await observe(page, { redact }));
+        expect(named(observation, 'textbox', 'Document')[0]).not.toHaveProperty('formatting');
+        expect(JSON.stringify(observation)).not.toContain('private-');
+        expect(JSON.stringify(observation)).not.toContain('sequence-829173');
+    });
+});

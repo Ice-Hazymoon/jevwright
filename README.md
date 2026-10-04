@@ -208,7 +208,7 @@ with an auto run; a mismatch alone does not establish a product defect.
 
   When one of these is only a precondition, do it in a `fixture` or `run` step. When it is the behavior under test, use a scripted Playwright test.
 - Declarative closed shadow roots are not captured. The engine wraps `attachShadow` and keeps references to script-created roots; the roots retain their original mode.
-- Dragging covers HTML drag-and-drop and pointer gestures. Drawing still needs scripted Playwright steps. Keyboard shortcuts and exact editable text selection can drive rich-text formatting.
+- Dragging covers HTML drag-and-drop and pointer gestures. Drawing still needs scripted Playwright steps. Keyboard shortcuts and exact editable text selection can drive rich-text formatting. Computed format ranges are available only when text-node offsets match the complete unprotected rendered value; use code verification for the required formatting.
 - Scroll searches use a container-sized budget, share at most 120 seconds per step, and stop after 500 viewports or five unchanged positions. Missing goals fail explicitly.
 - Desktop defaults to 1280×900. Use `device: "mobile"` for touch and a mobile user agent, or provide a custom device.
 - Page values can be entered only when their exact text appears in the current observation. Replay re-reads them from recorded surrounding text; changed or ambiguous sources need an auto run. Declared secrets remain available only through their keys.

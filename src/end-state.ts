@@ -53,7 +53,8 @@ export function recordEnd(start: Observation, end: Observation, actions: Recorde
         const states = durableStates(element.states);
         const valueChanged = element.value !== undefined && element.value !== before?.value;
         const stateChanged = JSON.stringify(states ?? []) !== JSON.stringify(durableStates(before?.states) ?? []);
-        if (!valueChanged && !stateChanged) { return []; }
+        const formattingChanged = element.formatting !== undefined && JSON.stringify(element.formatting) !== JSON.stringify(before?.formatting);
+        if (!valueChanged && !stateChanged && !formattingChanged) { return []; }
         const typed = actions.findLast(action => {
             if (!action.target || !['type', 'select'].includes(action.tool)) { return false; }
             if (resolveTarget(action.target, end, true)?.i === element.i) { return true; }
@@ -67,7 +68,7 @@ export function recordEnd(start: Observation, end: Observation, actions: Recorde
         const dynamic = typed?.valueKey
             ? element.value === data[typed.valueKey] ? { valueKey: typed.valueKey } : template.includes(`{${typed.valueKey}}`) ? { template } : {}
             : typed?.pageValue ? { pageValue: typed.pageValue } : typed?.template ? { template: typed.template } : {};
-        const anchor: ValueAnchor = { target, ...(valueChanged && !Object.keys(dynamic).length ? { value: element.value } : dynamic), ...(stateChanged ? { states: states ?? [] } : {}) };
+        const anchor: ValueAnchor = { target, ...(valueChanged && !Object.keys(dynamic).length ? { value: element.value } : dynamic), ...(stateChanged ? { states: states ?? [] } : {}), ...(element.formatting ? { formatting: element.formatting } : {}) };
         return redact.contains(JSON.stringify(anchor)) || redact.contains(element.value ?? '') ? [] : [anchor];
     });
     const changedRoute = normalizedRoute(start.url, start.origin) !== absoluteRoute;
@@ -96,7 +97,7 @@ export function endMatches(end: StepEnd, observation: Observation, start?: Obser
     for (const anchor of end.values ?? []) {
         const element = resolveTarget(anchor.target, observation, true);
         const value = anchor.valueKey ? values[anchor.valueKey] : anchor.pageValue ? readPageValue(observation, anchor.pageValue) : anchor.template ? anchor.template.replace(/\{(\w+)\}/g, (_, key: string) => values[key] ?? '{missing}') : anchor.value;
-        if (!element || ((anchor.valueKey || anchor.pageValue || anchor.template || anchor.value !== undefined) && (value === undefined || element.value !== value)) || (anchor.states && JSON.stringify(durableStates(element.states) ?? []) !== JSON.stringify(anchor.states))) { missing.push(`value/state: ${anchor.target.role} ${anchor.target.name}`); }
+        if (!element || ((anchor.valueKey || anchor.pageValue || anchor.template || anchor.value !== undefined) && (value === undefined || element.value !== value)) || (anchor.states && JSON.stringify(durableStates(element.states) ?? []) !== JSON.stringify(anchor.states)) || (anchor.formatting !== undefined && JSON.stringify(element.formatting) !== JSON.stringify(anchor.formatting))) { missing.push(`value/state: ${anchor.target.role} ${anchor.target.name}`); }
     }
     return { checked: true, matched: missing.length === 0, ...(missing.length ? { missing } : {}) };
 }

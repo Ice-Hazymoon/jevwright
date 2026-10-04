@@ -26,7 +26,7 @@ export function fixturePolicy(view: View): Belief {
         const selected = view.history.some(entry => entry.action === 'select');
         if (!selected) { return { tool: 'select', target: is('combobox', 'Visibility'), option: 'Public' }; }
         // Reproduce treating a requested committed result as preparation because its final button is not named.
-        const authorized = /requested result includes|requested committed result authorizes/i.test(view.instructions ?? '');
+        const authorized = /requested result includes|requested committed result authorizes|necessary final (?:submit\/confirm )?control/i.test(view.actionScope ?? view.instructions ?? '');
         return { done: 0.98, achieved: applied || !authorized ? 0.98 : 0.02, remaining: 0.02, tool: applied ? 'none' : 'click', target: is('button', 'Apply changes'), needed: applied || !authorized ? 0.02 : 0.98 };
     }
     if (view.step === 'Select Express shipping') {

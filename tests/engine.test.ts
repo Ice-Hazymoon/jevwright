@@ -1825,3 +1825,103 @@ it('merge audits contradictory repeat proposals with prior activations before pr
     expect(result.attempts[0]?.steps[0]?.actions?.filter(action => action.ok)).toHaveLength(2);
     expect(result.attempts[0]?.steps[1]?.failure).toBe('assertion');
 });
+
+
+describe('merge delivery boundary regressions', () => {
+    it('names the reserved next action before auditing a premature confirmation', async () => {
+        const spec: TestSpec<void> = { id: 'reserved-confirmation', title: 'Prepare before confirming', risk: 'A permissive candidate audit crosses a next-step boundary', start: '/items?bug=wrong-row', fixture: async () => { app.reset(); }, invariants: [{ name: 'Other entries stay active', check: () => app.state.items.filter(item => item.id !== 'b').every(item => !item.archived) }], steps: () => [act('Start archiving the Beta plan'), act('Confirm archiving in the dialog', { expect: { write: { path: /\/archive$/ } } })] };
+        const result = (await suite([spec], { mode: 'ai', policy: view => {
+            if (!view.url && !view.control) { return { onTarget: 0.85 }; }
+            if (view.step === 'Start archiving the Beta plan' && (view.dialog || view.control)) {
+                const boundary = view.instructions?.includes('Confirm archiving in the dialog');
+                return view.control ? { needed: boundary ? 0.02 : 0.5 } : { done: 0.84, remaining: 0.25, achieved: boundary ? 0.64 : 0.2, tool: 'none', target: element => element.name === 'Archive plan' };
+            }
+            return fixturePolicy(view);
+        }, helper: view => view.control ? { reason: 'The next step reserves this confirmation', activation: 'finished' } : { outcome: 'step_already_done', tool: null, element: null, value_key: null, text: null, reason: 'The dialog is ready for the next step' } }).run).results[0]!;
+        expect(result.cause, result.summary).toBe('product');
+        expect(result.attempts[0]?.steps[0]?.actions?.map(action => action.element)).toEqual(['button "Archive"']);
+        expect(result.attempts[0]?.steps[1]?.failure).toBe('invariant');
+    });
+    it.each(['healthy', 'missing'])('reviews successful delivery separately from missing reservation effects: %s', async bug => {
+        const spec: TestSpec<void> = { id: 'delivered-reservation', title: 'Commit a reservation once', risk: 'Missing content prevents checking a delivered confirmation', start: '/completion-calendar?bug=' + bug, steps: () => [act('Reserve the date requested on the page'), verify('reservation committed', ({ page }) => page.locator('#receipt').textContent().then(text => text === 'Reservation confirmed'), { timeoutMs: 1 })] };
+        const result = (await suite([spec], { mode: 'ai', policy: view => {
+            if (view.url && !view.control && view.history.some(entry => entry.element?.includes('Confirm reservation'))) {
+                const instructions = JSON.parse(view.instructions ?? '{}').complete?.instructions ?? '';
+                return { done: 0.45, remaining: 0.5, achieved: instructions.includes('Absent product effects') ? 0.99 : 0.61, tool: 'none', target: element => element.name === 'Confirm reservation' };
+            }
+            return reservationPolicy(view);
+        }, helper: view => view.control ? { reason: 'The final confirmation is still pending', activation: 'activate' } : { outcome: 'impossible', tool: null, element: null, value_key: null, text: null, reason: 'The requested actions are already delivered; there is no extra action to propose' } }).run).results[0]!;
+        expect(result.status, result.summary).toBe(bug === 'healthy' ? 'passed' : 'failed');
+        if (bug === 'missing') { expect(result.cause).toBe('product'); }
+        expect(result.attempts[0]?.steps[0]?.actions?.filter(action => action.ok && action.element === 'button "Confirm reservation"')).toHaveLength(1);
+    });
+});
+
+
+it('merge accepts corrected failed attempts when all formatting actions were later delivered', async () => {
+    const spec: TestSpec<void> = { id: 'corrected-formatting-delivery', title: 'Recover then format a word', risk: 'A corrected selection failure prevents checking delivered formatting', start: '/surface-editor', data: { text: 'ship confirmed' }, steps: () => [act('Type {text} in Document and make exactly confirmed bold'), verify('exact formatting', ({ page }) => page.locator('#editor').innerHTML().then(html => html === 'ship <b>confirmed</b>'), { timeoutMs: 1 })] };
+    const result = (await suite([spec], { mode: 'ai', policy: view => {
+        const typed = view.history.some(entry => entry.action === 'type' && !entry.error);
+        const selected = view.history.some(entry => entry.action === 'select_text' && !entry.error);
+        const formatted = view.history.some(entry => entry.action === 'click' && entry.element === 'button "Bold"');
+        if (formatted) { return { done: 0.23, achieved: view.history.some(entry => entry.error) ? 0.42 : 0.99, remaining: 0.8, tool: 'none' }; }
+        if (!typed && view.history.some(entry => entry.error)) { return { tool: 'type', target: element => element.name === 'Document', value: 'text' }; }
+        return selected ? { tool: 'click', target: element => element.name === 'Bold' } : { tool: 'select_text', target: element => element.name === 'Document', selectText: 'confirmed' };
+    } }).run).results[0]!;
+    expect(result.status, result.summary).toBe('passed');
+    expect(result.attempts[0]?.steps[0]?.actions?.map(action => [action.tool, action.ok])).toEqual([['select_text', false], ['type', true], ['select_text', true], ['click', true]]);
+});
+
+
+it.each(['healthy', 'missing'])('merge recognizes a requested date through its editor and visible month context: %s', async bug => {
+    const spec: TestSpec<void> = { id: 'value-target-context', title: 'Reserve a named value', risk: 'Literal button-label matching rejects the named date', start: '/completion-calendar?bug=' + bug, steps: () => [act('Reserve August 4, 2027'), verify('reservation committed', ({ page }) => page.locator('#receipt').textContent().then(text => text === 'Reservation confirmed'), { timeoutMs: 1 })] };
+    const result = (await suite([spec], { mode: 'ai', policy: view => !view.url && !view.control ? { onTarget: view.instructions?.includes('Resolve requested entities or values') ? 0.98 : 0.11 } : reservationPolicy(view), helper: () => ({ reason: 'The named date requires its pending confirmation', activation: 'activate' }) }).run).results[0]!;
+    expect(result.status, result.summary).toBe(bug === 'healthy' ? 'passed' : 'failed');
+    if (bug === 'missing') { expect(result.cause).toBe('product'); }
+    expect(result.attempts[0]?.steps[0]?.actions?.map(action => action.element)).toEqual(['button "Open calendar"', 'button "4" near "August 2027"', 'button "Confirm reservation"']);
+});
+
+
+it('merge audits delivered targets without requiring the product effect to have succeeded', async () => {
+    const spec: TestSpec<void> = { id: 'historical-target-scope', title: 'Check a delivered reservation', risk: 'An absent receipt retroactively makes the correct controls unrelated', start: '/completion-calendar?bug=missing', steps: () => [act('Reserve August 4, 2027'), verify('reservation committed', ({ page }) => page.locator('#receipt').textContent().then(text => text === 'Reservation confirmed'), { timeoutMs: 1 })] };
+    const result = (await suite([spec], { mode: 'ai', policy: view => {
+        if (!view.url && !view.control && !view.proposal) { const question = JSON.parse(view.instructions ?? '{}').on_target_0; return { onTarget: question?.criteria?.authorized?.includes('Actual product success is irrelevant') ? 0.95 : 0.11 }; }
+        return reservationPolicy(view);
+    }, helper: () => ({ reason: 'The required confirmation is pending', activation: 'activate' }) }).run).results[0]!;
+    expect(result.cause, result.summary).toBe('product');
+    expect(result.attempts[0]?.steps[1]?.failure).toBe('assertion');
+    expect(result.attempts[0]?.steps[0]?.actions?.map(action => action.element)).toEqual(['button "Open calendar"', 'button "4" near "August 2027"', 'button "Confirm reservation"']);
+});
+
+
+it.each(['healthy', 'missing-format'])('merge requires requested formatting actions rather than all permitted editor actions: %s', async bug => {
+    const spec: TestSpec<void> = { id: 'required-editor-actions', title: 'Format without extra editor work', risk: 'Permitted editor actions become mandatory completion work', start: '/surface-editor?bug=' + bug, data: { text: 'ship confirmed' }, steps: () => [act('Type {text} in Document and make exactly confirmed bold'), verify('exact formatting', ({ page }) => page.locator('#editor').innerHTML().then(html => html === 'ship <b>confirmed</b>'), { timeoutMs: 1 })] };
+    const result = (await suite([spec], { mode: 'ai', policy: view => {
+        if (!view.url && !view.control) { return { onTarget: view.proposal?.element === 'button "Inspect document"' ? 0.01 : 0.98 }; }
+        if (view.control) { return { needed: 0.02 }; }
+        if (view.history.some(entry => entry.action === 'click' && entry.element === 'button "Bold"')) {
+            const question = JSON.parse(view.instructions ?? '{}').complete;
+            return { done: 0.29, remaining: 0.69, achieved: question?.criteria?.achieved?.includes('All authorized') ? 0.42 : 0.99, tool: 'none', target: element => element.name === 'Inspect document' };
+        }
+        if (!view.history.some(entry => entry.action === 'type')) { return { tool: 'type', target: element => element.name === 'Document', value: 'text' }; }
+        return view.history.some(entry => entry.action === 'select_text') ? { tool: 'click', target: element => element.name === 'Bold' } : { tool: 'select_text', target: element => element.name === 'Document', selectText: 'confirmed' };
+    } }).run).results[0]!;
+    expect(result.status, result.summary).toBe(bug === 'healthy' ? 'passed' : 'failed');
+    if (bug === 'missing-format') { expect(result.cause).toBe('product'); }
+    expect(result.attempts[0]?.steps[0]?.actions?.map(action => action.tool)).toEqual(['type', 'select_text', 'click']);
+    expect(result.attempts[0]?.steps[0]?.actions?.some(action => action.element === 'button "Inspect document"')).toBe(false);
+});
+
+
+it.each(['healthy', 'missing'])('merge permits the date editor prerequisite before its final control becomes visible: %s', async bug => {
+    const spec: TestSpec<void> = { id: 'editor-prerequisite', title: 'Select before committing', risk: 'A primitive selection is rejected because it does not complete the whole reservation', start: '/completion-calendar?bug=' + bug, steps: () => [act('Reserve August 4, 2027'), verify('reservation committed', ({ page }) => page.locator('#receipt').textContent().then(text => text === 'Reservation confirmed'), { timeoutMs: 1 })] };
+    const result = (await suite([spec], { mode: 'ai', policy: view => {
+        if (!view.url && !view.control && view.proposal?.element?.includes('button "4"')) { return { onTarget: view.instructions?.includes('need not complete the whole step') ? 0.98 : 0.66 }; }
+        if (view.control?.includes('button "4"')) { return { needed: 0.1 }; }
+        if (view.dialog?.includes('August 2027')) { return { done: 0.11, achieved: 0.2, remaining: 0.88, tool: view.instructions?.includes('need not complete the whole step') ? 'click' : 'none', target: element => element.name === '4' }; }
+        return reservationPolicy(view);
+    }, helper: view => view.control ? { reason: 'The required date selection is pending', activation: 'activate' } : { outcome: 'impossible', tool: null, element: null, value_key: null, text: null, reason: 'Only a date button is visible; it cannot complete the reservation by itself' } }).run).results[0]!;
+    expect(result.status, result.summary).toBe(bug === 'healthy' ? 'passed' : 'failed');
+    if (bug === 'missing') { expect(result.cause).toBe('product'); }
+    expect(result.attempts[0]?.steps[0]?.actions?.map(action => action.element)).toEqual(['button "Open calendar"', 'button "4" near "August 2027"', 'button "Confirm reservation"']);
+});

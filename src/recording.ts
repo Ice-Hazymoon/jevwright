@@ -1,5 +1,5 @@
 import type { Tool } from './browser.ts';
-import type { Observation, PageElement } from './observe.ts';
+import type { Observation, PageElement, TextFormatting } from './observe.ts';
 import { createHash } from 'node:crypto';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, join, relative } from 'node:path';
@@ -52,10 +52,10 @@ export interface RecordedAction {
 }
 
 export type Anchor = { kind: 'element'; target: TargetDescriptor } | { kind: 'heading' | 'dialog' | 'notice'; text: string };
-export interface ValueAnchor { target: TargetDescriptor; value?: string; states?: string[]; valueKey?: string; pageValue?: PageValueDescriptor; template?: string }
+export interface ValueAnchor { target: TargetDescriptor; value?: string; states?: string[]; formatting?: TextFormatting[]; valueKey?: string; pageValue?: PageValueDescriptor; template?: string }
 /** base=true binds a route to the run baseURL; false keeps its literal origin; absent retains legacy path checks. */
 export interface StepEnd { path?: string; route?: string; base?: boolean; appeared?: Anchor[]; gone?: TargetDescriptor[]; absentBefore?: Anchor[]; values?: ValueAnchor[]; effect?: 'none' }
-export interface CheckEvidence { text: string; region: string; target?: TargetDescriptor; value?: string; states?: string[]; source: 'text' | 'notice' | 'heading' | 'element' }
+export interface CheckEvidence { text: string; region: string; target?: TargetDescriptor; value?: string; states?: string[]; formatting?: TextFormatting[]; source: 'text' | 'notice' | 'heading' | 'element' }
 
 export interface StepRecording {
     /** Hash of the step definition; a changed instruction invalidates its recording. */
@@ -79,6 +79,7 @@ export interface TestRecording {
 const descriptorSchema = z.object({ role: z.string(), name: z.string(), ariaName: z.string().optional(), near: z.string().optional(), context: z.string().optional(), nth: z.number().int().min(0), of: z.number().int().positive().optional() });
 const pageValueSchema = z.object({ source: z.enum(['text', 'notice', 'name', 'content']), before: z.string(), after: z.string(), requiresModel: z.literal(true).optional() });
 const anchorSchema = z.union([z.object({ kind: z.literal('element'), target: descriptorSchema }), z.object({ kind: z.enum(['heading', 'dialog', 'notice']), text: z.string() })]);
+const formattingSchema = z.array(z.object({ start: z.number().int().min(0), end: z.number().int().min(0), bold: z.boolean(), italic: z.boolean(), underline: z.boolean() }));
 const recordingSchema = z.object({
     version: z.literal(1),
     test: z.string(),
@@ -88,7 +89,7 @@ const recordingSchema = z.object({
         key: z.string(),
         instruction: z.string(),
         occurrence: z.number().int().positive().optional(),
-        checkEvidence: z.array(z.object({ text: z.string(), region: z.string(), source: z.enum(['text', 'notice', 'heading', 'element']), target: descriptorSchema.optional(), value: z.string().optional(), states: z.array(z.string()).optional() })).optional(),
+        checkEvidence: z.array(z.object({ text: z.string(), region: z.string(), source: z.enum(['text', 'notice', 'heading', 'element']), target: descriptorSchema.optional(), value: z.string().optional(), states: z.array(z.string()).optional(), formatting: formattingSchema.optional() })).optional(),
         checkClaim: z.string().optional(),
         end: z.object({
             path: z.string().optional(),
@@ -97,7 +98,7 @@ const recordingSchema = z.object({
             appeared: z.array(anchorSchema).optional(),
             gone: z.array(descriptorSchema).optional(),
             absentBefore: z.array(anchorSchema).optional(),
-            values: z.array(z.object({ target: descriptorSchema, value: z.string().optional(), states: z.array(z.string()).optional(), valueKey: z.string().optional(), pageValue: pageValueSchema.optional(), template: z.string().optional() })).optional(),
+            values: z.array(z.object({ target: descriptorSchema, value: z.string().optional(), states: z.array(z.string()).optional(), formatting: formattingSchema.optional(), valueKey: z.string().optional(), pageValue: pageValueSchema.optional(), template: z.string().optional() })).optional(),
             effect: z.literal('none').optional(),
         }).optional(),
         actions: z.array(z.object({

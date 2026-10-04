@@ -41,7 +41,7 @@ export function trackRoots() {
 
 export interface DomSurface {
     nodes: AriaNode[];
-    details: Array<{ box: NonNullable<AriaNode['box']>; content?: string; visibleName?: string; selection?: string; dropTarget?: boolean; near?: string; value?: string; inputType?: string; autocomplete?: string; nativeSelect?: boolean; context?: string; draggable?: boolean; scroll?: { top: number; height: number; viewport: number } }>;
+    details: Array<{ box: NonNullable<AriaNode['box']>; content?: string; visibleName?: string; selection?: string; formatting?: import('./observe.ts').TextFormatting[]; dropTarget?: boolean; near?: string; value?: string; inputType?: string; autocomplete?: string; nativeSelect?: boolean; context?: string; draggable?: boolean; scroll?: { top: number; height: number; viewport: number } }>;
     text: string;
     dialog?: AriaNode;
     busy: boolean;
@@ -123,7 +123,7 @@ export async function readSurface(page: Page | Frame, scope?: ElementHandle<Elem
         };
         // Each subtree contributes its visible text once, rather than being walked again for every ancestor.
         for (const element of all.toReversed()) {
-            texts.set(element, !hiddenTree(element) ? childrenOf(element).map(node => node.nodeType === Node.TEXT_NODE ? ownText(node, element) : node instanceof Element ? texts.get(node) ?? '' : '').join(' ').replace(/\s+/g, ' ').trim() : '');
+            texts.set(element, element instanceof HTMLElement && element.isContentEditable && !element.parentElement?.isContentEditable && !hiddenTree(element) ? element.innerText : !hiddenTree(element) ? childrenOf(element).map(node => node.nodeType === Node.TEXT_NODE ? ownText(node, element) : node instanceof Element ? texts.get(node) ?? '' : '').join(' ').replace(/\s+/g, ' ').trim() : '');
         }
         const text = (element: Element): string => texts.get(element) ?? '';
         const dialog = all.findLast(element => element.matches('dialog[open], [role=dialog], [role=alertdialog]') && visible(element));
@@ -202,12 +202,14 @@ export async function readSurface(page: Page | Frame, scope?: ElementHandle<Elem
         let scrollable = (document.scrollingElement?.scrollHeight ?? 0) > innerHeight;
         for (const element of all) {
             if (!visible(element) || inertTree(element) || !inScope(element)) { continue; }
+            // Inline formatting is part of its editor, not another independently editable control.
+            if (element instanceof HTMLElement && element.isContentEditable && element.parentElement?.isContentEditable && !element.matches('button,input,textarea,select,[role],[tabindex]')) { continue; }
             const b = boxOf(element);
             const css = styleOf(element);
             const box = { x: b.x, y: b.y, width: b.width, height: b.height };
             const rendered = text(element);
             const field = element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement;
-            const editable = element instanceof HTMLElement && element.isContentEditable;
+            const editable = element instanceof HTMLElement && element.isContentEditable && !element.parentElement?.isContentEditable;
             const select = element instanceof HTMLSelectElement;
             const nativeRole = select ? 'combobox' : field ? element instanceof HTMLInputElement && element.type === 'file' ? 'button' : element instanceof HTMLInputElement && ['checkbox', 'radio'].includes(element.type) ? element.type : 'textbox' : editable ? 'textbox' : element.matches('button, summary') ? 'button' : element.matches('a[href]') ? 'link' : undefined;
             const group = groupName(element);
@@ -231,12 +233,26 @@ export async function readSurface(page: Page | Frame, scope?: ElementHandle<Elem
             const selected = focused && field && element.selectionStart !== null && element.selectionEnd !== null ? element instanceof HTMLInputElement && element.type === 'password' ? '••••' : element.value.slice(element.selectionStart, element.selectionEnd)
                 : focused && editable ? (element.getRootNode() instanceof ShadowRoot ? (element.getRootNode() as ShadowRoot & { getSelection?: () => Selection | null }).getSelection?.() : document.getSelection())?.toString() : undefined;
             const value = field ? element instanceof HTMLInputElement && element.type === 'password' ? '••••' : element.value : editable ? (element as HTMLElement).innerText : undefined;
+            const formatting: NonNullable<DomSurface['details'][number]['formatting']> = [];
+            // Offsets are useful only when text nodes and the rendered field value agree exactly.
+            if (editable && element.textContent === value) {
+                const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT); let offset = 0;
+                while (walker.nextNode()) {
+                    const node = walker.currentNode; const length = node.textContent?.length ?? 0;
+                    if (!length || !node.parentElement) { continue; }
+                    const style = styleOf(node.parentElement);
+                    const range = { start: offset, end: offset + length, bold: parseFloat(style.fontWeight) >= 600, italic: /italic|oblique/.test(style.fontStyle), underline: style.textDecorationLine.includes('underline') };
+                    const previous = formatting.at(-1);
+                    if (previous && previous.bold === range.bold && previous.italic === range.italic && previous.underline === range.underline) { previous.end = range.end; } else { formatting.push(range); }
+                    offset += length;
+                }
+            }
             let context: string | undefined;
             for (let parent = element.parentElement; parent && parent !== document.body; parent = parent.parentElement) {
                 const name = groupName(parent);
                 if (name) { context = `group "${name}"`; break; }
             }
-            if (nativeRole || label || group || actionRoles.has(role) || scrolling || draggable || dropTarget) { details.push({ box, ...(visibleName ? { visibleName } : {}), ...(selected !== undefined ? { selection: selected } : {}), ...(dropTarget ? { dropTarget: true } : {}), ...(context ? { context } : {}), ...(label && rendered && !field && !select && rendered !== label ? { content: rendered } : {}), ...(field && near && near !== name ? { near } : {}), ...(element instanceof HTMLInputElement ? { inputType: element.type, autocomplete: element.autocomplete } : {}), ...(editable ? { value } : {}), ...(select ? { nativeSelect: true } : {}), ...(draggable ? { draggable: true } : {}), ...(scrolling ? { scroll: { top: element.scrollTop, height: element.scrollHeight, viewport: element.clientHeight } } : {}) }); }
+            if (nativeRole || label || group || actionRoles.has(role) || scrolling || draggable || dropTarget) { details.push({ box, ...(visibleName ? { visibleName } : {}), ...(selected !== undefined ? { selection: selected } : {}), ...(dropTarget ? { dropTarget: true } : {}), ...(context ? { context } : {}), ...(label && rendered && !field && !select && rendered !== label ? { content: rendered } : {}), ...(field && near && near !== name ? { near } : {}), ...(element instanceof HTMLInputElement ? { inputType: element.type, autocomplete: element.autocomplete } : {}), ...(editable ? { value, ...(element.textContent === value ? { formatting } : {}) } : {}), ...(select ? { nativeSelect: true } : {}), ...(draggable ? { draggable: true } : {}), ...(scrolling ? { scroll: { top: element.scrollTop, height: element.scrollHeight, viewport: element.clientHeight } } : {}) }); }
             scrollable ||= scrolling;
             const clickable = css.cursor === 'pointer' && rendered && rendered.length <= 160 && !interactiveParent(element);
             const leaf = rendered && rendered.length <= 160 && ![...element.children].some(child => text(child)) && !interactiveParent(element) && (pointerSignal(element) || instruction.toLowerCase().includes(rendered.toLowerCase()));
@@ -270,6 +286,10 @@ export async function readSurface(page: Page | Frame, scope?: ElementHandle<Elem
         for (const element of all) {
             if (!textVisible(element) || !inScope(element) || !inside(element)) { continue; }
             const destination = inMain(element) ? mainText : otherText;
+            if (element instanceof HTMLElement && element.isContentEditable) {
+                if (!element.parentElement?.isContentEditable) { destination.push(element.innerText); }
+                continue;
+            }
             for (const node of childrenOf(element)) { if (node.nodeType === Node.TEXT_NODE) { destination.push(ownText(node, element)); } }
         }
         // Main content gets the bounded observation budget before navigation and surrounding chrome.

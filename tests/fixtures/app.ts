@@ -163,7 +163,7 @@ window.rootStillClosed = document.getElementById('closed').shadowRoot === null;
         case '/surface-editor':
             return layout('Document formatting', '<label>Message<textarea id="message">ship confirmed</textarea></label><div contenteditable="true" aria-label="Document" id="editor" style="min-height:80px;border:1px solid;padding:12px"></div><button id="bold">Bold</button><div role="button" tabindex="0" aria-label="Close tools">Open tools</div><label>Receive alerts<input type="checkbox" aria-label="Cancel alerts"></label><button id="inspect">Inspect document</button>' + (url.searchParams.has('private') ? '<label>Access password<input id="protected" type="password" value="Fixture-hidden-password-9462"></label>' : '') + (url.searchParams.has('uploads') ? '<label>Documents<input id="files" type="file" multiple></label>' : ''), `
 document.getElementById('bold').onmousedown = e => e.preventDefault();
-document.getElementById('bold').onclick = () => document.execCommand('bold');
+document.getElementById('bold').onclick = () => { if (${JSON.stringify(bug)} !== 'missing-format') document.execCommand('bold'); };
 document.getElementById('inspect').onclick = () => toast(document.getElementById('editor').innerHTML);
 document.getElementById('files')?.addEventListener('change', e => toast([...e.target.files].map(file => file.name).join(',')));
 `);

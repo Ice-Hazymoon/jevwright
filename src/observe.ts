@@ -25,6 +25,8 @@ export interface AriaNode {
     box?: { x: number; y: number; width: number; height: number };
 }
 
+export interface TextFormatting { start: number; end: number; bold: boolean; italic: boolean; underline: boolean }
+
 /** One element a step may act on, or read. `i` is the option key given to the model. */
 export interface PageElement {
     i: number;
@@ -53,6 +55,8 @@ export interface PageElement {
     nativeSelect?: boolean;
     ariaName?: string;
     selection?: string;
+    /** UTF-16 ranges in the exact field value, measured from computed text styles. */
+    formatting?: TextFormatting[];
     dropTarget?: boolean;
     draggable?: boolean;
     scroll?: { top: number; height: number; viewport: number };
@@ -147,6 +151,7 @@ export async function observe(page: Page, options: ObserveOptions = {}): Promise
             element.name = clipProtected(detail.visibleName, 160, options.redact);
         }
         if (detail.selection !== undefined) { element.selection = detail.inputType === 'password' || SECRET.test(`${element.name} ${element.ariaName ?? ''}`) ? '••••' : clipProtected(detail.selection, 300, options.redact); }
+        if (detail.formatting && detail.value === element.value && !options.redact?.contains(detail.value ?? '') && !SECRET.test(`${element.name} ${element.ariaName ?? ''}`)) { element.formatting = detail.formatting; }
         if (detail.dropTarget) { element.dropTarget = true; }
         if (detail.content) { element.content = clipProtected(detail.content, 160, options.redact); }
         if (detail.near) { element.near = clipProtected(detail.near, LIMITS.near, options.redact); }
@@ -161,7 +166,7 @@ export async function observe(page: Page, options: ObserveOptions = {}): Promise
     result.scrollable = surface.scrollable;
     result.canGoBack = await canGoBack(page).catch(() => false);
     result.scroll = surface.pageScroll;
-    result.signature = createHash('sha1').update(JSON.stringify([result.signature, result.text, result.elements.map(element => [element.content, element.near, element.value, element.selection, element.ariaName, element.dropTarget, element.scroll]), surface.busy, surface.pageScroll, result.canGoBack])).digest('hex').slice(0, 16);
+    result.signature = createHash('sha1').update(JSON.stringify([result.signature, result.text, result.elements.map(element => [element.content, element.near, element.value, element.selection, element.formatting, element.ariaName, element.dropTarget, element.scroll]), surface.busy, surface.pageScroll, result.canGoBack])).digest('hex').slice(0, 16);
     return result;
 }
 
