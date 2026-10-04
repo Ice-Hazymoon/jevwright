@@ -461,7 +461,16 @@ async function decideLoop(input: ActInput, models: Models, actions: ActionRecord
         const actionConfidence = tool?.probabilities[tool.choice] ?? 0;
         const targetConfidence = decision.target ? target?.probabilities[String(decision.target.i)] ?? 0 : 0;
         const proposedAction = decision.tool !== 'none' && decision.tool !== 'wait' && actionConfidence >= priority && targetConfidence >= priority;
-        const controlCandidate = !missing.length && candidate && (candidate.ref || candidate.reveal) && ACTIVATION_ROLES.has(candidate.role) && (target?.probabilities[String(candidate.i)] ?? 0) >= 0.5 ? candidate : undefined;
+        let controlCandidate = !missing.length && candidate && (candidate.ref || candidate.reveal) && !candidate.disabled && ACTIVATION_ROLES.has(candidate.role) && (target?.probabilities[String(candidate.i)] ?? 0) >= 0.5 ? candidate : undefined;
+        if (!missing.length && decision.tool === 'none' && !controlCandidate) {
+            // A completed field can dominate next-target ranking while a separate activation remains pending.
+            const controls = ranked(target).flatMap(([key, probability]) => {
+                const element = observation.elements[Number(key)];
+                return element && (element.ref || element.reveal) && !element.disabled && ACTIVATION_ROLES.has(element.role) ? [{ element, probability }] : [];
+            });
+            const total = controls.reduce((sum, entry) => sum + entry.probability, 0);
+            if (controls[0] && total > 0 && controls[0].probability / total >= 0.5) { controlCandidate = controls[0].element; }
+        }
         const activations = controlCandidate?.ref ? actions.filter(action => action.ok && actionTargets.get(action) === controlCandidate.ref && ['click', 'double_click', 'press_enter', 'upload'].includes(action.tool)).map(action => ({ action: action.tool, element: action.element ?? describeElement(controlCandidate), ...(action.fileKeys?.length ? { file_keys: JSON.stringify(action.fileKeys) } : {}) })) : [];
         const auditAction = (proposal: Decision, controlActivations: Array<Record<string, string>> = [], controlReview?: string) => actedOnTarget(models, [{
             step: input.instruction, next_step: input.next ?? null,
@@ -496,7 +505,8 @@ async function decideLoop(input: ActInput, models: Models, actions: ActionRecord
                 return { status: 'failed', failure: 'model', reason: error instanceof Error ? error.message : String(error) };
             }
         }
-        if (!missing.length && (decision.tool === 'none' || (canFinish && (decision.tool === 'click' || proposedAction))) && candidate && (candidate.ref || candidate.reveal) && ACTIVATION_ROLES.has(candidate.role) && (target?.probabilities[String(candidate.i)] ?? 0) >= 0.5) {
+        if (!missing.length && (decision.tool === 'none' || (canFinish && (decision.tool === 'click' || proposedAction))) && controlCandidate) {
+            const candidate = controlCandidate;
             try {
                 const control = describeElement(candidate);
                 const answer = reviewNeeded === undefined ? await models.judge({ task: { step: input.instruction, values: modelValues(input), next_step: input.next ?? null, action_scope: actionAuthorizationQuestion('Authorize only missing current-step actions.', undefined, false, input.next).instructions, history: history.filter(entry => entry.action && !entry.error) }, control, control_activations: activations }, { needed: controlQuestion(control, input.next) }, input.signal, 'control') : undefined;

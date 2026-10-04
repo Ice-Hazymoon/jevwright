@@ -1925,3 +1925,21 @@ it.each(['healthy', 'missing'])('merge permits the date editor prerequisite befo
     if (bug === 'missing') { expect(result.cause).toBe('product'); }
     expect(result.attempts[0]?.steps[0]?.actions?.map(action => action.element)).toEqual(['button "Open calendar"', 'button "4" near "August 2027"', 'button "Confirm reservation"']);
 });
+
+it.each(['healthy', 'missing', 'selection-only'])('merge reviews pending controls independently of a completed field target: %s', async variant => {
+    const selection = variant === 'selection-only';
+    const spec: TestSpec<void> = { id: 'completed-field-target', title: 'Review a pending activation after selection', risk: 'A completed textbox hides the pending confirmation from control review', start: '/completion-picker?bug=' + variant, steps: () => [act(selection ? 'Select the date requested on this page using its calendar' : 'Follow the current page instructions to reserve its requested date'), verify('requested result', async ({ page }) => await page.locator('#date').inputValue() === '2027-08-04' && (selection ? await page.locator('#activations').textContent() === '0' : await page.locator('#receipt').textContent() === 'Reservation confirmed'), { timeoutMs: 1 })] };
+    const result = (await suite([spec], { mode: 'ai', policy: view => {
+        if (!view.url && !view.control) { return { onTarget: selection && view.proposal?.element?.includes('Confirm reservation') ? 0.01 : 0.98 }; }
+        if (view.control) { return { needed: 0.04 }; }
+        if (view.history.some(entry => entry.element?.includes('Confirm reservation'))) { return { done: 0.97, achieved: 0.99, remaining: 0.02, tool: 'none' }; }
+        if (view.history.some(entry => entry.element?.includes('button "4"'))) {
+            return { done: 0.89, achieved: 0.92, remaining: 0.15, tool: 'none', targetProbability: element => element.name === 'Selected date' ? 0.58 : element.name === 'Confirm reservation' ? 0.4 : element.name === 'Plans' ? 0.02 : 0 };
+        }
+        if (!view.dialog) { return { tool: 'click', target: element => element.name === 'Choose date' }; }
+        return view.text.includes('August 2027') ? { tool: 'click', target: element => element.name === '4' } : { tool: 'click', target: element => element.name === 'Next month' };
+    }, helper: view => view.control ? { reason: 'The reservation still needs its final confirmation', activation: 'activate' } : { outcome: 'impossible', tool: null, element: null, value_key: null, text: null, reason: 'No recovery action was scripted' } }).run).results[0]!;
+    expect(result.status, result.summary).toBe(variant === 'missing' ? 'failed' : 'passed');
+    if (variant === 'missing') { expect(result.cause).toBe('product'); }
+    expect(result.attempts[0]?.steps[0]?.actions?.filter(action => action.element === 'button "Confirm reservation"' && action.ok)).toHaveLength(selection ? 0 : 1);
+});

@@ -63,6 +63,14 @@ let down = 0; document.getElementById('hold').onpointerdown = () => { down = Dat
 document.getElementById('hold').onpointerup = () => { if (Date.now() - down >= 600) document.getElementById('held').textContent = 'Held'; };
 document.getElementById('inspect').ondblclick = () => { if (!location.search.includes('missing')) document.getElementById('inspected').textContent = 'Inspected'; };
 `);
+        case '/completion-picker':
+            return layout('Reservation workshop', '<p>Reserve August 4, 2027. Use the calendar, then confirm the reservation.</p><form aria-label="Reservation"><label>Selected date<input id="date" readonly></label><button type="button" id="calendar">Choose date</button><div id="picker" role="dialog" aria-label="Calendar" hidden><h2 id="month">June 2027</h2><button type="button" id="next">Next month</button><button type="button" id="day" hidden>4</button></div><button type="button" id="confirm">Confirm reservation</button></form><output id="receipt"></output><output id="activations">0</output>', `
+let month = 0; const months = ['June 2027', 'July 2027', 'August 2027'];
+document.getElementById('calendar').onclick = () => document.getElementById('picker').hidden = false;
+document.getElementById('next').onclick = () => { month = Math.min(month + 1, 2); document.getElementById('month').textContent = months[month]; document.getElementById('day').hidden = month !== 2; };
+document.getElementById('day').onclick = () => { document.getElementById('date').value = '2027-08-04'; document.getElementById('picker').hidden = true; document.getElementById('calendar').hidden = true; };
+document.getElementById('confirm').onclick = () => { document.getElementById('activations').textContent = String(Number(document.getElementById('activations').textContent) + 1); if (document.getElementById('date').value && ${JSON.stringify(bug)} !== 'missing') document.getElementById('receipt').textContent = 'Reservation confirmed'; };
+`);
         case '/completion-calendar':
             return layout('Reservation desk', '<p>Reserve August 4, 2027.</p><form aria-label="Reservation"><label>Date<output id="date"></output></label><button type="button" id="calendar">Open calendar</button><div id="picker" role="dialog" aria-label="August 2027" hidden><h2>August 2027</h2><button type="button" id="day">4</button></div><button type="button" id="confirm">Confirm reservation</button></form><output id="receipt"></output>', `
 document.getElementById('calendar').onclick = () => document.getElementById('picker').hidden = false;

@@ -60,6 +60,8 @@ export interface Belief {
     navigation?: number;
     needed?: number;
     pTarget?: number;
+    /** Reproduce nonuniform target rankings independently of the proposed tool. */
+    targetProbability?: (element: ViewElement) => number;
     pageValue?: string;
     inputSource?: 'step' | 'page' | 'clear';
     error?: number;
@@ -157,6 +159,11 @@ function answer(id: string, question: EvaluationQuestion, belief: Belief, view: 
     }
     let chosen: string | undefined;
     if (id === 'tool') { chosen = belief.tool && options.includes(belief.tool) ? belief.tool : 'none'; }
+    if (id === 'target' && belief.targetProbability) {
+        const probabilities = Object.fromEntries(options.map(option => [option, belief.targetProbability!(view.elements.find(element => element.i === Number(option))!)]));
+        const choice = options.toSorted((a, b) => probabilities[b]! - probabilities[a]!)[0]!;
+        return { type: 'choice', choice, probabilities };
+    }
     if (id === 'target') { chosen = options.find(option => belief.target?.(view.elements.find(element => element.i === Number(option))!)); }
     if (id === 'destination') { chosen = options.find(option => belief.destination?.(view.elements.find(element => element.i === Number(option))!)); }
     if (id === 'option') { chosen = options.find(option => question.criteria[option] === belief.option); }

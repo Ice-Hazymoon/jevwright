@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- When no action is proposed, review the strongest activation control independently of completed fields in the target ranking. Keep required-action scope, prior activation counts and the 0.75 execution audit.
+
 - Permit editor/selection prerequisites that reveal required final controls; an individual action need not finish the whole step.
 - Observe computed bold/italic/underline ranges in exact editable values, and bind new recording/check evidence to those ranges. Preserve legacy evidence behavior. Keep inline editor text whole for secret protection.
 
