@@ -375,3 +375,27 @@ it('reach2 searches helper-selected normalized entity words from the instruction
     const result = (await runSuite([spec], { ...options(), models: models.settings })).results[0]!;
     expect(result.status, result.summary).toBe('passed');
 });
+
+it('reach2 keeps completed upload groups in control review and replay history', async () => {
+    await writeFile(join(root, 'invoice.txt'), 'invoice');
+    const spec: TestSpec = { ...base, id: 'completed-upload-review', start: '/surface-editor?uploads', files: { avatar: file('avatar.txt'), invoice: file('invoice.txt') }, steps: () => [act('Attach {avatar} and {invoice} through Documents'), verify('both attached', ({ page }) => page.locator('#files').evaluate(element => (element as HTMLInputElement).files?.length === 2))] };
+    const models = scriptedModels(view => {
+        if (view.control) { return { needed: view.controlActivations.some(entry => entry.action === 'upload' && entry.file_keys === '["avatar","invoice"]') ? 0 : 0.35 }; }
+        return view.history.some(entry => entry.action === 'upload') ? { tool: 'none', target: is('button', 'Documents'), done: 0.93, achieved: 0.65, remaining: 0.1 } : { tool: 'upload', target: is('button', 'Documents'), value: 'avatar', remaining: 0.99 };
+    }, () => ({ activation: 'activate', reason: 'The history only identifies one selected file, so activate the control again' }));
+    const result = (await runSuite([spec], { ...options(), models: models.settings })).results[0]!;
+    expect(result.status, result.summary).toBe('passed');
+    expect(result.attempts[0]?.steps[0]?.actions?.map(action => action.tool)).toEqual(['upload']);
+    const replay = (await runSuite([spec], { ...options(), mode: 'replay' })).results[0]!;
+    expect(replay.status, replay.summary).toBe('passed');
+    expect(replay.attempts[0]?.steps[0]?.actions?.[0]?.fileKeys).toEqual(['avatar', 'invoice']);
+});
+
+it('reach2 preserves authorized arguments when a pending upload wins against completion', async () => {
+    await writeFile(join(root, 'invoice.txt'), 'invoice');
+    const spec: TestSpec = { ...base, id: 'pending-upload-arguments', start: '/surface-editor?uploads', files: { avatar: file('avatar.txt'), invoice: file('invoice.txt') }, steps: () => [act('Attach {avatar} and {invoice} through Documents'), verify('both attached', ({ page }) => page.locator('#files').evaluate(element => (element as HTMLInputElement).files?.length === 2), { timeoutMs: 500 })] };
+    const models = scriptedModels(view => view.history.some(entry => entry.action === 'upload' && !entry.error) ? { done: 0.99 } : { tool: 'upload', target: is('button', 'Documents'), value: 'avatar', done: 0.9, achieved: 0.7, remaining: 0.1, needed: 0.95 });
+    const result = (await runSuite([spec], { ...options(), models: models.settings })).results[0]!;
+    expect(result.status, result.summary).toBe('passed');
+    expect(result.attempts[0]?.steps[0]?.actions?.map(action => action.tool)).toEqual(['upload']);
+});

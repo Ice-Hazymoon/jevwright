@@ -28,6 +28,7 @@ export interface ActionRecord {
     value?: string;
     key?: string;
     times?: number;
+    fileKeys?: string[];
     source: 'replay' | 'jev' | 'llm';
     ok: boolean;
     error?: string;
@@ -250,7 +251,7 @@ async function replaySteps(input: ActInput, recorded: RecordedAction[], actions:
             const sensitive = secretInput(input, action.valueKey, action.tool, element);
             if (action.template && templateKeys(action.template).some(key => input.secretKeys?.has(key))) { throw new Error('Secret input requires a single valueKey'); }
             await performFresh(input, { hasTouch: input.hasTouch, filePath: uploadPath(input, action.tool, action.valueKey), filePaths: uploadPaths(input, action.fileKeys), sensitive, secretPurpose: action.valueKey ? input.secretPurposes?.[action.valueKey] ?? 'password' : undefined, tool: action.tool, ref: element?.ref, locate: element && observation ? locateOf(element, observation) : undefined, value, double: action.double, scrollText: action.scrollText, scrollDirection: action.scrollDirection, key: action.key, times: action.times, searchBudgetMs: Math.max(0, 120000 - searchSpentMs), destinationRef: action.destination && observation ? resolveTargetMatch(action.destination, observation).element?.ref : undefined, ...(action.append ? { append: true } : {}) }, action.target, action.destination);
-            actions.push({ tool: action.tool, element: element ? describeElement(element) : undefined, ...(action.destination ? { destination: describeElement(action.destination) } : {}), value: recordedLabel(action, value), ...(action.key ? { key: action.key, times: action.times ?? 1 } : {}), source: 'replay', ok: true, durationMs: Math.round(performance.now() - started) });
+            actions.push({ tool: action.tool, element: element ? describeElement(element) : undefined, ...(action.destination ? { destination: describeElement(action.destination) } : {}), value: recordedLabel(action, value), ...(action.key ? { key: action.key, times: action.times ?? 1 } : {}), ...(action.tool === 'upload' ? { fileKeys: action.fileKeys ?? (action.valueKey ? [action.valueKey] : undefined) } : {}), source: 'replay', ok: true, durationMs: Math.round(performance.now() - started) });
             if (action.tool === 'scroll' && action.scrollText) { searchSpentMs += performance.now() - started; }
             if (action.tool !== 'wait') { recording.push(action); }
         } catch (error) {
@@ -285,7 +286,7 @@ function actionHistory(action: ActionRecord, pageInput = false): Record<string, 
     if (pageInput && value?.startsWith('page: ')) {
         try { const literal: unknown = JSON.parse(value.slice(6)); if (typeof literal === 'string') { value = literal; } } catch { /* Keep older labels that cannot be decoded. */ }
     }
-    return { action: action.tool, ...(action.element ? { element: action.element } : {}), ...(value !== undefined ? { value } : {}), ...(action.key ? { key: action.key, times: String(action.times ?? 1) } : {}), ...(pageInput ? { input_source: 'page' } : {}), ...(pageInput && action.tool === 'type' && value !== undefined && value.length <= 160 ? { input_method: 'Key events start at element; automatic focus may advance between fields' } : {}), ...(action.error ? { error: action.error } : {}) };
+    return { action: action.tool, ...(action.element ? { element: action.element } : {}), ...(value !== undefined ? { value } : {}), ...(action.fileKeys?.length ? { file_keys: JSON.stringify(action.fileKeys) } : {}), ...(action.key ? { key: action.key, times: String(action.times ?? 1) } : {}), ...(pageInput ? { input_source: 'page' } : {}), ...(pageInput && action.tool === 'type' && value !== undefined && value.length <= 160 ? { input_method: 'Key events start at element; automatic focus may advance between fields' } : {}), ...(action.error ? { error: action.error } : {}) };
 }
 
 async function decideLoop(input: ActInput, models: Models, actions: ActionRecord[], rounds: Round[], recording: RecordedAction[], start: StepStart): Promise<Omit<ActResult, 'source' | 'actions' | 'rounds' | 'recording'>> {
@@ -390,7 +391,7 @@ async function decideLoop(input: ActInput, models: Models, actions: ActionRecord
         const targetConfidence = decision.target ? target?.probabilities[String(decision.target.i)] ?? 0 : 0;
         const proposedAction = decision.tool !== 'none' && decision.tool !== 'wait' && actionConfidence >= priority && targetConfidence >= priority;
         const controlCandidate = !missing.length && candidate && (candidate.ref || candidate.reveal) && ACTIVATION_ROLES.has(candidate.role) && (target?.probabilities[String(candidate.i)] ?? 0) >= 0.5 ? candidate : undefined;
-        const activations = controlCandidate?.ref ? actions.filter(action => action.ok && actionTargets.get(action) === controlCandidate.ref && ['click', 'double_click', 'press_enter'].includes(action.tool)).map(action => ({ action: action.tool, element: action.element ?? describeElement(controlCandidate) })) : [];
+        const activations = controlCandidate?.ref ? actions.filter(action => action.ok && actionTargets.get(action) === controlCandidate.ref && ['click', 'double_click', 'press_enter', 'upload'].includes(action.tool)).map(action => ({ action: action.tool, element: action.element ?? describeElement(controlCandidate), ...(action.fileKeys?.length ? { file_keys: JSON.stringify(action.fileKeys) } : {}) })) : [];
         const completionProposed = done >= 0.35 || decision.tool === 'none' || activations.length > 0;
         if (saved && !missing.length && completionProposed && (acted() || done < 0.9 || proposedAction)) {
             try {
@@ -436,11 +437,12 @@ async function decideLoop(input: ActInput, models: Models, actions: ActionRecord
                     trace.note = `Helper control review: ${review.activation}; ${review.reason}`;
                 }
                 if (activate) {
-                    const named = await actedOnTarget(models, [{ step: input.instruction, history: [...history.filter(entry => entry.action && !entry.error), { action: proposedAction ? decision.tool : 'click', element: control }] }], input.signal, 0);
+                    // Audit this proposed action; corrected earlier mistakes must not reject the next valid control.
+                    const named = await actedOnTarget(models, [{ step: input.instruction, history: [{ action: proposedAction ? decision.tool : 'click', element: control }] }], input.signal, 0);
                     // An uncertain required activation cannot establish completion; a clearly unrelated one can be ignored.
                     if ((named[0] ?? 0) > 0.25) { canFinish = false; }
                     if ((named[0] ?? 0) >= 0.75) {
-                        decision = { tool: proposedAction ? decision.tool : 'click', target: candidate, source: controlSource, ...(proposedAction ? { key: decision.key, times: decision.times, destination: decision.destination } : {}) };
+                        decision = proposedAction ? { ...decision, target: candidate, source: controlSource } : { tool: 'click', target: candidate, source: controlSource };
                         trace.tool = decision.tool;
                         trace.target = control;
                         trace.pTool = round2(needed);
@@ -578,7 +580,7 @@ async function performDecision(input: ActInput, next: Decision, observation: Obs
     const append = appends(next, actions, field, typing);
     const call: ToolCall = { hasTouch: input.hasTouch, tool: next.tool as Tool, ref: next.target?.ref, locate: next.target ? locateOf(next.target, observation) : undefined, value: decidedValue(next, input.values), key: next.key, times: next.times, double: input.double && next.tool === 'click', ...(append ? { append } : {}) };
     const started = performance.now();
-    const record: ActionRecord = { tool: call.tool, element: field, ...(next.destination ? { destination: describeElement(next.destination) } : {}), value: typing, ...(next.key ? { key: next.key, times: next.times ?? 1 } : {}), source: next.source, ok: true, durationMs: 0 };
+    const record: ActionRecord = { tool: call.tool, element: field, ...(next.destination ? { destination: describeElement(next.destination) } : {}), value: typing, ...(next.key ? { key: next.key, times: next.times ?? 1 } : {}), ...(call.tool === 'upload' ? { fileKeys: next.fileKeys ?? (next.valueKey ? [next.valueKey] : undefined) } : {}), source: next.source, ok: true, durationMs: 0 };
     try {
         call.filePath = uploadPath(input, call.tool, next.valueKey);
         call.sensitive = secretInput(input, next.valueKey, call.tool, next.target);

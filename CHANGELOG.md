@@ -5,6 +5,7 @@
 - Mask password selections before DOM data returns, preserving protection in traceable reads.
 
 - Resolve confident pending activations before completion, with configurable action confidence and the existing clause and target reviews.
+- Audit the proposed activation independently from corrected input history; preserve its authorized arguments and completed upload-group evidence in fresh and replayed actions.
 - Add recorded keyboard chords, bounded repetition, exact editable text selection and focused selection feedback, with platform shortcut mapping.
 - Detect delegated React/Vue events and registered listeners; expose drop containers and named-section context targets. Use segmented native/pointer dragging with effect feedback.
 - Search windowed text with normalized entity boundaries, scoped lightweight probes and container-sized budgets. Keep loading waits outside the successful-movement budget for growing feeds.

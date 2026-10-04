@@ -1504,6 +1504,18 @@ it('reach2 preserves helper text selection when Jev proposes typing into the sam
     expect(result.attempts[0]?.steps[0]?.actions?.map(action => action.tool)).toEqual(['select_text', 'press']);
 });
 
+it('reach2 audits a pending activation independently from corrected earlier input', async () => {
+    const spec: TestSpec<void> = { id: 'corrected-input-commit', title: 'Correct and store a cost', risk: 'An earlier input mistake suppresses the required commit', start: '/surface-labels', data: { cost: '17.25', mistake: '9.00' }, steps: () => [act('Correct Cost to {cost}, then Store entry'), verify('stored', ({ page }) => page.locator('#status').textContent().then(text => text === 'Entry stored'), { timeoutMs: 500 })] };
+    const result = (await suite([spec], { mode: 'ai', policy: view => {
+        if (!view.url && !view.control && view.history.length) { return { onTarget: view.history.some(entry => entry.action === 'type') ? 0.01 : 0.99 }; }
+        if (view.notices.includes('Entry stored')) { return { done: 0.99 }; }
+        const types = view.history.filter(entry => entry.action === 'type').length;
+        return types < 3 ? { tool: 'type', target: element => element.name === 'Cost', value: types ? 'cost' : 'mistake' } : { tool: 'click', target: element => element.name === 'Store entry', done: 0.9, achieved: 0.7, remaining: 0.1, needed: 0.95 };
+    } }).run).results[0]!;
+    expect(result.status, result.summary).toBe('passed');
+    expect(result.attempts[0]?.steps[0]?.actions?.map(action => action.tool)).toEqual(['type', 'type', 'type', 'click']);
+});
+
 it('reach2 refuses helper keyboard text absent from the step and observed page', async () => {
     const spec: TestSpec<void> = { id: 'keyboard-text-authorization', title: 'Focus a message', risk: 'Keyboard text bypasses input authorization', start: '/surface-editor', steps: () => [act('Focus Message', { maxActions: 1 })] };
     const result = (await suite([spec], { mode: 'ai', policy: () => ({ tool: 'none' }), helper: view => ({ outcome: 'act', tool: 'press', element: view.elements.find(element => element.role === 'textbox' && element.name?.startsWith('Message'))!.i, key: 'z', times: 1, value_key: null, text: null, reason: 'Insert an undeclared character' }) }).run).results[0]!;
