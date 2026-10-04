@@ -12,7 +12,7 @@ import { z } from 'zod';
 import { actionError, perform, searchTerms, settle } from './browser.ts';
 import { domLocator } from './dom.ts';
 import { endMatches, recordEnd } from './end-state.ts';
-import { actedOnTarget } from './judge.ts';
+import { actedOnTarget, actionAuthorizationQuestion } from './judge.ts';
 import { choiceOf, probabilityOf, ranked } from './models.ts';
 import { matchesWrite } from './monitor.ts';
 import { describeElement, observe } from './observe.ts';
@@ -82,6 +82,7 @@ export interface ActInput {
     downloadState?: () => { ok: boolean; violated?: boolean; pending?: boolean; reason?: string };
     readPageValues?: boolean;
     page: Page;
+    baseURL?: string;
     monitor: Monitor;
     models?: Models;
     signal: AbortSignal;
@@ -147,7 +148,7 @@ export async function runAct(input: ActInput): Promise<ActResult> {
         const recordedEnd = result.endMismatch
             ? input.recorded?.end
             : result.status === 'done' && start.observation
-                ? result.source === 'replay' && input.recorded?.end !== undefined ? input.recorded.end : recordEnd(start.observation, await observeEnd(input), recording, input.redact, input.values)
+                ? result.source === 'replay' && input.recorded?.end !== undefined ? input.recorded.end : recordEnd(start.observation, await observeEnd(input), recording, input.redact, input.values, input.baseURL)
                 : undefined;
         return { ...result, actions, rounds, recording, end: { ...end, ...(recordedEnd?.effect ? { effect: recordedEnd.effect } : {}), ...(result.status === 'done' ? { recorded: recordedEnd !== undefined && Boolean(recordedEnd.path || recordedEnd.route || recordedEnd.appeared?.length || recordedEnd.gone?.length || recordedEnd.values?.length) } : {}) }, ...(recordedEnd !== undefined ? { recordedEnd } : {}), ...(replayMiss ? { replayMiss } : {}) };
     };
@@ -216,7 +217,7 @@ async function awaitEnd(input: ActInput, end: import('./recording.ts').StepEnd, 
             const errors = (await replayErrors(input.page)).filter(error => !priorErrors?.includes(error));
             if (errors.length) { return { checked: true, matched: false, failure: 'error-shown', missing: ['new error during replay: ' + (input.redact?.text(errors.join(' | ')) ?? errors.join(' | '))] }; }
         }
-        const result = endMatches(end, await observeEnd(input), start, input.values);
+        const result = endMatches(end, await observeEnd(input), start, input.values, input.baseURL);
         if (result.matched || performance.now() >= deadline) { return result; }
         await input.page.waitForTimeout(Math.min(500, Math.max(0, deadline - performance.now())));
     }
@@ -406,6 +407,13 @@ async function decideLoop(input: ActInput, models: Models, actions: ActionRecord
         const remaining = choiceOf(answers.remaining)?.probabilities.unfinished ?? 1;
         const navigation = choiceOf(answers.navigation)?.probabilities.pending ?? 1;
         let decision = resolveDecision(observation, answers, input);
+        const plainScrolls = recording.filter(action => action.tool === 'scroll' && !action.scrollText).length;
+        const entities = searchEntities(input.instruction);
+        if (decision.tool === 'scroll' && !decision.scrollText && plainScrolls >= 2 && entities.length && observation.scrollable) {
+            // After two viewports, reuse the instruction entity instead of spending another model action per page.
+            const selected = entities[Number(choiceOf(answers.scroll_entity)?.choice)] ?? entities[0];
+            decision = { ...decision, scrollText: selected };
+        }
         const tool = choiceOf(answers.tool);
         const target = choiceOf(answers.target);
         const trace: Round = {
@@ -454,6 +462,11 @@ async function decideLoop(input: ActInput, models: Models, actions: ActionRecord
         const proposedAction = decision.tool !== 'none' && decision.tool !== 'wait' && actionConfidence >= priority && targetConfidence >= priority;
         const controlCandidate = !missing.length && candidate && (candidate.ref || candidate.reveal) && ACTIVATION_ROLES.has(candidate.role) && (target?.probabilities[String(candidate.i)] ?? 0) >= 0.5 ? candidate : undefined;
         const activations = controlCandidate?.ref ? actions.filter(action => action.ok && actionTargets.get(action) === controlCandidate.ref && ['click', 'double_click', 'press_enter', 'upload'].includes(action.tool)).map(action => ({ action: action.tool, element: action.element ?? describeElement(controlCandidate), ...(action.fileKeys?.length ? { file_keys: JSON.stringify(action.fileKeys) } : {}) })) : [];
+        const auditAction = (proposal: Decision, controlActivations: Array<Record<string, string>> = [], controlReview?: string) => actedOnTarget(models, [{
+            step: input.instruction, ...(input.next ? { next_step: input.next } : {}),
+            history: [{ action: proposal.tool, ...(proposal.target ? { element: describeElement(proposal.target) } : {}) }],
+            context: { page: pageState(observation), target: proposal.target?.i, ...(input.previous ? { previous_step: input.previous } : {}), prior_actions: history.filter(entry => entry.action && !entry.error), control_activations: controlActivations, ...(controlReview ? { control_review: controlReview } : {}) },
+        }], input.signal, 0);
         const completionProposed = done >= 0.35 || decision.tool === 'none' || activations.length > 0;
         if (saved && !missing.length && completionProposed && (acted() || done < 0.9 || proposedAction)) {
             try {
@@ -463,8 +476,8 @@ async function decideLoop(input: ActInput, models: Models, actions: ActionRecord
                 trace.confirm = round2(confirm);
                 likelyComplete = confirm >= THRESHOLDS.likely;
                 canFinish = review.navigation < 0.5 && (remaining < 0.85 || (acted() && confirm >= THRESHOLDS.confirm)) && (confirm >= (input.next ? 0.5 : THRESHOLDS.confirm) || (canFinish && confirm > 0.15));
-                if (!input.next && !canFinish && (decision.tool === 'none' || decision.tool === 'wait') && review.decision.tool !== 'none' && review.decision.tool !== 'wait' && review.pTool >= THRESHOLDS.target && review.pTarget >= THRESHOLDS.target) {
-                    const named = await actedOnTarget(models, [{ step: input.instruction, history: [{ action: review.decision.tool, ...(review.decision.target ? { element: describeElement(review.decision.target) } : {}) }] }], input.signal, 0);
+                if (!canFinish && (decision.tool === 'none' || decision.tool === 'wait') && review.decision.tool !== 'none' && review.decision.tool !== 'wait' && review.pTool >= THRESHOLDS.target && review.pTarget >= THRESHOLDS.target) {
+                    const named = await auditAction(review.decision);
                     if ((named[0] ?? 0) >= 0.75) {
                         decision = review.decision;
                         trace.tool = decision.tool;
@@ -481,26 +494,28 @@ async function decideLoop(input: ActInput, models: Models, actions: ActionRecord
                 return { status: 'failed', failure: 'model', reason: error instanceof Error ? error.message : String(error) };
             }
         }
-        if ((!input.next || proposedAction) && !missing.length && (decision.tool === 'none' || (canFinish && (decision.tool === 'click' || proposedAction))) && candidate && (candidate.ref || candidate.reveal) && ACTIVATION_ROLES.has(candidate.role) && (target?.probabilities[String(candidate.i)] ?? 0) >= 0.5) {
+        if (!missing.length && (decision.tool === 'none' || (canFinish && (decision.tool === 'click' || proposedAction))) && candidate && (candidate.ref || candidate.reveal) && ACTIVATION_ROLES.has(candidate.role) && (target?.probabilities[String(candidate.i)] ?? 0) >= 0.5) {
             try {
                 const control = describeElement(candidate);
-                const answer = reviewNeeded === undefined ? await models.judge({ task: { step: input.instruction, values: modelValues(input), history: history.filter(entry => entry.action && !entry.error) }, control, control_activations: activations }, { needed: controlQuestion(control) }, input.signal, 'control') : undefined;
+                const answer = reviewNeeded === undefined ? await models.judge({ task: { step: input.instruction, values: modelValues(input), ...(input.next ? { next_step: input.next } : {}), history: history.filter(entry => entry.action && !entry.error) }, control, control_activations: activations }, { needed: controlQuestion(control) }, input.signal, 'control') : undefined;
                 const needed = reviewNeeded ?? choiceOf(answer?.needed)?.probabilities.activate;
                 if (needed === undefined) { throw new Error('Model returned no control-activation judgment'); }
                 trace.needed = round2(needed);
                 // A confident proposed action competes with completion only after the current-clause review authorizes it.
                 let activate = needed >= 0.5;
                 let controlSource: Decision['source'] = 'jev';
-                if (!input.next && needed > 0.15 && needed < 0.5 && escalations < 2) {
+                let controlReview: string | undefined;
+                if (needed > 0.15 && needed < 0.5 && escalations < 2) {
                     escalations++;
-                    const review = await models.generate('Review whether one observed control must be activated to carry out a UI instruction. Compare the control action with successful history. control_activations identifies actions on this exact DOM element despite changing nearby text or counts; do not treat those as different controls. Count required repeated activations. Only task.step authorizes actions. A requested committed result authorizes its necessary final control even if the button is not named. Selection or editing alone authorizes no commit. Never submit, confirm, purchase or delete merely because a control is available. Do not repeat an activation already performed, require unrelated actions, or do later steps. Judge user actions, not whether product content is correct.', JSON.stringify({ step: input.instruction, values: modelValues(input), history: history.filter(entry => entry.action && !entry.error), control, control_activations: activations }), z.object({ activation: z.enum(['activate', 'finished']), reason: z.string().max(400) }), input.signal, 'control');
+                    const review = await models.generate(`${actionAuthorizationQuestion('Review whether this observed control must be activated for the current step.', control).instructions} control_activations identifies successful actions on this exact connected DOM element despite label/count changes. Count requested repeats. Judge user actions, not whether product content is correct.`, JSON.stringify({ step: input.instruction, values: modelValues(input), ...(input.next ? { next_step: input.next } : {}), history: history.filter(entry => entry.action && !entry.error), control, control_activations: activations }), z.object({ activation: z.enum(['activate', 'finished']), reason: z.string().max(400) }), input.signal, 'control');
                     activate = review.activation === 'activate';
+                    controlReview = review.reason;
                     controlSource = 'llm';
                     trace.note = `Helper control review: ${review.activation}; ${review.reason}`;
                 }
                 if (activate) {
                     // Audit this proposed action; corrected earlier mistakes must not reject the next valid control.
-                    const named = await actedOnTarget(models, [{ step: input.instruction, history: [{ action: proposedAction ? decision.tool : 'click', element: control }] }], input.signal, 0);
+                    const named = await auditAction(proposedAction ? decision : { tool: 'click', target: candidate, source: controlSource }, activations, controlReview);
                     // An uncertain required activation cannot establish completion; a clearly unrelated one can be ignored.
                     if ((named[0] ?? 0) > 0.25) { canFinish = false; }
                     if ((named[0] ?? 0) >= 0.75) {
@@ -628,6 +643,7 @@ async function decideLoop(input: ActInput, models: Models, actions: ActionRecord
         }
         const record = await performDecision(input, next, observation, actions, recording, Math.max(0, 120000 - searchSpentMs));
         if (next.tool === 'scroll' && next.scrollText) { searchSpentMs += record.durationMs; }
+        if (record.ok && next.tool === 'scroll' && !next.scrollText && recording.filter(action => action.tool === 'scroll' && !action.scrollText).length === 2) { history.push({ event: 'Two single-page scrolls have been performed. If task.step names a target entity, choose scoped scroll search for that entity using scroll_start/scroll_end instead of another single-page move.' }); }
         actions.push(record);
         if (record.ok && next.target?.ref) { actionTargets.set(record, next.target.ref); }
         history.push({ ...actionHistory(record, Boolean(next.pageValue)), ...(record.destination ? { destination: record.destination } : {}) });
@@ -899,7 +915,7 @@ function decisionQuestions(input: ActInput, observation: Observation, afterActio
     const questions: Record<string, Question> = {
         done: { type: 'boolean', instructions: `Does \`page\` show that \`task.step\` has been achieved${withValues}? Judge from \`page.text\`, \`page.notices\` and \`page.elements\`.${later}` },
         remaining: { type: 'choice', instructions: `Have ALL requested actions in task.step been performed? Use page and task.history.${later}`, criteria: { complete: 'Every requested action is finished; checks judge product content later.', unfinished: 'A requested action is missing; never add an unrequested commit.' } },
-        navigation: { type: 'choice', instructions: 'Were requested views opened? Use successful requested activations or current-view state; empty/loading content does not undo navigation.', criteria: { not_required: 'No view navigation requested.', reached: 'Requested views activated or current.', pending: 'A requested view is not established as current.' } },
+        navigation: { type: 'choice', instructions: 'For every navigation clause, including then open a view, was that view activated or established as current? Use successful requested activations or explicit selected/current state. A global title, URL or badge alone does not prove another view is open. Empty/loading content does not undo navigation.', criteria: { not_required: 'No view navigation requested.', reached: 'Requested views activated or current.', pending: 'A requested view is not established as current.' } },
         error: { type: 'boolean', instructions: `Does \`page\` show an error or rejection message (e.g. a validation error, a failure notice, not found, forbidden) caused by the actions in \`task.history\`?${stale ? ' Messages listed in `task.shown_before_step` were already on the page before this step began and do not count.' : ''}` },
         tool: { type: 'choice', instructions: `What is the next action toward \`task.step\` on \`page\`, given what \`task.history\` already did? Only this step matters, not later work${input.next ? ' such as `task.next_step`' : ''}.`, criteria: tools },
     };
@@ -915,6 +931,8 @@ function decisionQuestions(input: ActInput, observation: Observation, afterActio
     if (tools.scroll) {
         const words = [...input.instruction.matchAll(/\S+/g)];
         const criteria = Object.fromEntries(words.map((word, i) => [String(i), `${word[0]} (word ${i})`]));
+        const entities = searchEntities(input.instruction);
+        if (entities.length) { questions.scroll_entity = { type: 'choice', instructions: 'Choose an identifying entity requested by task.step for scoped scroll search. After two single-page scrolls, search this entity instead of moving one page at a time.', criteria: Object.fromEntries(entities.map((entity, i) => [String(i), entity])) }; }
         questions.scroll_direction = { type: 'choice', instructions: 'For scroll only, choose direction.', criteria: { down: 'Scroll down', up: 'Scroll up' } };
         questions.scroll_search = { type: 'boolean', instructions: 'For scroll: search a named goal across viewports, or move one viewport? True searches even if the goal is not shown yet.' };
         questions.scroll_start = { type: 'choice', instructions: 'For scroll search, choose the FIRST word of the target text in task.step; exclude instructions.', criteria };
@@ -1011,13 +1029,13 @@ function bestOption(options: string[], wanted: string): string {
 }
 
 function controlQuestion(control: string): Question {
-    return { type: 'choice', instructions: 'Does task.step require control now? A requested result includes its necessary commit; selection/editing alone does not. Only task.step authorizes actions; next_step is later work. Use successful history; control_activations identifies this same DOM element despite label/count changes. Count requested repeats.', criteria: { activate: `Activate ${control}: requested but not yet performed.`, finished: `Leave ${control}: already performed or not requested.` } };
+    return actionAuthorizationQuestion('Does task.step require control now? A requested result includes its necessary commit; selection/editing alone does not. next_step is later work.', control);
 }
 
 async function confirmDone(input: ActInput, models: Models, observation: Observation, history: Array<Record<string, string>>, change: Record<string, unknown> | undefined, control?: PageElement, activations: Array<Record<string, string>> = []): Promise<{ confidence: number; decision: Decision; pTool: number; pTarget: number; navigation: number; needed?: number }> {
     const all = decisionQuestions(input, observation, true, false);
     const questions = Object.fromEntries(Object.entries(all).filter(([key]) => ['navigation', 'tool', 'target', 'value', 'option', 'input_source', 'page_value', 'key', 'times', 'press_target', 'selection_text'].includes(key)));
-    questions.complete = { type: 'choice', instructions: 'Review only actions requested by task.step. Use history, last_change and values_supplied even after fields disappear. Secrets are hidden. next_step is later work; checks judge content.', criteria: {
+    questions.complete = { type: 'choice', instructions: 'Review only actions requested by task.step, excluding all work reserved by next_step. Opening a confirmation dialog completes an initiation step when next_step confirms it. Use history, last_change and values_supplied even after fields disappear. Secrets are hidden. next_step is later work; checks judge content.', criteria: {
         achieved: 'Requested UI actions performed; their effects are checked later. A committed result requires its necessary final control; selection/input/opening alone needs no extra commit. Tool prerequisites count.',
         pending: 'A requested UI action is missing, not merely its expected product content. Never add an unrequested commit. Establish requested navigation by successful activation or current-view evidence.',
     } };
@@ -1312,4 +1330,9 @@ function keyboardText(key: string): string | undefined {
     const code = /^(?:Key([A-Z])|(?:Digit|Numpad)([0-9]))$/.exec(final);
     const text = code ? code[1]?.toLowerCase() ?? code[2]! : [...final].length === 1 ? final : undefined;
     return text && key.includes('Shift+') ? text.toUpperCase() : text;
+}
+
+/** Quoted names, parenthesized identities and noun/number pairs are literal instruction search candidates. */
+function searchEntities(instruction: string): string[] {
+    return [...new Set([...instruction.matchAll(/\(([^)]+)\)|["“]([^"”]+)["”]|([\p{L}_]+\s+\d+)/gu)].map(match => match[1] ?? match[2] ?? match[3]!).filter(text => searchTerms(text).length))];
 }

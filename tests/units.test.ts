@@ -1359,3 +1359,21 @@ it('reach2 keeps loading waits outside the movement budget of a growing scroll s
         expect(await page.locator('#feed').evaluate(element => element.scrollTop)).toBeGreaterThan(5000);
     });
 }, 40000);
+
+
+describe('merge route contracts', () => {
+    const page: Observation = { url: '/draft?a=1&z=2', origin: 'http://127.0.0.1:4200', title: '', text: '', notices: [], headings: [], elements: [], omitted: 0, signature: '' };
+    it('binds relative routes to the current base and preserves sorted query checks', async () => {
+        const { endMatches } = await import('../src/end-state.ts');
+        const end = { base: true, route: '/draft?z=2&a=1' };
+        expect(endMatches(end, page, undefined, {}, page.origin).matched).toBe(true);
+        expect(endMatches(end, { ...page, origin: 'http://127.0.0.1:4300' }, undefined, {}, page.origin).matched).toBe(false);
+        expect(endMatches(end, { ...page, url: '/draft?a=1&z=3' }, undefined, {}, page.origin).matched).toBe(false);
+    });
+    it('keeps third-party routes literal and old routes path-only', async () => {
+        const { endMatches } = await import('../src/end-state.ts');
+        expect(endMatches({ base: false, route: 'https://payments.test/draft?a=1&z=2' }, page, undefined, {}, page.origin).matched).toBe(false);
+        expect(endMatches({ route: 'http://127.0.0.1:4100/draft?legacy=1' }, page).matched).toBe(true);
+        expect(endMatches({ path: '/draft' }, page).matched).toBe(true);
+    });
+});

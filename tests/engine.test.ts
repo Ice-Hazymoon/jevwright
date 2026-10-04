@@ -12,7 +12,7 @@ import { act, check, reload, run, runSuite, secret, verify } from '../src/index.
 import { describePageValue, pageValueChoices, readPageValue } from '../src/page-values.ts';
 import { createRedactor } from '../src/secrets.ts';
 import { startFixtureApp } from './fixtures/app.ts';
-import { deferredPolicy, fixturePolicy, integrityPolicy } from './support/fixture-policy.ts';
+import { deferredPolicy, fixturePolicy, integrityPolicy, reservationPolicy, savedViewPolicy, singlePageSearchPolicy } from './support/fixture-policy.ts';
 import { scriptedModels } from './support/scripted-models.ts';
 
 type App = Awaited<ReturnType<typeof startFixtureApp>>;
@@ -169,6 +169,7 @@ describe('integrity regression paths', () => {
         const path = join(recordingsDir, base.id + '.json');
         const recording = JSON.parse(await readFile(path, 'utf8'));
         recording.steps[0].end.route = 'http://127.0.0.1:1/integrity';
+        recording.steps[0].end.base = false;
         await writeFile(path, JSON.stringify(recording));
         const auto = await suite([spec], { recordingsDir, policy: () => ({ done: 0.01, tool: 'none', onTarget: 0.99 }) }).run;
         expect(auto.results[0]?.cause).toBe('agent');
@@ -183,6 +184,7 @@ describe('integrity regression paths', () => {
         const path = join(recordingsDir, base.id + '.json');
         const recording = JSON.parse(await readFile(path, 'utf8'));
         recording.steps[0].end.route = 'http://127.0.0.1:1/integrity';
+        recording.steps[0].end.base = false;
         await writeFile(path, JSON.stringify(recording));
         const informed = (view: View) => view.history.some(entry => entry.event?.includes('recorded end state missing: route ')) ? { done: 0.99 } : { done: 0.01, tool: 'none' };
         const auto = await suite([spec], { recordingsDir, policy: informed }).run;
@@ -1700,4 +1702,67 @@ it('reach2 keeps unobserved clipboard contents outside keyboard input authorizat
     const result = (await suite([spec], { mode: 'ai', policy: () => ({ tool: 'none' }), helper: view => ({ outcome: 'act', tool: 'press', element: view.elements.find(element => element.role === 'textbox' && element.name === 'Message')!.i, key: 'ControlOrMeta+v', times: 1, value_key: null, text: null, reason: 'Paste clipboard contents' }) }).run).results[0]!;
     expect(result.cause).toBe('agent');
     expect(JSON.stringify(result)).toContain('Clipboard input requires the type tool and an authorized value');
+});
+
+
+describe('merge completion regressions', () => {
+    it.each(['healthy', 'missing'])('executes the necessary reservation confirmation before verifying: %s', async bug => {
+        const spec: TestSpec<void> = { id: 'reservation-flow', title: 'Reserve a date', risk: 'Selection is mistaken for a reservation', start: '/completion-calendar?bug=' + bug, steps: () => [act('Reserve the date requested on the page'), verify('reservation committed', ({ page }) => page.locator('#receipt').textContent().then(text => text === 'Reservation confirmed'), { timeoutMs: 1 })] };
+        const result = (await suite([spec], { mode: 'ai', policy: reservationPolicy, helper: () => ({ activation: 'activate', reason: 'The reservation requires its final confirmation' }) }).run).results[0]!;
+        expect(result.status, result.summary).toBe(bug === 'healthy' ? 'passed' : 'failed');
+        if (bug === 'missing') { expect(result.cause).toBe('product'); }
+        expect(result.attempts[0]?.steps[0]?.actions?.map(action => action.element)).toEqual(['button "Open calendar"', 'button "4" near "August 2027"', 'button "Confirm reservation"']);
+    });
+    it.each(['healthy', 'empty'])('opens the requested list after saving before checking content: %s', async bug => {
+        const spec: TestSpec<void> = { id: 'saved-view-flow', title: 'Save and open a list', risk: 'A badge hides unopened content', start: '/completion-list?bug=' + bug, steps: () => [act('Save the entry, then open the Saved entries view'), verify('list contains the entry', ({ page }) => page.locator('#panel').textContent().then(text => text === 'Saved entriesField notes'), { timeoutMs: 1 })] };
+        const result = (await suite([spec], { mode: 'ai', policy: savedViewPolicy }).run).results[0]!;
+        expect(result.status, result.summary).toBe(bug === 'healthy' ? 'passed' : 'failed');
+        if (bug === 'empty') { expect(result.cause).toBe('product'); }
+        expect(result.attempts[0]?.steps[0]?.actions?.map(action => action.element)).toEqual(['button "Save entry"', 'button "Saved entries (1)"']);
+    });
+    it('switches from two single-page scrolls to an instruction entity search', async () => {
+        const spec: TestSpec<void> = { id: 'search-after-scrolls', title: 'Find an archive entity', risk: 'Single pages exhaust the action budget', start: '/surface-search', steps: () => [act('Find Special entry (record 812), then open the entry', { maxActions: 5 }), verify('entry opened', ({ page }) => page.getByRole('status').textContent().then(text => text === 'Entry opened'), { timeoutMs: 1 })] };
+        const recordingsDir = join(root, 'search-after-scrolls');
+        const result = (await suite([spec], { policy: singlePageSearchPolicy, recordingsDir }).run).results[0]!;
+        expect(result.status, result.summary).toBe('passed');
+        const stored = JSON.parse(await readFile(join(recordingsDir, spec.id + '.json'), 'utf8'));
+        expect(stored.steps[0].actions[2]).toMatchObject({ tool: 'scroll', scrollText: 'record 812' });
+        expect((await suite([spec], { mode: 'replay', recordingsDir }).run).totals.passed).toBe(1);
+    });
+});
+
+describe('merge origin binding', () => {
+    it('replays base routes on a different port and rejects a different active origin', async () => {
+        const other = await startFixtureApp();
+        try {
+            const spec: TestSpec<void> = { id: 'base-port-route', title: 'Save at the configured app', risk: 'An absolute cached port hides effects', start: '/integrity', steps: () => [act('Save draft')] };
+            const recordingsDir = join(root, 'base-port-route');
+            expect((await suite([spec], { policy: integrityPolicy, recordingsDir }).run).totals.passed).toBe(1);
+            const stored = JSON.parse(await readFile(join(recordingsDir, spec.id + '.json'), 'utf8'));
+            expect(stored.steps[0].end).toMatchObject({ base: true, route: '/integrity' });
+            expect((await suite([spec], { baseURL: other.origin, mode: 'replay', recordingsDir }).run).totals.passed).toBe(1);
+            const drift = await suite([{ ...spec, ready: async ({ page }) => { await page.goto(other.origin + '/integrity'); } }], { allowedOrigins: [other.origin], mode: 'replay', recordingsDir }).run;
+            expect(drift.results[0]?.status).toBe('failed');
+            expect(drift.results[0]?.summary).toContain('route');
+            delete stored.steps[0].end.base;
+            stored.steps[0].end.route = app.origin + '/integrity?legacy=1';
+            await writeFile(join(recordingsDir, spec.id + '.json'), JSON.stringify(stored));
+            expect((await suite([spec], { baseURL: other.origin, mode: 'replay', recordingsDir }).run).totals.passed).toBe(1);
+        } finally { await other.close(); }
+    });
+});
+
+
+it('merge audits contradictory repeat proposals with prior activations before proceeding to the defect check', async () => {
+    const spec: TestSpec<void> = { id: 'repeat-proposal-context', title: 'Increase a count', risk: 'An extra increment hides a broken total', start: '/integration-counter?bug=total', steps: () => [act('Increase the first batch count by two'), verify('total reflects the new count', ({ page }) => page.locator('output').textContent().then(text => text === '21'), { timeoutMs: 1 })] };
+    const result = (await suite([spec], { mode: 'ai', policy: view => {
+        const count = view.history.filter(entry => entry.action === 'click').length;
+        if (!view.url && !view.control) { return { onTarget: (view.auditContext?.control_activations?.length ?? 0) >= 2 || view.history.length >= 3 ? 0.01 : 0.99 }; }
+        if (view.control) { return { needed: count >= 2 ? 0.28 : 0.98 }; }
+        return count >= 2 ? { done: 0.72, achieved: 0.85, remaining: 0.08, tool: 'none', target: element => element.name === '+' }
+            : { tool: 'click', target: element => element.name === '+' };
+    }, helper: view => view.control ? { activation: 'activate', reason: 'The two increments were performed; do not increment again' } : { outcome: 'step_already_done', tool: null, element: null, value_key: null, text: null, reason: 'Both requested increments were performed' } }).run).results[0]!;
+    expect(result.cause, result.summary).toBe('product');
+    expect(result.attempts[0]?.steps[0]?.actions?.filter(action => action.ok)).toHaveLength(2);
+    expect(result.attempts[0]?.steps[1]?.failure).toBe('assertion');
 });

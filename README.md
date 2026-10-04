@@ -215,7 +215,7 @@ with an auto run; a mismatch alone does not establish a product defect.
 - `check` requires the asserted content to be visible. A count or saved-button state cannot prove what another tab contains.
 - Failed checks receive a second look. Visible contradictions, or missing expected content in an open visible region, are `product`; a collapsed or unopened region is `agent`. Uncertain region evidence receives adjudication.
 - `check` is a model judgment in auto/AI mode. Replay verifies recorded direct evidence; checks without it remain `unverified`. Exact values (money, multilingual text, line breaks) and negative claims belong in `verify`.
-- Recorded origins are literal. Changing the host or port requires AI healing in auto mode, which can fail even when other recorded effects match. Keep origins stable for reliable replay; complete recordings are not automatically rebound to a new origin.
+- New recordings bind app routes to the run’s `baseURL`, so changing the host or port alone does not invalidate the route check. Path, sorted query and recorded effects must still match. Routes to other origins remain literal. Unmarked legacy routes retain path-only checks.
 - Chromium only.
 
 ## License

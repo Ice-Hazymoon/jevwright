@@ -41,8 +41,10 @@ function present(anchor: Anchor, observation: Observation): boolean {
 }
 const durableStates = (states: string[] | undefined) => states?.filter(state => state !== 'focused');
 
-export function recordEnd(start: Observation, end: Observation, actions: RecordedAction[], redact: Redactor = createRedactor(), data: Values = {}): StepEnd {
-    const route = normalizedRoute(end.url, end.origin);
+export function recordEnd(start: Observation, end: Observation, actions: RecordedAction[], redact: Redactor = createRedactor(), data: Values = {}, baseURL?: string): StepEnd {
+    const absoluteRoute = normalizedRoute(end.url, end.origin);
+    const base = !!baseURL && new URL(absoluteRoute).origin === new URL(baseURL).origin;
+    const route = base ? absoluteRoute.slice(new URL(baseURL!).origin.length) : absoluteRoute;
     const appeared = anchors(end).filter(anchor => !redact.contains(JSON.stringify(anchor)) && !present(anchor, start)).slice(0, 4);
     const gone = start.elements.filter(element => anchorName(element.name)).map(element => describeTarget(element, start)).filter(target => !redact.contains(JSON.stringify(target)) && !present({ kind: 'element', target }, end)).slice(0, 2);
     const values: ValueAnchor[] = end.elements.flatMap(element => {
@@ -68,15 +70,20 @@ export function recordEnd(start: Observation, end: Observation, actions: Recorde
         const anchor: ValueAnchor = { target, ...(valueChanged && !Object.keys(dynamic).length ? { value: element.value } : dynamic), ...(stateChanged ? { states: states ?? [] } : {}) };
         return redact.contains(JSON.stringify(anchor)) || redact.contains(element.value ?? '') ? [] : [anchor];
     });
-    const changedRoute = normalizedRoute(start.url, start.origin) !== route;
+    const changedRoute = normalizedRoute(start.url, start.origin) !== absoluteRoute;
     if ((!changedRoute || redact.contains(route)) && !appeared.length && !gone.length && !values.length) { return { effect: 'none' }; }
-    return { ...(!redact.contains(route) ? { route } : {}), ...(appeared.length ? { appeared, absentBefore: appeared } : {}), ...(gone.length ? { gone } : {}), ...(values.length ? { values } : {}) };
+    return { ...(!redact.contains(route) ? { route, base } : {}), ...(appeared.length ? { appeared, absentBefore: appeared } : {}), ...(gone.length ? { gone } : {}), ...(values.length ? { values } : {}) };
 }
 
-export function endMatches(end: StepEnd, observation: Observation, start?: Observation, values: Values = {}): EndCheck {
+export function endMatches(end: StepEnd, observation: Observation, start?: Observation, values: Values = {}, baseURL?: string): EndCheck {
     const missing: string[] = [];
     if (end.path && normalizedPath(observation.url) !== end.path) { missing.push(`path ${end.path}`); }
-    if (end.route && normalizedRoute(observation.url, observation.origin) !== end.route) { missing.push(`route ${end.route}`); }
+    if (end.route) {
+        // Unmarked recordings retain the legacy path-only contract; marked routes bind to a run or literal origin.
+        const matched = end.base === undefined ? normalizedPath(observation.url) === normalizedPath(end.route)
+            : normalizedRoute(observation.url, observation.origin) === normalizedRoute(end.route, end.base ? baseURL : undefined);
+        if (!matched) { missing.push(`route ${end.route}`); }
+    }
     missing.push(...(end.appeared ?? []).filter(anchor => !present(anchor, observation)).map(anchor => anchor.kind === 'element' ? `${anchor.target.role} ${anchor.target.name}` : `${anchor.kind} ${anchor.text}`));
     if (start) {
         for (const anchor of end.absentBefore ?? []) {

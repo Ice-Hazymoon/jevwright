@@ -199,3 +199,35 @@ export function pendingActionPolicy(view: View): Belief {
 export const integrityPolicy = (view: View): Belief => view.history.some(entry => entry.action === 'click')
     ? { done: 0.99 }
     : { tool: 'click', target: is('button', 'Save draft') };
+
+/** Reproduce done/none after selection while the required final control remains unactivated. */
+export function reservationPolicy(view: View): Belief {
+    const confirms = view.history.some(entry => entry.element?.includes('Confirm reservation'));
+    const authorized = /necessary.*(?:submit|confirm)|necessary final control/i.test(view.instructions ?? '');
+    if (!view.url && !view.control) { return { onTarget: authorized || view.history.length > 1 ? 0.98 : 0.01 }; }
+    if (view.control) { return { needed: confirms ? 0.02 : view.control.includes('Confirm reservation') ? 0.34 : 0.98 }; }
+    if (confirms) { return { done: 0.99 }; }
+    if (view.history.some(entry => entry.element?.includes('button "4"'))) {
+        return { done: 0.95, achieved: 0.98, remaining: 0.03, tool: 'none', target: is('button', 'Confirm reservation') };
+    }
+    return view.history.some(entry => entry.element?.includes('Open calendar'))
+        ? { tool: 'click', target: is('button', '4') } : { tool: 'click', target: is('button', 'Open calendar') };
+}
+
+/** Reproduce a badge/global-heading completion guess before the requested view is opened. */
+export function savedViewPolicy(view: View): Belief {
+    const opened = view.history.some(entry => entry.element?.includes('Saved entries (1)'));
+    if (!view.url && !view.control) { return { onTarget: view.history.length > 1 || /requested.*view|view.*step names/i.test(view.instructions ?? '') ? 0.98 : 0.01 }; }
+    if (view.control) { return { needed: opened ? 0.02 : 0.76 }; }
+    if (opened) { return { done: 0.99 }; }
+    return view.history.some(entry => entry.element?.includes('Save entry'))
+        ? { done: 0.91, achieved: 0.49, remaining: 0.18, navigation: 0.04, tool: 'none', target: is('button', 'Saved entries (1)') }
+        : { tool: 'click', target: is('button', 'Save entry') };
+}
+
+/** Reproduce repeated single-page scrolling despite an identifying entity in the instruction. */
+export function singlePageSearchPolicy(view: View): Belief {
+    if (view.notices.includes('Entry opened')) { return { done: 0.99 }; }
+    if (view.elements.some(is('button', 'Open entry'))) { return { tool: 'click', target: is('button', 'Open entry') }; }
+    return { tool: 'scroll', target: element => Boolean(element.scroll) };
+}

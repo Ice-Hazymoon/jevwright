@@ -57,6 +57,17 @@ function escapeHtml(text: string): string {
 function pages(state: FixtureState, url: URL): string | undefined {
     const bug = url.searchParams.get('bug');
     switch (url.pathname) {
+        case '/completion-calendar':
+            return layout('Reservation desk', '<p>Reserve August 4, 2027.</p><form aria-label="Reservation"><label>Date<output id="date"></output></label><button type="button" id="calendar">Open calendar</button><div id="picker" role="dialog" aria-label="August 2027" hidden><h2>August 2027</h2><button type="button" id="day">4</button></div><button type="button" id="confirm">Confirm reservation</button></form><output id="receipt"></output>', `
+document.getElementById('calendar').onclick = () => document.getElementById('picker').hidden = false;
+document.getElementById('day').onclick = () => { document.getElementById('date').value = '2027-08-04'; document.getElementById('picker').hidden = true; };
+document.getElementById('confirm').onclick = () => { if (document.getElementById('date').value && ${JSON.stringify(bug)} !== 'missing') document.getElementById('receipt').textContent = 'Reservation confirmed'; };
+`);
+        case '/completion-list':
+            return layout('Saved entries', '<button id="save">Save entry</button><button id="browse" aria-pressed="true">Browse</button><button id="tab" aria-pressed="false">Saved entries (0)</button><section id="panel"><h2>Browse</h2><p>Field notes</p></section>', `
+document.getElementById('save').onclick = () => { document.getElementById('save').textContent = 'Saved'; document.getElementById('tab').textContent = 'Saved entries (1)'; };
+document.getElementById('tab').onclick = () => { document.getElementById('browse').setAttribute('aria-pressed', 'false'); document.getElementById('tab').setAttribute('aria-pressed', 'true'); document.getElementById('panel').innerHTML = ${JSON.stringify(bug === 'empty' ? '<h2>Saved entries</h2><p>No entries</p>' : '<h2>Saved entries</h2><p>Field notes</p>')}; };
+`);
         case '/integrity-audit':
             return layout('Draft editor', '<label>Draft<input id="draft"></label><label>Reference<input id="reference"></label><button id="store">Store draft</button>', `document.getElementById('store').onclick = () => send('/api/draft-validation', { draft: document.getElementById('draft').value });`);
         case '/integrity-region':

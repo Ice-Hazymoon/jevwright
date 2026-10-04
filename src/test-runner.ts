@@ -271,7 +271,7 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
             if (!models || !acts.length) { return undefined; }
             const done = (entry: StepResult) => entry.actions!.filter(action => action.ok);
             const history = (entry: StepResult) => done(entry).map(action => ({ action: action.tool, ...(action.element ? { element: action.element } : {}), ...(action.value ? { value: action.value } : {}) }));
-            const verdicts = await actedOnTarget(models, acts.map(entry => ({ step: entry.label, history: history(entry) })), signal).catch(() => undefined);
+            const verdicts = await actedOnTarget(models, acts.map(entry => ({ step: entry.label, history: history(entry), ...(nextAct(entry.index) ? { next_step: nextAct(entry.index) } : {}) })), signal).catch(() => undefined);
             const miss = verdicts?.findIndex(p => p < MISSTEP) ?? -1;
             if (!verdicts || miss < 0) { return undefined; }
             const entry = acts[miss]!;
@@ -465,6 +465,7 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
                 counts.total++;
                 const outcome = await runAct({
                     get page() { return page!; },
+                    baseURL: options.origin,
                     files: Object.fromEntries(Object.entries(options.files ?? {}).filter(([key]) => keys.includes(key))),
                     hasTouch: options.device?.hasTouch,
                     downloadState: downloads.state,

@@ -12,6 +12,7 @@ export interface View {
     field?: string;
     control?: string;
     controlActivations: Array<Record<string, string>>;
+    auditContext?: { prior_actions?: Array<Record<string, string>>; control_activations?: Array<Record<string, string>> };
     review?: boolean;
     instructions?: string;
     change?: Record<string, unknown>;
@@ -101,7 +102,7 @@ export function scriptedModels(policy: (view: View) => Belief, helper?: (view: V
             const controlBelief = view.control ? policy({ ...view, review: false, text: '', notices: [], elements: [], change: undefined }) : belief;
             const answers: Record<string, Answer> = {};
             // Post-failure audit: one question per earlier act step, each judged by the policy for that step.
-            const audited = ((state as { steps?: Array<Record<string, unknown>> }).steps ?? []).map(entry => policy(toView({ task: entry })));
+            const audited = ((state as { steps?: Array<Record<string, unknown>> }).steps ?? []).map(entry => policy({ ...toView({ task: entry }), instructions: JSON.stringify(questions) }));
             for (const [id, question] of Object.entries(questions)) {
                 const step = /^on_target_(\d+)$/.exec(id);
                 answers[id] = step ? onTarget(audited[Number(step[1])]?.onTarget ?? 0.95) : answer(id, question, id === 'needed' ? controlBelief : belief, view);
@@ -113,7 +114,7 @@ export function scriptedModels(policy: (view: View) => Belief, helper?: (view: V
         doGenerate: async ({ prompt }) => {
             const text = JSON.stringify(prompt);
             const payload = JSON.parse(extractJson(text)) as Record<string, unknown>;
-            const view = toView({ task: { step: payload.step, values: payload.values, history: payload.history }, page: payload.page, claim: payload.claim, prior_actions: payload.prior_actions, control: payload.control, control_activations: payload.control_activations });
+            const view = toView({ task: { step: payload.step, values: payload.values, history: payload.history, next_step: payload.next_step }, page: payload.page, claim: payload.claim, prior_actions: payload.prior_actions, control: payload.control, control_activations: payload.control_activations });
             const output = helper?.(view, String(payload.why_you_are_asked ?? '')) ?? { outcome: 'impossible', tool: null, element: null, value_key: null, text: null, reason: 'scripted helper has no answer' };
             return {
                 content: [{ type: 'text', text: JSON.stringify(output) }],
@@ -201,6 +202,7 @@ function toView(state: Record<string, unknown>): View {
         ...(typeof state.claim === 'string' ? { claim: state.claim } : {}),
         priorActions: (state.prior_actions ?? []) as View['priorActions'],
         pageValues: (task.page_values ?? []) as string[],
+        ...(task.context ? { auditContext: task.context as View['auditContext'] } : {}),
         controlActivations: (state.control_activations ?? []) as Array<Record<string, string>>,
         values: (task.values ?? {}) as Record<string, string>,
         history: (task.history ?? []) as Array<Record<string, string>>,

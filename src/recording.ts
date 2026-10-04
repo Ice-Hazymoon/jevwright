@@ -53,7 +53,8 @@ export interface RecordedAction {
 
 export type Anchor = { kind: 'element'; target: TargetDescriptor } | { kind: 'heading' | 'dialog' | 'notice'; text: string };
 export interface ValueAnchor { target: TargetDescriptor; value?: string; states?: string[]; valueKey?: string; pageValue?: PageValueDescriptor; template?: string }
-export interface StepEnd { path?: string; route?: string; appeared?: Anchor[]; gone?: TargetDescriptor[]; absentBefore?: Anchor[]; values?: ValueAnchor[]; effect?: 'none' }
+/** base=true binds a route to the run baseURL; false keeps its literal origin; absent retains legacy path checks. */
+export interface StepEnd { path?: string; route?: string; base?: boolean; appeared?: Anchor[]; gone?: TargetDescriptor[]; absentBefore?: Anchor[]; values?: ValueAnchor[]; effect?: 'none' }
 export interface CheckEvidence { text: string; region: string; target?: TargetDescriptor; value?: string; states?: string[]; source: 'text' | 'notice' | 'heading' | 'element' }
 
 export interface StepRecording {
@@ -92,6 +93,7 @@ const recordingSchema = z.object({
         end: z.object({
             path: z.string().optional(),
             route: z.string().optional(),
+            base: z.boolean().optional(),
             appeared: z.array(anchorSchema).optional(),
             gone: z.array(descriptorSchema).optional(),
             absentBefore: z.array(anchorSchema).optional(),
