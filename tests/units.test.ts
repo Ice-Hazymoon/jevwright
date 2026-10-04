@@ -1271,3 +1271,12 @@ it('reach2 masks password selection before DOM data leaves the browser', async (
         expect(surface.details.find(detail => detail.inputType === 'password')?.selection).toBe('••••');
     });
 });
+
+it('reach2 keeps loading waits outside the movement budget of a growing scroll search', async () => {
+    await open('/reach-feed?many', async page => {
+        const feed = (await observe(page)).elements.find(element => element.scroll)!;
+        await perform(page, { tool: 'scroll', ref: feed.ref, scrollText: 'Update 95' });
+        expect(await page.getByRole('button', { name: 'Open update' }).isVisible()).toBe(true);
+        expect(await page.locator('#feed').evaluate(element => element.scrollTop)).toBeGreaterThan(5000);
+    });
+}, 40000);

@@ -479,8 +479,9 @@ async function scrollPage(page: Page, call: ToolCall): Promise<void> {
     const terms = call.scrollText ? searchTerms(call.scrollText) : [];
     let stalled = 0; let viewports = 0;
     try {
-        for (let attempt = 0; attempt < (call.scrollText ? cap : 1) && Date.now() < deadline; attempt++) {
-            call.signal?.throwIfAborted(); viewports++;
+        // Loading waits consume time and the stall limit, but do not consume successful viewport movements.
+        for (let attempt = 0; attempt < (call.scrollText ? cap : 1) && Date.now() < deadline;) {
+            call.signal?.throwIfAborted();
             if (terms.length) {
                 const found = await area.evaluate((scope, terms) => {
                     if (!scope) { return false; }
@@ -507,7 +508,7 @@ async function scrollPage(page: Page, call: ToolCall): Promise<void> {
             }, direction);
             if (!call.scrollText && delta.before === delta.after) { throw new Error('Scroll did not move the page or target container'); }
             await page.waitForTimeout(delta.before === delta.after ? 500 : 40);
-            if (delta.before === delta.after) { if (++stalled >= 5) { break; } } else { stalled = 0; }
+            if (delta.before === delta.after) { if (++stalled >= 5) { break; } } else { stalled = 0; attempt++; viewports++; }
             const size = await geometry(); cap = Math.max(cap, pages(size.height, size.viewport));
         }
         if (call.scrollText) { throw new Error(`Scroll search not found after ${viewports} viewports`); }

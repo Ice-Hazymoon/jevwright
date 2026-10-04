@@ -7,7 +7,7 @@
 - Resolve confident pending activations before completion, with configurable action confidence and the existing clause and target reviews.
 - Add recorded keyboard chords, bounded repetition, exact editable text selection and focused selection feedback, with platform shortcut mapping.
 - Detect delegated React/Vue events and registered listeners; expose drop containers and named-section context targets. Use segmented native/pointer dragging with effect feedback.
-- Search windowed text with normalized entity boundaries, scoped lightweight probes and container-sized budgets.
+- Search windowed text with normalized entity boundaries, scoped lightweight probes and container-sized budgets. Keep loading waits outside the successful-movement budget for growing feeds.
 - Prefer conflicting visible labels while retaining accessible names, rendered content and legacy recording identities. Validate helper tool/input consistency and avoid replaying a click delivered to a replaced control.
 
 - Judge whether a check's expected region is open and visible independently from its content. Attribute missing content in an open region to the product, and unopened or unknown regions to the agent after review. Preserve prior successful action evidence to identify the asserted object.

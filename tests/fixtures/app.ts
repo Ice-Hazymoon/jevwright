@@ -207,7 +207,7 @@ const results = document.getElementById('results'); const draw = () => { const n
 `);
         case '/reach-feed':
             return layout('Growing feed', '<div id="feed" aria-label="Updates" style="height:180px;overflow:auto"></div>', `
-const feed = document.getElementById('feed'); let count = 0, loading = false; const append = () => { for(let i=0;i<8;i++){ const row = document.createElement('div'); row.style.height='60px'; row.textContent = 'Update '+ ++count; if(count===39){ row.innerHTML += '<button onclick="toast(\\'Update opened\\')">Open update</button>'; } feed.append(row); } }; append(); feed.onscroll = () => { if(!loading && count<48 && feed.scrollTop+feed.clientHeight>=feed.scrollHeight-100){ loading=true; setTimeout(() => { append(); loading=false; },400); } };
+const feed = document.getElementById('feed'); const target = location.search.includes('many') ? 95 : 39, total = location.search.includes('many') ? 104 : 48; let count = 0, loading = false; const append = () => { for(let i=0;i<8;i++){ const row = document.createElement('div'); row.style.height='60px'; row.textContent = 'Update '+ ++count; if(count===target){ row.innerHTML += '<button onclick="toast(\\'Update opened\\')">Open update</button>'; } feed.append(row); } }; append(); feed.onscroll = () => { if(!loading && count<total && feed.scrollTop+feed.clientHeight>=feed.scrollHeight-100){ loading=true; setTimeout(() => { append(); loading=false; },400); } };
 `);
         case '/page-entry': {
             const token = url.searchParams.get('token') ?? 'AR-7285';
