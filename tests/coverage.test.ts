@@ -399,3 +399,37 @@ it('reach2 preserves authorized arguments when a pending upload wins against com
     expect(result.status, result.summary).toBe('passed');
     expect(result.attempts[0]?.steps[0]?.actions?.map(action => action.tool)).toEqual(['upload']);
 });
+
+it('reach2 authorizes helper uploads through declared file keys without a text value', async () => {
+    await writeFile(join(root, 'invoice.txt'), 'invoice');
+    for (const allowed of [true, false]) {
+        const spec: TestSpec = { ...base, id: allowed ? 'helper-file-group' : 'helper-unknown-file', start: '/surface-editor?uploads', files: { avatar: file('avatar.txt'), invoice: file('invoice.txt') }, steps: () => [act('Attach {avatar} and {invoice} through Documents'), verify('both attached', ({ page }) => page.locator('#files').evaluate(element => (element as HTMLInputElement).files?.length === 2))] };
+        const models = scriptedModels(view => view.history.some(entry => entry.action === 'upload' && !entry.error) ? { done: 0.99 } : { tool: 'none', remaining: 0.99 }, view => ({ outcome: 'act', tool: 'upload', element: view.elements.find(is('button', 'Documents'))!.i, file_keys: allowed ? ['avatar', 'invoice'] : ['undeclared'], value_key: null, text: null, reason: 'Attach the requested group in one selection' }));
+        const result = (await runSuite([spec], { ...options(), models: models.settings })).results[0]!;
+        expect(result.status, `${result.summary}; actions=${JSON.stringify(result.attempts[0]?.steps[0]?.actions)}`).toBe(allowed ? 'passed' : 'failed');
+        if (allowed) {
+            expect(result.attempts[0]?.steps[0]?.actions?.[0]?.fileKeys).toEqual(['avatar', 'invoice']);
+            const replay = (await runSuite([spec], { ...options(), mode: 'replay' })).results[0]!;
+            expect(replay.status, replay.summary).toBe('passed');
+        }
+        else { expect(result.cause).toBe('agent'); expect(result.attempts[0]?.steps[0]?.actions).toEqual([]); }
+    }
+});
+
+it('reach2 supplies declared file names when the helper reviews completed upload keys', async () => {
+    await writeFile(join(root, 'invoice.txt'), 'invoice');
+    const spec: TestSpec = { ...base, id: 'helper-upload-identity', start: '/surface-editor?uploads', files: { avatar: file('avatar.txt'), invoice: file('invoice.txt') }, steps: () => [act('Attach {avatar} and {invoice} through Documents'), verify('both attached', ({ page }) => page.locator('#files').evaluate(element => (element as HTMLInputElement).files?.length === 2), { timeoutMs: 500 })] };
+    const reviews: Record<string, string>[] = [];
+    const models = scriptedModels(view => {
+        if (view.control) { return { needed: 0.35 }; }
+        if (view.history.some(entry => entry.action === 'click')) { return { done: 0.99 }; }
+        return view.history.some(entry => entry.action === 'upload') ? { tool: 'none', target: is('button', 'Documents'), done: 0.93, achieved: 0.65, remaining: 0.1 } : { tool: 'upload', target: is('button', 'Documents'), value: 'avatar', remaining: 0.99 };
+    }, view => {
+        reviews.push(view.values);
+        return { activation: view.values.avatar === 'File: avatar.txt' && view.values.invoice === 'File: invoice.txt' ? 'finished' : 'activate', reason: 'Match the uploaded keys to the filenames requested in the step' };
+    });
+    const result = (await runSuite([spec], { ...options(), models: models.settings })).results[0]!;
+    expect(reviews).toEqual([{ avatar: 'File: avatar.txt', invoice: 'File: invoice.txt' }]);
+    expect(result.status, result.summary).toBe('passed');
+    expect(result.attempts[0]?.steps[0]?.actions?.map(action => action.tool)).toEqual(['upload']);
+});
