@@ -4,6 +4,7 @@
 
 - Bind newly recorded app routes to the current baseURL while enforcing literal third-party origins and retaining legacy path-only replay.
 - Share action authorization between control review and target audit; retain flow, prior activation and next-step context so required confirmations and view navigation execute before completion.
+- Ask the control helper to explain pending work before selecting activate/finished, keeping delivered actions distinct from missing product content.
 - Redirect repeated single-page scrolling toward literal instruction-entity search after two moves.
 
 - Mask password selections before DOM data returns, preserving protection in traceable reads.

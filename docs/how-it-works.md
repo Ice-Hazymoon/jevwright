@@ -63,8 +63,9 @@ Jev answers with probabilities, and code applies thresholds:
 - Control review and target audit share one authorization question: named elements, necessary final
   controls in the current form/dialog/flow, requested destination views, and dismissal of blocking
   overlays are allowed. An earlier boundary or dedicated next step reserves its action. Candidate audits
-  receive prior successful actions, current page and same-control activations as context; corrected
-  input history does not become part of the candidate being audited. An authorized required activation
+  receive prior successful actions, current page, same-control activations and helper reasoning as context.
+  Corrected input history does not become part of the candidate being audited. The control helper
+  explains pending actions before choosing activate/finished. An authorized required activation
   executes before completion, including a none/done proposal. Selecting a date alone cannot complete
   a requested reservation. Every navigation clause, including “then open”, requires activation or explicit
   current-view state. Global titles, URLs and badges do not prove another view is open.
