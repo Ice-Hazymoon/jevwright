@@ -187,3 +187,8 @@ export function deferredPolicy(view: View): Belief {
         : view.elements.some(is('button', 'Open workspace')) ? { tool: 'click', target: is('button', 'Open workspace') }
             : view.history.some(entry => entry.action === 'wait') ? { tool: 'none' } : { tool: 'wait' };
 }
+
+/** Reproduce a completion claim after delivery, even when the fixture withholds its receipt. */
+export const integrityPolicy = (view: View): Belief => view.history.some(entry => entry.action === 'click')
+    ? { done: 0.99 }
+    : { tool: 'click', target: is('button', 'Save draft') };

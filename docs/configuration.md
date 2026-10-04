@@ -129,20 +129,21 @@ jevwright <command> [options]
 | `--module <names>` | Tests whose `module` is listed. |
 | `--tag <names>` | Tests with any of the tags. |
 | `--shard <i/n>` | The i-th of n stable partitions of the filtered tests (see [CI selection and JUnit](#ci-selection-and-junit)). |
-| `--last-failed` | Tests that failed or were flaky in the most recently finished, uninterrupted run. |
+| `--last-failed` | Unresolved failed, flaky or unverified tests from completed, uninterrupted runs. |
 
 **Run options**
 
 | Flag | Meaning |
 | --- | --- |
 | `--mode auto` | Default. Replay recordings, heal stale steps with AI and update their recordings. Tests without a recording run with AI and are recorded. |
-| `--mode replay` | Recordings only: no model calls. A stale step, or one with no recording, fails as `agent`; `check` steps are skipped. |
+| `--mode replay` | Recordings only: no model calls. A stale step, or one with no recording, fails as `agent`; `check` steps recheck recorded direct evidence, or become `unverified`. |
 | `--mode ai` | Ignore recordings and ground every step with AI, to measure the AI itself. |
 | `--new` | Author the tests named by `--test`: an AI pass that records (no retries), then a replay of that recording. |
 | `--dry-run` | Run fixtures, open start pages and check initial invariants only; saves each start page's observation. Never retried. |
 | `--retries <n>` | Override `retries`. |
 | `--concurrency <n>` | Override `concurrency`. |
 | `--max-cost <usd>` | Override `maxCostUsd`. |
+| `--allow-unverified` | Allow unverified checks to leave exit code 0; reports still count them separately. |
 | `--no-record` | Do not write recordings. |
 | `--base-url <origin>` | Test an app already running at this origin instead of calling `setup`. |
 | `--headed` | Show the browser. |
@@ -163,7 +164,7 @@ jevwright <command> [options]
 | Code | Meaning |
 | --- | --- |
 | `0` | No test failed: each passed, or was flaky, known or skipped (`skip`). |
-| `1` | A test failed. This includes budget failures, missing replay targets, expectation failures, and mixed failures. |
+| `1` | A test failed, or has unverified checks without `--allow-unverified`. This includes budget failures, missing replay targets, expectation failures, and mixed failures. |
 | `2` | A usage, config or setup error, including an app that does not answer at the base URL; the message says what to fix. |
 | `3` | An internal error. Please [report it](https://github.com/Ice-Hazymoon/jevwright/issues). |
 | `4` | A standalone replay failed only because steps lack recordings. Record them in auto mode. The replay pass of `--new` still returns 1. |
@@ -176,13 +177,13 @@ For example, `--shard 2/3` runs the second of three disjoint partitions. Adding 
 existing tests. An empty partition, like any empty selection, exits successfully without starting the app
 and writes no run directory or `junit.xml`; let your CI reporter accept a missing file.
 
-`--last-failed` intersects that selection with the failed and flaky ids in the most recently finished
-run. Running, interrupted and partially published directories are ignored. No completed run is a usage error
-(exit 2); a completed run with no failed or flaky tests selects nothing.
+`--last-failed` intersects that selection with unresolved failed, flaky and unverified ids from completed
+runs, retaining older failures omitted from partial reruns. Running, interrupted and partially published directories are ignored. No completed run is a usage error
+(exit 2); completed history with no unresolved failures selects nothing.
 
 Every run writes `junit.xml`, one suite per module (`default` when omitted). Product, agent and timeout
 failures use `<failure>`; environment and model failures use `<error>`. Known issues and explicit skips
-use `<skipped>`. Flaky tests stay passed in JUnit and carry their retry evidence in `<system-out>`.
+use `<skipped>`. Unverified and interrupted tests use distinct `<error type="…">` entries and counts. Flaky tests stay passed in JUnit and carry their retry evidence in `<system-out>`.
 The JSON and HTML reports retain the complete attempt history.
 
 ## Recordings
@@ -190,7 +191,8 @@ The JSON and HTML reports retain the complete attempt history.
 Each passing AI-grounded or healed test writes `recordings/<test-id>.json`:
 - Each step's path is stored as semantic targets: role, accessible name, nearby text, the row or list item it sits in, and which of several same-named controls it was.
 - Values from `data` are stored as their keys, not as the text, so changing `data` needs no new recording.
-- A recording is keyed by the step's wording: rewording a step records it again.
+- A recording is keyed by the step's wording and occurrence: repeated instructions remain distinct, and rewording a step records it again.
+- Failed tests can save a verified prefix with `partial: true`; unverified or failed steps are not included.
 - Reviewing a recording's diff shows how the UI changed.
 
 ## Programmatic API

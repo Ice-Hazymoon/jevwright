@@ -161,7 +161,7 @@ Replay mode needs no key and no model, so it is the cheapest gate:
   with: { name: jevwright-report, path: .jevwright/runs }
 ```
 
-Replay skips `check` steps, since they need a model. A step without a recording fails, so a test committed without its recording cannot pass CI unnoticed. To heal stale recordings and run checks in CI, run the default auto mode and provide `OPENROUTER_API_KEY` as a secret.
+Replay rechecks the direct page evidence recorded by passing `check` steps. Checks without usable evidence are `unverified` and make the CLI exit 1; `--allow-unverified` overrides that exit policy while retaining the report count. A step without a recording fails, so a test committed without its recording cannot pass CI unnoticed. To heal stale recordings and run checks in CI, run the default auto mode and provide `OPENROUTER_API_KEY` as a secret.
 
 ## Documentation
 
@@ -181,13 +181,13 @@ Replay skips `check` steps, since they need a model. A step without a recording 
 | A request the app needs is blocked | `run.json` lists `blockedRequests`. If the origin is part of your app, add it to `allowedOrigins`. |
 | Replay says “Page value needs model grounding” | The recorded page-value source is missing or ambiguous. Run in auto mode to read the current value and refresh its source. |
 | Secret input fails with a password-purpose message | Use a password field, or declare `secret(value, { purpose: 'any' })` for an API key or another editable field. |
-| `check` steps show as skipped | Replay mode makes no model calls. Run in auto mode, with a key, to judge them. |
+| `check` steps show as unverified | The recording lacks sufficient direct evidence, the claim changed, or it uses a runtime reference. Run in auto mode to judge it; use `verify` for exact absence or reference checks. |
 | `env` is `unknown` in fixtures | Declare its type once through `Register`; see [Starting the app per run](https://github.com/Ice-Hazymoon/jevwright/blob/main/docs/configuration.md#starting-the-app-per-run). |
 
 Anything else, or an engine that gets a well-worded step wrong: [open an issue](https://github.com/Ice-Hazymoon/jevwright/issues) with the run's `report.md`.
 
-Replay reports also show mismatched recorded end states. Confirm them with an auto run; a mismatch
-can be a product regression or a stale target and does not establish either on its own.
+Replay fails when recorded end states do not match. The report lists missing anchors. Confirm the cause
+with an auto run; a mismatch alone does not establish a product defect.
 
 ## Limitations
 
@@ -212,7 +212,7 @@ can be a product regression or a stale target and does not establish either on i
 - Page values can be entered only when their exact text appears in the current observation. Replay re-reads them from recorded surrounding text; changed or ambiguous sources need an auto run. Declared secrets remain available only through their keys.
 - `check` requires the asserted content to be visible. A count or saved-button state cannot prove what another tab contains.
 - Failed checks receive a second look. Visible contradictions, or missing expected content in an open visible region, are `product`; a collapsed or unopened region is `agent`. Uncertain region evidence receives adjudication.
-- `check` is a model judgment. Exact values (money, multilingual text, line breaks) belong in `verify`.
+- `check` is a model judgment in auto/AI mode. Replay verifies recorded direct evidence; checks without it remain `unverified`. Exact values (money, multilingual text, line breaks) and negative claims belong in `verify`.
 - Chromium only.
 
 ## License

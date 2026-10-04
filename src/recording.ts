@@ -3,6 +3,7 @@ import type { Observation, PageElement } from './observe.ts';
 import { createHash } from 'node:crypto';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, join, relative } from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 import { z } from 'zod';
 
 /** How to find the same element again without a model: accessible role and name first. */
@@ -13,6 +14,8 @@ export interface TargetDescriptor {
     context?: string;
     /** Position among elements that share every field above, in document order. */
     nth: number;
+    /** Count sharing the full identity; an ordinal is valid only while this count stays unchanged. */
+    of?: number;
 }
 
 export interface PageValueDescriptor {
@@ -44,8 +47,10 @@ export interface RecordedAction {
     scrollDirection?: 'up' | 'down';
 }
 
-export type Anchor = { kind: 'element'; target: TargetDescriptor } | { kind: 'heading' | 'dialog'; text: string };
-export interface StepEnd { path?: string; appeared?: Anchor[]; gone?: TargetDescriptor[] }
+export type Anchor = { kind: 'element'; target: TargetDescriptor } | { kind: 'heading' | 'dialog' | 'notice'; text: string };
+export interface ValueAnchor { target: TargetDescriptor; value?: string; states?: string[]; valueKey?: string; pageValue?: PageValueDescriptor; template?: string }
+export interface StepEnd { path?: string; route?: string; appeared?: Anchor[]; gone?: TargetDescriptor[]; absentBefore?: Anchor[]; values?: ValueAnchor[]; effect?: 'none' }
+export interface CheckEvidence { text: string; region: string; target?: TargetDescriptor; value?: string; states?: string[]; source: 'text' | 'notice' | 'heading' | 'element' }
 
 export interface StepRecording {
     /** Hash of the step definition; a changed instruction invalidates its recording. */
@@ -53,6 +58,9 @@ export interface StepRecording {
     instruction: string;
     actions: RecordedAction[];
     end?: StepEnd;
+    occurrence?: number;
+    checkEvidence?: CheckEvidence[];
+    checkClaim?: string;
 }
 
 export interface TestRecording {
@@ -60,29 +68,37 @@ export interface TestRecording {
     test: string;
     updatedAt: string;
     steps: StepRecording[];
+    partial?: true;
 }
 
-const descriptorSchema = z.object({ role: z.string(), name: z.string(), near: z.string().optional(), context: z.string().optional(), nth: z.number().int().min(0) });
+const descriptorSchema = z.object({ role: z.string(), name: z.string(), near: z.string().optional(), context: z.string().optional(), nth: z.number().int().min(0), of: z.number().int().positive().optional() });
+const pageValueSchema = z.object({ source: z.enum(['text', 'notice', 'name', 'content']), before: z.string(), after: z.string(), requiresModel: z.literal(true).optional() });
+const anchorSchema = z.union([z.object({ kind: z.literal('element'), target: descriptorSchema }), z.object({ kind: z.enum(['heading', 'dialog', 'notice']), text: z.string() })]);
 const recordingSchema = z.object({
     version: z.literal(1),
     test: z.string(),
     updatedAt: z.string(),
+    partial: z.literal(true).optional(),
     steps: z.array(z.object({
         key: z.string(),
         instruction: z.string(),
+        occurrence: z.number().int().positive().optional(),
+        checkEvidence: z.array(z.object({ text: z.string(), region: z.string(), source: z.enum(['text', 'notice', 'heading', 'element']), target: descriptorSchema.optional(), value: z.string().optional(), states: z.array(z.string()).optional() })).optional(),
+        checkClaim: z.string().optional(),
         end: z.object({
             path: z.string().optional(),
-            appeared: z.array(z.union([
-                z.object({ kind: z.literal('element'), target: descriptorSchema }),
-                z.object({ kind: z.enum(['heading', 'dialog']), text: z.string() }),
-            ])).optional(),
+            route: z.string().optional(),
+            appeared: z.array(anchorSchema).optional(),
             gone: z.array(descriptorSchema).optional(),
+            absentBefore: z.array(anchorSchema).optional(),
+            values: z.array(z.object({ target: descriptorSchema, value: z.string().optional(), states: z.array(z.string()).optional(), valueKey: z.string().optional(), pageValue: pageValueSchema.optional(), template: z.string().optional() })).optional(),
+            effect: z.literal('none').optional(),
         }).optional(),
         actions: z.array(z.object({
             tool: z.enum(['click', 'type', 'press_enter', 'press_escape', 'select', 'scroll', 'wait', 'upload', 'hover', 'right_click', 'long_press', 'double_click', 'drag', 'back', 'scroll_to']),
             target: descriptorSchema.optional(),
             valueKey: z.string().optional(),
-            pageValue: z.object({ source: z.enum(['text', 'notice', 'name', 'content']), before: z.string(), after: z.string(), requiresModel: z.literal(true).optional() }).optional(),
+            pageValue: pageValueSchema.optional(),
             value: z.string().optional(),
             template: z.string().optional(),
             double: z.boolean().optional(),
@@ -95,8 +111,10 @@ const recordingSchema = z.object({
     })),
 });
 
-export function stepKey(step: { instruction: string; double?: boolean; expectError?: boolean }): string {
-    return createHash('sha1').update(JSON.stringify([step.instruction, step.double ?? false, step.expectError ?? false])).digest('hex').slice(0, 12);
+export function stepKey(step: { instruction: string; double?: boolean; expectError?: boolean }, occurrence = 1): string {
+    const identity: unknown[] = [step.instruction, step.double ?? false, step.expectError ?? false];
+    if (occurrence > 1) { identity.push(occurrence); }
+    return createHash('sha1').update(JSON.stringify(identity)).digest('hex').slice(0, 12);
 }
 
 export function describeTarget(element: PageElement, observation: Observation): TargetDescriptor {
@@ -107,6 +125,7 @@ export function describeTarget(element: PageElement, observation: Observation): 
         ...(element.near ? { near: element.near } : {}),
         ...(element.context ? { context: element.context } : {}),
         nth: Math.max(0, same.findIndex(other => other.i === element.i)),
+        of: same.length,
     };
 }
 
@@ -151,8 +170,12 @@ export function resolveTarget(target: TargetDescriptor, observation: Observation
 /** Unique means exact full identity, not a fallback or an nth among duplicates. */
 export function resolveTargetMatch(target: TargetDescriptor, observation: Observation, allowDisabled = false): { element?: PageElement; unique: boolean } {
     const actionable = observation.elements.filter(element => allowDisabled || ((element.ref || element.reveal) && !element.disabled));
-    const exact = actionable.filter(element => sameIdentity(element, target));
-    if (exact.length > target.nth) { return { element: exact[target.nth], unique: exact.length === 1 && target.nth === 0 }; }
+    const exact = observation.elements.filter(element => sameIdentity(element, target));
+    if (target.of !== undefined && exact.length !== target.of && (exact.length > 0 || target.of > 1)) { return { unique: false }; }
+    if (exact.length > target.nth) {
+        const element = exact[target.nth]!;
+        return actionable.includes(element) ? { element, unique: exact.length === 1 && target.nth === 0 } : { unique: false };
+    }
     const named = actionable.filter(element => element.role === target.role && element.name === target.name && target.name !== '');
     if (named.length === 1 && target.nth === 0) { return { element: named[0], unique: false }; }
     const near = target.near ? actionable.filter(element => element.role === target.role && element.near === target.near) : [];
@@ -202,7 +225,8 @@ export function learnedRecording(previous: TestRecording | undefined, steps: Ste
     return changedActionSteps(previous, steps).length > 0
         || steps.some(step => !previous?.steps.some(entry => entry.key === step.key))
         || (previous?.steps.some(entry => !keys.has(entry.key)) ?? false)
-        || steps.some(step => step.end !== undefined && previous?.steps.find(entry => entry.key === step.key)?.end === undefined);
+        || steps.some(step => step.end !== undefined && previous?.steps.find(entry => entry.key === step.key)?.end === undefined)
+        || steps.some(step => !isDeepStrictEqual(step.checkEvidence, previous?.steps.find(entry => entry.key === step.key)?.checkEvidence));
 }
 
 function actionSignature(actions: RecordedAction[]): string {

@@ -4,13 +4,15 @@ import type { View } from './support/scripted-models.ts';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { AssertionError } from 'node:assert';
+import { expect as playwrightExpect } from 'playwright/test';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runFailureExitCode } from '../src/cli.ts';
 import { act, check, reload, run, runSuite, secret, verify } from '../src/index.ts';
 import { describePageValue, pageValueChoices, readPageValue } from '../src/page-values.ts';
 import { createRedactor } from '../src/secrets.ts';
 import { startFixtureApp } from './fixtures/app.ts';
-import { deferredPolicy, fixturePolicy } from './support/fixture-policy.ts';
+import { deferredPolicy, fixturePolicy, integrityPolicy } from './support/fixture-policy.ts';
 import { scriptedModels } from './support/scripted-models.ts';
 
 type App = Awaited<ReturnType<typeof startFixtureApp>>;
@@ -63,6 +65,134 @@ function suite(specs: Array<TestSpec<void>>, options: Partial<SuiteOptions> & { 
 
 const statusOf = (summary: RunSummary) => Object.fromEntries(summary.results.map(result => [result.id, result.status === 'passed' ? 'passed' : `${result.status}:${result.cause}`]));
 
+describe('integrity regression paths', () => {
+    const base = { id: 'integrity-save', title: 'Store a draft', risk: 'A receipt is missing', start: '/integrity', ready: async ({ page }: { page: import('playwright').Page }) => { await page.evaluate(() => { history.replaceState({}, '', '/integrity'); }); } };
+    const policy = integrityPolicy;
+    it.each(['missing', 'half', 'query', 'alert', 'invalid', '500', 'shadow-alert', 'frame-alert'])('fails replay when the recorded effect drifts: %s', async bug => {
+        const recordingsDir = join(root, 'integrity-drift-' + bug);
+        const spec = { ...base, steps: () => [act('Save draft')] };
+        expect((await suite([spec], { policy, recordingsDir }).run).totals.passed).toBe(1);
+        const result = await suite([{ ...spec, start: '/integrity?bug=' + bug }], { mode: 'replay', recordingsDir }).run;
+        expect(result.results[0]?.status).toBe('failed');
+        expect(runFailureExitCode(result)).toBe(1);
+    });
+    it('does not treat a hidden error as a newly visible replay error', async () => {
+        const recordingsDir = join(root, 'integrity-hidden-error');
+        const spec = { ...base, steps: () => [act('Save draft')] };
+        expect((await suite([spec], { policy, recordingsDir }).run).totals.passed).toBe(1);
+        expect((await suite([{ ...spec, start: '/integrity?bug=hidden-alert' }], { mode: 'replay', recordingsDir }).run).totals.passed).toBe(1);
+    });
+    it('reports legacy checks as unverified and preserves the exit override separately', async () => {
+        const summary = await suite([{ ...base, steps: () => [check('Draft stored')] }], { mode: 'replay' }).run;
+        expect(summary.results[0]?.status).toBe('unverified');
+        expect(summary.results[0]?.attempts[0]?.steps[0]?.status).toBe('unverified');
+        expect(runFailureExitCode(summary)).toBe(1);
+        expect(runFailureExitCode(summary, true, true)).toBe(0);
+    });
+    it('attributes thrown assertions to product and ordinary exceptions to environment', async () => {
+        const assertions = await suite([{ ...base, steps: () => [verify('receipt', () => { throw new AssertionError({ actual: false, expected: true, operator: 'strictEqual' }); })] }], { mode: 'replay' }).run;
+        expect(assertions.results[0]?.cause).toBe('product');
+        const exceptions = await suite([{ ...base, steps: () => [verify('broken helper', () => { throw new TypeError('bad test code'); })] }], { mode: 'replay' }).run;
+        expect(exceptions.results[0]?.cause).toBe('environment');
+    });
+    it('recognizes a Playwright matcher error as a product assertion', async () => {
+        const result = await suite([{ ...base, steps: () => [verify('receipt', async ({ page }) => { await playwrightExpect(page.getByRole('heading', { name: 'Absent receipt' })).toBeVisible({ timeout: 50 }); return true; })] }], { mode: 'replay' }).run;
+        expect(result.results[0]?.cause).toBe('product');
+    });
+    it('saves only verified prefixes of failed attempts as partial recordings', async () => {
+        const recordingsDir = join(root, 'integrity-partial');
+        const spec = { ...base, steps: () => [act('Save draft'), verify('receipt', () => true), verify('later failure', () => false, { timeoutMs: 1 })] };
+        expect((await suite([spec], { policy, recordingsDir }).run).results[0]?.status).toBe('failed');
+        const recording = JSON.parse(await readFile(join(recordingsDir, base.id + '.json'), 'utf8'));
+        expect(recording.partial).toBe(true);
+        expect(recording.steps).toHaveLength(1);
+        const next = await suite([spec], { policy, recordingsDir }).run;
+        expect(next.results[0]?.attempts[0]?.steps[0]?.source).toBe('replay');
+    });
+    it('reports cancelled running tests as interrupted', async () => {
+        const controller = new AbortController();
+        const result = await suite([{ ...base, steps: () => [run('interrupt', () => controller.abort()), verify('unreached', () => true)] }], { mode: 'replay', signal: controller.signal }).run;
+        expect(result.results[0]?.status).toBe('interrupted');
+        expect(result.totals.interrupted).toBe(1);
+        const xml = await readFile(join(result.directory, 'junit.xml'), 'utf8');
+        expect(xml).toContain('type="interrupted"');
+    });
+    it('rechecks recorded check quotes and rejects a changed field value', async () => {
+        const spec = { ...profileTest(), id: 'integrity-check-evidence', steps: () => [check('The Nickname field shows "Ada"')] };
+        const recordingsDir = join(root, 'integrity-check-evidence');
+        expect((await suite([spec], { recordingsDir }).run).totals.passed).toBe(1);
+        const healthy = await suite([spec], { recordingsDir, mode: 'replay' }).run;
+        expect(healthy.results[0]?.attempts[0]?.steps[0]).toMatchObject({ status: 'passed', source: 'replay' });
+        const drift = await suite([{ ...spec, ready: async ({ page }) => { await page.getByLabel('Nickname').fill('Wrong'); } }], { recordingsDir, mode: 'replay' }).run;
+        expect(drift.results[0]?.status).toBe('failed');
+    });
+    it('keeps check evidence in its recorded region', async () => {
+        const recordingsDir = join(root, 'integrity-evidence-region');
+        const spec = { ...base, id: 'region-bound-check', start: '/integrity-region', ready: undefined, steps: () => [check('The Draft field in Draft area shows "Original"')] };
+        const policy = () => ({ holds: 0.99, support: 'supports' as const, region: 'open' as const });
+        expect((await suite([spec], { recordingsDir, policy }).run).totals.passed).toBe(1);
+        expect((await suite([spec], { recordingsDir, mode: 'replay' }).run).totals.passed).toBe(1);
+        const moved = { ...spec, start: '/integrity-region?bug=moved', ready: async ({ page }: { page: import('playwright').Page }) => { await page.evaluate(() => history.replaceState({}, '', '/integrity-region')); } };
+        expect((await suite([moved], { recordingsDir, mode: 'replay' }).run).results[0]?.status).toBe('failed');
+    });
+    it('reports clipped recorded check evidence as unverified', async () => {
+        const recordingsDir = join(root, 'integrity-clipped-evidence');
+        const spec = { ...base, id: 'clipped-check', steps: () => [check('The Draft field shows "Original"')] };
+        expect((await suite([spec], { recordingsDir, policy: () => ({ holds: 0.99, support: 'supports', region: 'open' }) }).run).totals.passed).toBe(1);
+        const path = join(recordingsDir, 'clipped-check.json');
+        const recording = JSON.parse(await readFile(path, 'utf8'));
+        recording.steps[0].checkEvidence[0].value = 'Orig…';
+        await writeFile(path, JSON.stringify(recording));
+        expect((await suite([spec], { recordingsDir, mode: 'replay' }).run).results[0]?.status).toBe('unverified');
+    });
+    it('uses each occurrence of an identical instruction for its own control', async () => {
+        const recordingsDir = join(root, 'integrity-occurrences');
+        const spec = { ...base, id: 'integrity-repeated', steps: () => [act('Activate current control'), act('Activate current control')] };
+        const repeated = (view: View) => view.history.some(entry => entry.action === 'click') ? { done: 0.99 } : { tool: 'click', target: (element: { name?: string }) => element.name === (view.text.includes('Draft stored') ? 'Details' : 'Save draft') };
+        expect((await suite([spec], { recordingsDir, policy: repeated }).run).totals.passed).toBe(1);
+        const result = await suite([spec], { recordingsDir, mode: 'replay' }).run;
+        expect(result.results[0]?.status).toBe('passed');
+        expect(result.results[0]?.attempts[0]?.steps[1]?.actions?.[0]?.element).toBe('button "Details"');
+    });
+    it('rejects a result that was already present before replay', async () => {
+        const recordingsDir = join(root, 'integrity-preexisting');
+        const spec = { ...base, steps: () => [act('Save draft')] };
+        expect((await suite([spec], { recordingsDir, policy }).run).totals.passed).toBe(1);
+        const replay = await suite([{ ...spec, ready: async ({ page }) => { await page.getByRole('button', { name: 'Save draft' }).click(); } }], { recordingsDir, mode: 'replay' }).run;
+        expect(replay.results[0]?.status).toBe('failed');
+        expect(replay.results[0]?.summary).toContain('already present before replay');
+    });
+    it.each(['replay', 'auto'] as const)('retains replay validation as agent with a validation body in %s', async mode => {
+        const recordingsDir = join(root, 'integrity-replay-validation');
+        const spec = { ...base, steps: () => [act('Save draft')] };
+        expect((await suite([spec], { recordingsDir, policy }).run).totals.passed).toBe(1);
+        const replay = await suite([{ ...spec, start: '/integrity?bug=validation' }], { recordingsDir, mode }).run;
+        expect(replay.results[0]?.cause).toBe('agent');
+        expect(replay.results[0]?.attempts[0]?.steps[0]?.failure).toBe('error-shown');
+    });
+    it('keeps an observed rejected declared write ahead of a replay validation error', async () => {
+        const recordingsDir = join(root, 'integrity-declared-validation');
+        const spec = { ...base, steps: () => [act('Save draft')] };
+        expect((await suite([spec], { recordingsDir, policy }).run).totals.passed).toBe(1);
+        const replay = await suite([{ ...spec, start: '/integrity?bug=validation', steps: () => [act('Save draft', { expect: { write: { path: '/api/integrity-validation', status: 200 } } })] }], { recordingsDir, mode: 'replay' }).run;
+        expect(replay.results[0]?.cause).toBe('product');
+        expect(replay.results[0]?.attempts[0]?.steps[0]?.failure).toBe('expectation');
+    });
+    it.each([{ wrong: true, status: '422' }, { wrong: false, status: '422' }, { wrong: true, status: '500' }, { wrong: false, status: '500' }])('audits rejected writes without blaming product for the wrong field: $wrong/$status', async ({ wrong, status }) => {
+        const driver = (view: View) => ({ onTarget: wrong ? 0.02 : 0.98, ...(view.history.some(entry => entry.action === 'click') ? { done: 0.01, tool: 'none' } : view.history.some(entry => entry.action === 'type') ? { tool: 'click', target: (element: { name?: string }) => element.name === 'Store draft' } : { tool: 'type', value: 'draft', target: (element: { name?: string }) => element.name === (wrong ? 'Reference' : 'Draft') }) });
+        const spec = { ...base, id: 'request-audit-' + wrong + status, start: '/integrity-audit?bug=' + status, ready: undefined, data: { draft: 'Stored content' }, steps: () => [act('Enter {draft} in Draft and store the draft', { maxActions: 2 })] };
+        const result = (await suite([spec], { policy: driver, failOnIssues: false }).run).results[0]!;
+        expect(result.cause).toBe(wrong ? 'agent' : 'product');
+        if (wrong) { expect(result.attempts[0]?.steps[0]?.misstep).toContain('Reference'); }
+    });
+    it.each(['500', '422', 'validation'])('audits agent failures against request evidence: %s', async bug => {
+        const unfinished = (view: View) => view.history.some(entry => entry.action === 'click') ? { done: 0.01, tool: 'none', ...(bug === 'validation' ? { error: 0.99 } : {}) } : { tool: 'click', target: (element: { name?: string }) => element.name === 'Save draft' };
+        const result = await suite([{ ...base, start: '/integrity?bug=' + bug, steps: () => [act('Save draft')] }], { policy: unfinished, failOnIssues: false }).run;
+        expect(result.results[0]?.cause).toBe(bug === 'validation' ? 'agent' : 'product');
+        if (bug !== 'validation') { expect(result.results[0]?.summary).toContain('Request evidence:'); }
+    });
+});
+
 describe('record, replay and heal', () => {
     it('grounds steps with Jev on first run and records a replayable path', async () => {
         const { run, calls } = suite([profileTest()], { mode: 'auto' });
@@ -82,14 +212,15 @@ describe('record, replay and heal', () => {
     });
 
     it('replays the recording with no model calls for actions', async () => {
+        await suite([profileTest()]).run;
         const { run, calls } = suite([profileTest()], { mode: 'replay' });
         const summary = await run;
         const [result] = summary.results;
         expect(result!.status, result!.summary).toBe('passed');
         expect(result!.attempts[0]!.steps.slice(0, 2).map(step => step.source)).toEqual(['replay', 'replay']);
-        // Replay mode never loads models; the semantic check is reported as skipped.
+        // Replay checks use recorded evidence and never load models.
         expect(calls).toHaveLength(0);
-        expect(result!.attempts[0]!.steps[3]!.status).toBe('skipped');
+        expect(result!.attempts[0]!.steps[3]).toMatchObject({ status: 'passed', source: 'replay' });
     });
 
     it('heals a step whose recorded control was renamed, then updates the recording', async () => {
@@ -712,7 +843,7 @@ describe('replay effects', () => {
         const recordingsDir = join(root, 'replay-expectation');
         const initial = await suite([profileTest()], { recordingsDir }).run;
         expect(initial.totals.passed).toBe(1);
-        const replay = await suite([profileTest('/profile?bug=500')], { recordingsDir, mode: 'replay' }).run;
+        const replay = await suite([{ ...profileTest(), ready: async ({ page }) => { await page.route('**/api/profile', route => route.fulfill({ status: 500, body: 'Storage unavailable' })); } }], { recordingsDir, mode: 'replay' }).run;
         expect(replay.results[0]?.cause).toBe('product');
         expect(runFailureExitCode(replay)).toBe(1);
         expect(replay.results[0]?.attempts[0]?.steps.find(step => step.status === 'failed')?.failure).toBe('expectation');
@@ -750,10 +881,12 @@ describe('recorded effects and fresh retries', () => {
         await writeFile(path, JSON.stringify(recording));
         expect((await suite([spec], { recordingsDir }).run).results[0]?.recordingUpdated).toBe(true);
         const backfilled = await readFile(path, 'utf8');
-        expect(JSON.parse(backfilled).steps.every((step: { end?: unknown }) => step.end !== undefined)).toBe(true);
-        expect((await suite([spec], { recordingsDir }).run).results[0]?.recordingUpdated).toBe(false);
+        expect(JSON.parse(backfilled).steps.filter((step: { actions: unknown[] }) => step.actions.length).every((step: { end?: unknown }) => step.end !== undefined)).toBe(true);
+        const stable = await suite([spec], { recordingsDir }).run;
+        expect(stable.results[0]?.recordingUpdated).toBe(false);
         expect(await readFile(path, 'utf8')).toBe(backfilled);
         for (const step of recording.steps) { delete step.end; }
+        recording.steps = recording.steps.filter((step: { actions: unknown[] }) => step.actions.length);
         await writeFile(path, JSON.stringify(recording));
         const unchecked = { ...spec, steps: () => [act('Change Nickname to {nickname} and Bio to {bio}'), act('Save the profile')], invariants: [{ name: 'always', check: () => true }] };
         expect((await suite([unchecked], { recordingsDir }).run).results[0]?.recordingUpdated).toBe(false);
@@ -780,7 +913,7 @@ describe('recorded effects and fresh retries', () => {
 });
 
 function effectTest(start = '/effects'): TestSpec<void> {
-    return { id: 'choose-entry', title: 'Choose the entry dated 2026-01-01', risk: 'The wrong dated row is selected', start, steps: () => [act('Choose the entry dated 2026-01-01', { maxActions: 2 }), verify('Alpha selected', async ({ page }) => page.getByRole('heading', { name: 'Alpha chosen', exact: true }).isVisible())] };
+    return { id: 'choose-entry', title: 'Choose the entry dated 2026-01-01', risk: 'The wrong dated row is selected', start, ready: async ({ page }) => { await page.evaluate(() => { const url = new URL(location.href); url.searchParams.delete('bug'); history.replaceState({}, '', url); }); }, steps: () => [act('Choose the entry dated 2026-01-01', { maxActions: 2 }), verify('Alpha selected', async ({ page }) => page.getByRole('heading', { name: 'Alpha chosen', exact: true }).isVisible())] };
 }
 const effectPolicy = (view: View) => view.text.includes('Alpha chosen') ? { done: 0.99, tool: 'none' } : { tool: 'click', target: (element: { name?: string; in?: string }) => element.name === 'Choose' && Boolean(element.in?.includes('2026-01-01')) };
 
@@ -791,7 +924,7 @@ describe('end state attribution', () => {
         expect(seed.status, seed.summary).toBe('passed');
         const replay = (await suite([effectTest('/effects?bug=swapped')], { recordingsDir, mode: 'replay' }).run).results[0]!;
         expect(replay.status).toBe('failed');
-        expect(replay.cause).toBe('product');
+        expect(replay.cause).toBe('agent');
         expect(replay.summary).toContain('step 1\'s replay missed its recorded end state');
         const healed = (await suite([effectTest('/effects?bug=swapped')], { recordingsDir, policy: effectPolicy }).run).results[0]!;
         expect(healed.status).toBe('passed');
@@ -842,19 +975,20 @@ describe('reviewed acceptance cases', () => {
         expect(replay.attempts[0]?.steps[0]?.endMismatch).toBeUndefined();
     });
 
-    it('charges a no-effect replay to the product when a later verify fails, and names it before a replay miss', async () => {
+    it('stops at a no-effect replay before later verification or replay actions', async () => {
         const recordingsDir = join(root, 'replay-no-effect');
         const seed = (await suite([confirmTest('/effects?single=1&confirm=1')], { recordingsDir, policy: confirmPolicy }).run).results[0]!;
         expect(seed.status, seed.summary).toBe('passed');
         const verifyDir = join(root, 'replay-no-effect-verify');
         expect((await suite([effectTest('/effects?single=1')], { recordingsDir: verifyDir, policy: effectPolicy }).run).results[0]?.status).toBe('passed');
         const product = await suite([effectTest('/effects?single=1&bug=no-effect')], { recordingsDir: verifyDir, mode: 'replay' }).run;
-        expect(product.results[0]?.cause).toBe('product');
+        expect(product.results[0]?.cause).toBe('agent');
         expect(product.results[0]?.summary).toContain('step 1\'s replay missed its recorded end state');
         expect(runFailureExitCode(product)).toBe(1);
         const missed = await suite([confirmTest('/effects?single=1&confirm=1&bug=no-effect')], { recordingsDir, mode: 'replay' }).run;
         expect(missed.results[0]?.cause).toBe('agent');
-        expect(missed.results[0]?.attempts[0]?.steps[1]?.failure).toBe('not-found');
+        expect(missed.results[0]?.attempts[0]?.steps).toHaveLength(1);
+        expect(missed.results[0]?.attempts[0]?.steps[0]?.failure).toBe('end-mismatch');
         expect(missed.results[0]?.summary).toContain('step 1\'s replay missed its recorded end state');
         expect(runFailureExitCode(missed)).toBe(1);
     });
@@ -863,7 +997,7 @@ describe('reviewed acceptance cases', () => {
         const recordingsDir = join(root, 'same-path-flaky');
         let attempts = 0;
         const spec = { ...profileTest(), steps: () => [...profileTest().steps().slice(0, 2), run('count the attempt', () => { attempts++; }), verify('passes after the first try', () => attempts > 1, { timeoutMs: 300 })] };
-        expect((await suite([profileTest()], { recordingsDir }).run).results[0]?.status).toBe('passed');
+        expect((await suite([{ ...profileTest(), steps: () => [...profileTest().steps().slice(0, 2), verify('saved', () => true)] }], { recordingsDir }).run).results[0]?.status).toBe('passed');
         const path = join(recordingsDir, 'profile-save.json');
         const before = await readFile(path, 'utf8');
         const result = (await suite([spec], { recordingsDir, retries: 1 }).run).results[0]!;
@@ -889,6 +1023,10 @@ describe('reviewed acceptance cases', () => {
     it('exits 1 when a recorded target was removed, and 4 only for a failed test that is solely unrecorded', async () => {
         const recordingsDir = join(root, 'exit-table');
         await suite([profileTest()], { recordingsDir }).run;
+        const path = join(recordingsDir, 'profile-save.json');
+        const recipe = JSON.parse(await readFile(path, 'utf8'));
+        delete recipe.steps[0].end;
+        await writeFile(path, JSON.stringify(recipe));
         const removed = await suite([profileTest('/profile?bug=relabel')], { recordingsDir, mode: 'replay' }).run;
         expect(removed.results[0]?.attempts[0]?.steps.find(step => step.status === 'failed')?.failure).toBe('not-found');
         expect(runFailureExitCode(removed)).toBe(1);
@@ -897,9 +1035,9 @@ describe('reviewed acceptance cases', () => {
         const passingMismatch = { ...effectTest('/effects?single=1&bug=no-effect'), steps: () => [act('Choose the entry dated 2026-01-01', { maxActions: 2 })] };
         const unrecorded = { ...profileTest(), id: 'unrecorded-beside-mismatch' };
         const mixed = await suite([passingMismatch, unrecorded], { recordingsDir: mismatchDir, mode: 'replay' }).run;
-        expect(mixed.results[0]?.status).toBe('passed');
+        expect(mixed.results[0]?.status).toBe('failed');
         expect(mixed.results[0]?.attempts[0]?.steps[0]?.endMismatch).toBe(true);
-        expect(runFailureExitCode(mixed)).toBe(4);
+        expect(runFailureExitCode(mixed)).toBe(1);
     });
 
     it('uses at most one fresh attempt when more retries are allowed', async () => {
@@ -936,6 +1074,8 @@ describe('fresh retry limits', () => {
         const actions = recording.steps[0].actions;
         [actions[0].target, actions[1].target] = [actions[1].target, actions[0].target];
         await writeFile(path, JSON.stringify(recording));
+        delete recording.steps[0].end;
+        await writeFile(path, JSON.stringify(recording));
         const freshFailed = (await suite([spec], { recordingsDir, retries: 1, policy: view => view.step ? { tool: 'none', done: 0 } : fixturePolicy(view) }).run).results[0]!;
         expect(freshFailed.attempts[0]?.cause).toBe('product');
         expect(freshFailed.attempts[1]?.cause).toBe('agent');
@@ -958,7 +1098,8 @@ describe('reviewed replay boundaries', () => {
         await writeFile(path, JSON.stringify(recording));
         const summary = await suite([spec], { recordingsDir, mode: 'replay' }).run;
         expect(summary.results[0]?.attempts[0]?.steps[0]?.endMismatch).toBe(true);
-        expect(summary.results[0]?.attempts[0]?.steps[1]?.failure).toBe('not-recorded');
+        expect(summary.results[0]?.attempts[0]?.steps).toHaveLength(1);
+        expect(summary.results[0]?.attempts[0]?.steps[0]?.failure).toBe('end-mismatch');
         expect(runFailureExitCode(summary)).toBe(1);
     });
 
@@ -1016,9 +1157,11 @@ describe('page values and complete intentions', () => {
         const stored = JSON.parse(await readFile(path, 'utf8'));
         expect(stored.steps[0].actions[0].pageValue).toBeDefined();
         expect(stored.steps[0].actions[0].value).toBeUndefined();
-        expect(JSON.stringify(stored)).not.toContain('AR-7285');
+        expect(JSON.stringify(stored.steps[0].actions)).not.toContain('AR-7285');
+        expect(stored.steps[0].end.route).toContain('token=AR-7285');
         const replay = await suite([tokenTest(id, 'BX-9164')], { mode: 'replay' }).run;
-        expect(replay.results[0]!.status, replay.results[0]!.summary).toBe('passed');
+        expect(replay.results[0]!.status).toBe('failed');
+        expect(replay.results[0]!.summary).toContain('route');
         expect(replay.results[0]!.attempts[0]!.steps[0]!.actions![0]!.value).toMatch(/^page:/);
     });
 

@@ -57,6 +57,8 @@ export interface PageElement {
 
 export interface Observation {
     url: string;
+    /** Full origin for deterministic route checks; model-facing URLs retain their existing short form. */
+    origin?: string;
     title: string;
     /** Name and text of the open dialog, when the page is restricted to it. */
     dialog?: string;
@@ -330,7 +332,7 @@ export function buildObservation(tree: unknown, page: { url: string; title: stri
     const dialogName = dialog ? clean(dialog.name ?? '') || firstHeading(dialog) : '';
     const dialogText = dialog ? clip(`${dialog.role}${dialogName ? ` "${dialogName}"` : ''}`, 200) : undefined;
     const signature = createHash('sha1').update(JSON.stringify([url, dialogText, notices, text, elements.map(element => [element.role, element.name, element.value, element.states, element.disabled])])).digest('hex').slice(0, 16);
-    return { url, title: page.title, ...(dialogText ? { dialog: dialogText } : {}), notices: [...new Set(notices)].slice(0, 8), headings: [...new Set(headings)].slice(0, 12), text, elements, omitted: ranked.length - elements.length, signature };
+    return { url, ...(/^https?:\/\//.test(page.url) ? { origin: new URL(page.url).origin } : {}), title: page.title, ...(dialogText ? { dialog: dialogText } : {}), notices: [...new Set(notices)].slice(0, 8), headings: [...new Set(headings)].slice(0, 12), text, elements, omitted: ranked.length - elements.length, signature };
 }
 
 function firstHeading(node: AriaNode): string {

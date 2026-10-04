@@ -1,8 +1,10 @@
 import type { Models } from './models.ts';
 import type { Observation } from './observe.ts';
+import type { CheckEvidence } from './recording.ts';
 import { z } from 'zod';
 import { pageState } from './act.ts';
 import { choiceOf, probabilityOf } from './models.ts';
+import { describeTarget, resolveTarget } from './recording.ts';
 
 export interface CheckVerdict {
     passed: boolean;
@@ -14,6 +16,7 @@ export interface CheckVerdict {
     region: 'open' | 'closed' | 'unknown';
     pRegion: number;
     note?: string;
+    evidence?: CheckEvidence[];
 }
 
 const DIRECT = ' Judge the exact subject and scope of the claim from visible evidence. Use prior_actions to identify the object acted on, not to prove its resulting content. A summary cannot prove records or contents the claim asks to see. Establish the relevant view from selection, activation or distinct current content. Missing content is not_shown; separately judge whether its expected region is open. An empty state or incompatible content in that region contradicts the claim.';
@@ -49,6 +52,7 @@ const FAIL = { support: 0.6 };
  * Trusted `reference` data turns an opinion into a comparison with ground truth.
  */
 export async function judgeClaim(models: Models, observation: Observation, claim: string, reference: unknown, signal: AbortSignal, priorActions: PriorActions = []): Promise<CheckVerdict> {
+    const candidates = checkEvidenceCandidates(observation);
     const state = {
         claim,
         ...(reference !== undefined ? { reference } : {}),
@@ -68,15 +72,53 @@ export async function judgeClaim(models: Models, observation: Observation, claim
             },
         },
         region: { type: 'choice', instructions: REGION, criteria: { open: 'The relevant region is open and visible, regardless of its contents', closed: 'The relevant region is not open in the current view', unknown: 'The region or its visibility cannot be established' } },
+        evidence: { type: 'choice', instructions: 'Which quoted current-page evidence directly proves EVERY part of claim? Select none for absence, indirect summaries, uncertain evidence or if no single candidate is sufficient. This choice does not decide the verdict.', criteria: { none: 'No complete directly recheckable evidence', ...Object.fromEntries(candidates.map((candidate, i) => [String(i), JSON.stringify(candidate)])) } },
     }, signal, 'check');
     const holds = probabilityOf(answers.holds);
     const support = choiceOf(answers.support);
     const region = choiceOf(answers.region);
-    const verdict = { holds: Math.round(holds * 100) / 100, support: support?.choice ?? 'unknown', pSupport: Math.round((support?.probabilities[support.choice] ?? 0) * 100) / 100, region: (region?.choice ?? 'unknown') as CheckVerdict['region'], pRegion: Math.round((region?.probabilities[region.choice] ?? 0) * 100) / 100 };
+    const selection = choiceOf(answers.evidence);
+    const selected = selection && (selection.probabilities[selection.choice] ?? 0) >= 0.7 ? candidates[Number(selection.choice)] : undefined;
+    const verdict = { holds: Math.round(holds * 100) / 100, support: support?.choice ?? 'unknown', pSupport: Math.round((support?.probabilities[support.choice] ?? 0) * 100) / 100, region: (region?.choice ?? 'unknown') as CheckVerdict['region'], pRegion: Math.round((region?.probabilities[region.choice] ?? 0) * 100) / 100, ...(selected ? { evidence: [selected] } : {}) };
     if (holds >= PASS.holds && verdict.support === 'supports' && verdict.pSupport >= PASS.support) { return { passed: true, uncertain: false, ...verdict }; }
     if (verdict.support === 'contradicts' && verdict.pSupport >= FAIL.support) { return { passed: false, uncertain: false, ...verdict }; }
     if (verdict.support === 'not_shown' && verdict.pSupport >= FAIL.support && verdict.region === 'open' && verdict.pRegion >= PASS.holds) { return { passed: false, uncertain: false, ...verdict }; }
     return { passed: holds >= 0.5 && verdict.support === 'supports', uncertain: true, ...verdict };
+}
+
+export function checkEvidenceCandidates(observation: Observation): CheckEvidence[] {
+    const region = evidenceRegion(observation);
+    return [
+        ...observation.elements.filter(element => element.name && !element.offscreen).map(element => ({ source: 'element' as const, text: element.name, region: evidenceRegion(observation, element), target: describeTarget(element, observation), ...(element.value !== undefined ? { value: element.value } : {}), ...(element.states ? { states: element.states.filter(state => state !== 'focused') } : {}) })),
+        ...observation.notices.map(text => ({ source: 'notice' as const, text, region })),
+        ...observation.headings.map(text => ({ source: 'heading' as const, text, region })),
+        ...(observation.text ? [{ source: 'text' as const, text: observation.text, region }] : []),
+    ].filter(entry => replayableCheckEvidence([entry]));
+}
+
+/** A clipped quote or missing target cannot supply replay proof, even if an older recipe stored it. */
+export function replayableCheckEvidence(evidence: CheckEvidence[]): boolean {
+    return evidence.length > 0 && evidence.every(entry => Boolean(entry.text && entry.region)
+        && (entry.source !== 'element' || entry.target?.name === entry.text)
+        && !JSON.stringify(entry).includes('{secret}')
+        && [entry.text, entry.value, entry.target?.context, entry.target?.near].every(text => !text?.endsWith('…')));
+}
+
+function evidenceRegion(observation: Observation, element?: { context?: string; near?: string }): string {
+    return [observation.dialog ?? `page ${observation.url}`, element?.context, element?.near].filter(Boolean).join(' > ');
+}
+
+/** Evidence stays bound to its visible region and exact field state, rather than any matching page substring. */
+export function checkEvidenceMatches(evidence: CheckEvidence[], observation: Observation): boolean {
+    return replayableCheckEvidence(evidence) && evidence.every(entry => {
+        if (!entry.text || entry.text.includes('{secret}')) { return false; }
+        if (entry.source === 'element') {
+            if (!entry.target) { return false; }
+            const element = resolveTarget(entry.target, observation, true);
+            return !!element && entry.region === evidenceRegion(observation, element) && !element.offscreen && element.name === entry.text && (entry.value === undefined || element.value === entry.value) && (!entry.states || JSON.stringify(element.states?.filter(state => state !== 'focused') ?? []) === JSON.stringify(entry.states));
+        }
+        return entry.region === evidenceRegion(observation) && (entry.source === 'text' ? observation.text === entry.text : (entry.source === 'heading' ? observation.headings : observation.notices).includes(entry.text));
+    });
 }
 
 const adjudication = z.object({ verdict: z.enum(['true', 'false', 'not_shown']), region: z.enum(['open', 'closed', 'unknown']).optional(), reason: z.string().max(400) });
