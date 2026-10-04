@@ -1093,8 +1093,8 @@ async function escalateToLlm(input: ActInput, models: Models, observation: Obser
     const prompt = JSON.stringify({ why_you_are_asked: reason, step: input.instruction, ...(input.next ? { next_step_do_not_do_yet: input.next } : {}), values: modelValues(input), available_tools: Object.keys((decisionQuestions(input, observation, true, false).tool as Extract<Question, { type: 'choice' }>).criteria), history: history.slice(-12), ...(stale.length ? { shown_before_step: stale } : {}), values_entered: modelEnteredValues(input, observation), page: pageState(observation) });
     const answer = await models.generate(HELPER, prompt, helperSchema, input.signal, 'escalate');
     const available = (decisionQuestions(input, observation, true, false).tool as Extract<Question, { type: 'choice' }>).criteria;
-    // Supplied input arguments cannot belong to navigation or gestures; preserve a confident typed-field proposal.
-    if (answer.outcome === 'act' && proposed?.tool === 'type' && proposed.target && FIELD_ROLES.has(proposed.target.role) && (answer.text !== null || answer.value_key !== null) && answer.tool !== 'type' && answer.tool !== 'select' && answer.tool !== 'upload') {
+    // Text selection and entity search also consume text; only repair incompatible navigation or gesture proposals.
+    if (answer.outcome === 'act' && proposed?.tool === 'type' && proposed.target && FIELD_ROLES.has(proposed.target.role) && (answer.text !== null || answer.value_key !== null) && answer.tool !== 'type' && answer.tool !== 'select' && answer.tool !== 'upload' && answer.tool !== 'select_text' && answer.tool !== 'scroll') {
         const authorized = helperText(answer, input, observation);
         if (Object.keys(authorized).length) { return { outcome: 'act', decision: { ...proposed, ...authorized, source: 'llm' }, reason: 'Helper input arguments validated against the proposed editable field' }; }
     }

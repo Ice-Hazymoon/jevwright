@@ -1492,6 +1492,18 @@ it('reach2 rejects a helper back proposal carrying authorized input and retries 
     expect(calls.length).toBeGreaterThan(1);
 });
 
+it('reach2 preserves helper text selection when Jev proposes typing into the same field', async () => {
+    const spec: TestSpec<void> = { id: 'helper-selection-tool', title: 'Format existing text', risk: 'Selection is mistaken for replacement input', start: '/surface-editor', ready: async ({ page }) => { await page.locator('#editor').fill('ship confirmed'); }, steps: () => [act('Make exactly confirmed bold', { maxActions: 3 }), verify('word formatting', ({ page }) => page.locator('#editor').innerHTML().then(html => html === 'ship <b>confirmed</b>'))] };
+    const { run } = suite([spec], {
+        mode: 'ai',
+        policy: view => view.history.some(entry => entry.action === 'press') ? { done: 0.99 } : view.history.some(entry => entry.action === 'select_text') ? { tool: 'press', key: 'ControlOrMeta+b' } : { tool: 'type', target: element => element.name === 'Document', inputSource: 'step' },
+        helper: view => ({ outcome: 'act', tool: 'select_text', element: view.elements.find(element => element.name === 'Document')!.i, value_key: null, text: 'confirmed', reason: 'Select the existing word before formatting it' }),
+    });
+    const result = (await run).results[0]!;
+    expect(result.status, result.summary).toBe('passed');
+    expect(result.attempts[0]?.steps[0]?.actions?.map(action => action.tool)).toEqual(['select_text', 'press']);
+});
+
 it('reach2 refuses helper keyboard text absent from the step and observed page', async () => {
     const spec: TestSpec<void> = { id: 'keyboard-text-authorization', title: 'Focus a message', risk: 'Keyboard text bypasses input authorization', start: '/surface-editor', steps: () => [act('Focus Message', { maxActions: 1 })] };
     const result = (await suite([spec], { mode: 'ai', policy: () => ({ tool: 'none' }), helper: view => ({ outcome: 'act', tool: 'press', element: view.elements.find(element => element.role === 'textbox' && element.name?.startsWith('Message'))!.i, key: 'z', times: 1, value_key: null, text: null, reason: 'Insert an undeclared character' }) }).run).results[0]!;

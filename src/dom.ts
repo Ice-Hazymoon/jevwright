@@ -225,7 +225,8 @@ export async function readSurface(page: Page | Frame, scope?: ElementHandle<Elem
             // Option lists and selected values are content; only a form label or action caption names a control.
             const visibleName = field || select ? labels || near : (nativeRole || actionRoles.has(role)) && !['combobox', 'listbox'].includes(role) && !select && !editable ? rendered : undefined;
             const focused = element === (element.getRootNode() as Document | ShadowRoot).activeElement;
-            const selected = focused && field && element.selectionStart !== null && element.selectionEnd !== null ? element.value.slice(element.selectionStart, element.selectionEnd)
+            // Mask password selections before returning DOM data; traces can capture evaluation results.
+            const selected = focused && field && element.selectionStart !== null && element.selectionEnd !== null ? element instanceof HTMLInputElement && element.type === 'password' ? '••••' : element.value.slice(element.selectionStart, element.selectionEnd)
                 : focused && editable ? (element.getRootNode() instanceof ShadowRoot ? (element.getRootNode() as ShadowRoot & { getSelection?: () => Selection | null }).getSelection?.() : document.getSelection())?.toString() : undefined;
             const value = field ? element instanceof HTMLInputElement && element.type === 'password' ? '••••' : element.value : editable ? (element as HTMLElement).innerText : undefined;
             let context: string | undefined;

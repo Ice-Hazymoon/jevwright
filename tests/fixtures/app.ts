@@ -122,7 +122,7 @@ window.fixtureRoot = root;
 window.rootStillClosed = document.getElementById('closed').shadowRoot === null;
 `);
         case '/surface-editor':
-            return layout('Document formatting', '<label>Message<textarea id="message">ship confirmed</textarea></label><div contenteditable="true" aria-label="Document" id="editor" style="min-height:80px;border:1px solid;padding:12px"></div><button id="bold">Bold</button><div role="button" tabindex="0" aria-label="Close tools">Open tools</div><label>Receive alerts<input type="checkbox" aria-label="Cancel alerts"></label><button id="inspect">Inspect document</button>', `
+            return layout('Document formatting', '<label>Message<textarea id="message">ship confirmed</textarea></label><div contenteditable="true" aria-label="Document" id="editor" style="min-height:80px;border:1px solid;padding:12px"></div><button id="bold">Bold</button><div role="button" tabindex="0" aria-label="Close tools">Open tools</div><label>Receive alerts<input type="checkbox" aria-label="Cancel alerts"></label><button id="inspect">Inspect document</button>' + (url.searchParams.has('private') ? '<label>Access password<input id="protected" type="password" value="Fixture-hidden-password-9462"></label>' : ''), `
 document.getElementById('bold').onmousedown = e => e.preventDefault();
 document.getElementById('bold').onclick = () => document.execCommand('bold');
 document.getElementById('inspect').onclick = () => toast(document.getElementById('editor').innerHTML);
@@ -130,12 +130,12 @@ document.getElementById('inspect').onclick = () => toast(document.getElementById
         case '/surface-events':
             return layout('Delegated workspace', '<section aria-label="Documents"><span id="react-file">ledger.csv</span> <span id="vue-file">schedule.csv</span> <span id="native-file">letter.csv</span></section><button id="rename" hidden>Rename document</button><div style="display:flex;gap:50px"><div id="parcel" draggable="true">Package</div><div id="drop" data-testid="receiving-bay" style="border:2px solid;padding:35px">Receiving bay</div><div id="task" style="padding:20px">Review draft</div><div data-testid="queue" id="queue" style="padding:35px;border:2px solid"><h2>Completed</h2></div><div id="empty" style="width:40px;height:40px;background:teal"></div></div>', `
 if (location.search.includes('root')) { const root = document.querySelector('main'); root.__reactContainer$fixture = {}; for (const type of ['click','pointerdown','pointermove','pointerup','dragstart','dragover','drop','contextmenu']) root.addEventListener(type, () => {}); }
-const menu = e => { e.preventDefault(); document.getElementById('rename').hidden = false; };
+let selectedFile; const menu = e => { e.preventDefault(); selectedFile = e.target; document.getElementById('rename').hidden = false; };
 document.getElementById('react-file').__reactProps$fixture = { onContextMenu: menu };
 document.getElementById('vue-file')._vei = { onContextmenu: menu };
 document.getElementById('native-file').addEventListener('contextmenu', menu);
 document.querySelector('main').addEventListener('contextmenu', e => { if(e.target.id === 'react-file' || e.target.id === 'vue-file') menu(e); });
-document.getElementById('rename').onclick = () => toast('Document renamed');
+document.getElementById('rename').onclick = () => { selectedFile.textContent = selectedFile.textContent.replace('.csv', '-renamed.csv'); document.getElementById('rename').hidden = true; toast('Document renamed'); };
 const parcel = document.getElementById('parcel'); parcel.addEventListener('dragstart', e => e.dataTransfer.setData('text/plain', 'package'));
 const drop = document.getElementById('drop');
 drop.__reactProps$fixture = { onDragOver: e => e.preventDefault(), onDrop: e => { e.preventDefault(); if(e.dataTransfer.getData('text/plain') === 'package' && !location.search.includes('no-drop')) { drop.append(parcel); toast('Package received'); } } };

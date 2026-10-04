@@ -1260,3 +1260,14 @@ it('reach2 keeps engine click receipts from making a named region absorb its doc
         expect((await observe(page)).elements.find(element => element.name === 'ledger.csv')?.ref).toBeDefined();
     });
 });
+
+it('reach2 masks password selection before DOM data leaves the browser', async () => {
+    await open('/surface-editor?private', async page => {
+        await page.locator('#protected').focus();
+        await perform(page, { tool: 'press', key: 'ControlOrMeta+a' });
+        const { readSurface } = await import('../src/dom.ts');
+        const surface = await readSurface(page);
+        expect(JSON.stringify(surface)).not.toContain('Fixture-hidden-password-9462');
+        expect(surface.details.find(detail => detail.inputType === 'password')?.selection).toBe('••••');
+    });
+});

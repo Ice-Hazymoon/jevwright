@@ -362,7 +362,7 @@ it('reach2 enters exact page instructions with conflicting visible field labels 
 
 it('reach2 opens delegated text context menus without targeting the enclosing named section', async () => {
     for (const [id, name] of [['react-menu', 'ledger.csv'], ['vue-menu', 'schedule.csv'], ['listener-menu', 'letter.csv']]) {
-        const spec: TestSpec = { ...base, id: id!, start: '/surface-events', steps: () => [act(`Rename ${name} through its context menu`), verify('renamed', ({ page }) => page.locator('#status').textContent().then(value => value === 'Document renamed'))] };
+        const spec: TestSpec = { ...base, id: id!, start: '/surface-events', steps: () => [act(`Rename ${name} through its context menu`), verify('renamed', async ({ page }) => (await page.locator('#status').textContent()) === 'Document renamed' && (await page.locator('section span').allTextContents()).includes(name!.replace('.csv', '-renamed.csv')), { timeoutMs: 500 })] };
         const models = scriptedModels(view => view.text.includes('Document renamed') ? { done: 0.99 } : view.elements.some(is('button', 'Rename document')) ? { tool: 'click', target: is('button', 'Rename document') } : { tool: 'right_click', target: element => element.name === name });
         expect((await runSuite([spec], { ...options(), models: models.settings })).results[0]?.status).toBe('passed');
         expect((await runSuite([spec], { ...options(), mode: 'replay' })).results[0]?.status).toBe('passed');
