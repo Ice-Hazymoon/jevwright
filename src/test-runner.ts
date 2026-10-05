@@ -296,7 +296,7 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
                 if (signal.aborted) { throw error; }
                 result.status = 'failed';
                 // A check or verify that could not get a model answer is a model-service failure, not test code.
-                result.failure = error instanceof ModelError ? 'model' : step.kind === 'verify' && isAssertionError(error) ? 'assertion' : 'exception';
+                result.failure = error instanceof AttemptError && error.cause === 'timeout' ? 'timeout' : error instanceof ModelError ? 'model' : step.kind === 'verify' && isAssertionError(error) ? 'assertion' : 'exception';
                 result.error = message(error);
             }
             await settle(page, monitor, { maxMs: 3000 }).catch(() => 0);
@@ -664,6 +664,8 @@ function attribute(step: StepResult): { cause: Cause; summary: string } {
             return { cause: 'model', summary: `Model service failed at ${at}: ${step.error}` };
         case 'exception':
             return { cause: 'environment', summary: `Test code threw at ${at}: ${step.error}` };
+        case 'timeout':
+            return { cause: 'timeout', summary: `Timed out at ${at}: ${step.error}` };
         case 'not-shown':
             return { cause: 'agent', summary: `Insufficient visible evidence at ${at}: ${step.error}` };
         case 'not-recorded':

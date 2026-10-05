@@ -2035,6 +2035,16 @@ it('waits for visible loading content before judging a factual check', async () 
     expect(result.status, result.summary).toBe('passed');
 });
 
+it('preserves a check loading timeout through step exception handling', async () => {
+    const spec: TestSpec<void> = { id: 'stuck-visible-record', title: 'Read pending content', risk: 'Loading timeout loses its cause', start: '/attribution-regions?region=loading&resolve=stuck', steps: () => [check('The delivery records show Record ZX-71')] };
+    const execution = suite([spec]);
+    const result = (await execution.run).results[0]!;
+    expect(result.status).toBe('failed');
+    expect(result.cause, result.summary).toBe('timeout');
+    expect(result.attempts[0]?.steps[0]?.failure).toBe('timeout');
+    expect(execution.calls).toHaveLength(0);
+});
+
 it('keeps field proof in the recording without duplicating values in evidence choices', async () => {
     const spec = profileTest();
     const execution = suite([spec], { recordingsDir: join(root, 'compact-proof') });
