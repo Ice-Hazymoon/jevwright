@@ -490,6 +490,7 @@ async function decideLoop(input: ActInput, models: Models, actions: ActionRecord
         let canFinish = saved && !missing.length && remaining < 0.5 && navigation < 0.5;
         let likelyComplete = false;
         let reviewNeeded: number | undefined;
+        let reviewedPendingAction = false;
         const candidate = target ? observation.elements[Number(target.choice)] : undefined;
         const priority = models.actionPriorityThreshold;
         const actionConfidence = tool?.probabilities[tool.choice] ?? 0;
@@ -528,6 +529,8 @@ async function decideLoop(input: ActInput, models: Models, actions: ActionRecord
                     const named = await auditAction(review.decision);
                     if ((named[0] ?? 0) >= 0.75) {
                         decision = review.decision;
+                        reviewedPendingAction = true;
+                        trace.targetAudit = round2(named[0] ?? 0);
                         trace.tool = decision.tool;
                         trace.pTool = round2(review.pTool);
                         trace.target = decision.target && describeElement(decision.target);
@@ -556,7 +559,7 @@ async function decideLoop(input: ActInput, models: Models, actions: ActionRecord
             return keys.size > 1 && [...keys].some(key => input.values[key] && !field.value!.includes(input.values[key]!));
         });
         const deliveryConflict = !canFinish || done < THRESHOLDS.doneAt || (reviewNeeded ?? 0) >= 0.5 || Boolean(proofs.field_composition);
-        if ((deliveryConflict || overlappingInputs) && saved && !missing.length && (errorShown < THRESHOLDS.error || writeDelivered) && (decision.tool === 'none' || tool?.choice === 'none' || done >= THRESHOLDS.doneAt || noInput || proofs.field_edits || overlappingInputs || writeDelivered) && (Object.keys(proofs).length || overlappingInputs) && escalations < 2) {
+        if (!reviewedPendingAction && (deliveryConflict || overlappingInputs) && saved && !missing.length && (errorShown < THRESHOLDS.error || writeDelivered) && (decision.tool === 'none' || tool?.choice === 'none' || done >= THRESHOLDS.doneAt || noInput || proofs.field_edits || overlappingInputs || writeDelivered) && (Object.keys(proofs).length || overlappingInputs) && escalations < 2) {
             reviewedDeliveries = deliveredCount;
             escalations++;
             try {
@@ -578,7 +581,8 @@ async function decideLoop(input: ActInput, models: Models, actions: ActionRecord
                 }
             } catch (error) { return { status: 'failed', failure: 'model', reason: error instanceof Error ? error.message : String(error) }; }
         }
-        if (!missing.length && (decision.tool === 'none' || (canFinish && (decision.tool === 'click' || proposedAction))) && controlCandidate) {
+        // A separately scope-reviewed pending action resolves the conflict before helper recovery.
+        if (!reviewedPendingAction && !missing.length && (decision.tool === 'none' || (canFinish && (decision.tool === 'click' || proposedAction))) && controlCandidate) {
             const candidate = controlCandidate;
             try {
                 const control = describeElement(candidate);
@@ -595,7 +599,7 @@ async function decideLoop(input: ActInput, models: Models, actions: ActionRecord
                 const pendingCandidate = needed <= 0.15 && unperformedCandidate ? ((await auditAction({ tool: 'click', target: candidate, source: 'jev' }, activations))[0] ?? 0) > 0.25 : unperformedCandidate;
                 if (needed < 0.5 && (needed > 0.15 || pendingCandidate) && escalations < 2) {
                     escalations++;
-                    const review = await models.generate(`${actionAuthorizationQuestion('Review whether this observed control must be activated for the current step.', control, false, input.next).instructions} control_activations identifies successful actions on this exact connected DOM element despite label/count changes. An empty list does not negate successful history on a replaced control; inspect history and the current page before proposing a repeat. First explain in reason, in one short sentence, which requested activations remain pending after control_activations. Then choose activation: finished when the requested actions were already delivered; activate only for a still-pending authorized action. Missing product content does not authorize repeating a delivered action. Count requested repeats. Judge user actions, not whether product content is correct.`, JSON.stringify({ step: input.instruction, values: modelValues(input), next_step: input.next ?? null, history: history.filter(entry => entry.action && !entry.error), control, control_activations: activations, page: pageState(observation) }), z.object({ reason: z.string(), activation: z.enum(['activate', 'finished']) }), input.signal, 'control');
+                    const review = await models.generate(`${actionAuthorizationQuestion('Review whether this observed control must be activated for the current step.', control, false, input.next).instructions} control_activations identifies successful actions on this exact connected DOM element despite label/count changes. An empty list does not negate successful history on a replaced control; inspect history and the current page before proposing a repeat. Return only the schema JSON object. First explain in reason, in one short sentence, which requested activations remain pending after control_activations. Then choose activation: finished when the requested actions were already delivered; activate only for a still-pending authorized action. Missing product content does not authorize repeating a delivered action. Count requested repeats. Judge user actions, not whether product content is correct.`, JSON.stringify({ step: input.instruction, values: modelValues(input), next_step: input.next ?? null, history: history.filter(entry => entry.action && !entry.error), control, control_activations: activations, page: pageState(observation) }), z.object({ reason: z.string().max(600), activation: z.enum(['activate', 'finished']) }), input.signal, 'control');
                     activate = review.activation === 'activate';
                     controlReview = review.reason;
                     controlSource = 'llm';

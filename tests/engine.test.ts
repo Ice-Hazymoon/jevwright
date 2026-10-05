@@ -88,6 +88,22 @@ it('fresh keeps an authorized pending control when helper repeats a renamed deli
     expect(result.attempts[0]?.steps[0]?.actions?.map(action => action.element)).toEqual(['button "Save entry"', 'button "Saved entries (1)"']);
 });
 
+it.each(['act', 'step_already_done'])('fresh preserves independently reviewed pending work when helper proposes %s', async (outcome) => {
+    const spec: TestSpec<void> = { id: `fresh-reviewed-pending-${outcome.replaceAll('_', '-')}`, title: 'Save then open an entry list', risk: 'Helper recovery overrides a scope-reviewed missing action', start: '/completion-list', steps: () => [act('Save the entry, then open the Saved entries view'), verify('requested view opened', ({ page }) => page.locator('#tab').getAttribute('aria-pressed').then(value => value === 'true'), { timeoutMs: 1 })] };
+    const policy = (view: View) => view.history.some(entry => entry.element?.includes('Saved entries')) ? { done: 0.99, needed: 0, tool: 'none' } : view.history.length ? { done: view.review ? 0.23 : 0.83, achieved: 0.23, remaining: 0.65, needed: 0.9, tool: view.review ? 'click' : 'none', target: (element: ViewElement) => element.name?.startsWith('Saved entries') === true } : { tool: 'click', target: (element: ViewElement) => element.name === 'Save entry' };
+    const result = (await suite([spec], { policy, helper: view => ({ outcome, completion_proof: outcome === 'step_already_done' ? 'activation_history' : null, tool: outcome === 'act' ? 'click' : null, element: outcome === 'act' ? view.elements.find(element => element.name === 'Saved')?.i ?? null : null, value_key: null, text: null, reason: 'The renamed Saved control appears to cover the saved view' }) }).run).results[0]!;
+    expect(result.status, result.summary).toBe('passed');
+    expect(result.attempts[0]?.steps[0]?.actions?.map(action => action.element)).toEqual(['button "Save entry"', 'button "Saved entries (1)"']);
+});
+
+it.each([true, false])('fresh requests schema JSON for control review without accepting plain text (%s)', async (responsive) => {
+    const spec: TestSpec<void> = { id: `fresh-control-json-${responsive}`, title: 'Save and open a view', risk: 'An unbounded control review writes prose instead of its output schema', start: '/completion-list', steps: () => [act('Save the entry, then open the Saved entries view'), verify('view opened', ({ page }) => page.locator('#tab').getAttribute('aria-pressed').then(value => value === 'true'), { timeoutMs: 1 })] };
+    const policy = (view: View) => view.history.some(entry => entry.element?.includes('Saved entries')) ? { done: 0.99, needed: 0, tool: 'none' } : view.history.length ? { done: 0.99, achieved: 0.99, remaining: 0.1, needed: 0.25, tool: 'none', target: (element: ViewElement) => element.name?.startsWith('Saved entries') === true } : { tool: 'click', target: (element: ViewElement) => element.name === 'Save entry' };
+    const result = (await suite([spec], { policy, helper: view => responsive && view.helperInstructions?.includes('Return only the schema JSON object') ? { reason: 'The view button has not been activated', activation: 'activate' } : 'The view button has not been activated; click it.' }).run).results[0]!;
+    expect(result.status, result.summary).toBe(responsive ? 'passed' : 'failed');
+    if (!responsive) { expect(result.cause).toBe('model'); }
+});
+
 it('fresh preserves an authorized repeat before a different pending control', async () => {
     const spec: TestSpec<void> = { id: 'fresh-helper-requested-repeat', title: 'Activate twice then open a list', risk: 'A different pending control cancels an explicitly requested repeat', start: '/completion-list', steps: () => [act('Click Save entry twice, then open the Saved entries view'), verify('requested view opened', ({ page }) => page.locator('#tab').getAttribute('aria-pressed').then(value => value === 'true'), { timeoutMs: 1 })] };
     const policy = (view: View) => {

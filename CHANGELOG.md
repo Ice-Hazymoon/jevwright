@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Preserve a pending action independently authorized by action-stage review before consulting recovery; control review also requests bounded schema JSON.
+
 - Recheck same-route dialog transitions and removed controls during observation; bind rich-editor templates to actual rendered separators.
 - Report missing authored inputs before autosave completes and honor declared delayed writes after the final action. Review fulfilled submissions even when cleared fields provoke retyping. Require explicit helper key arguments and bounded JSON output; preserve helper model failure attribution.
 
