@@ -72,6 +72,14 @@ it.each([false, true])('fresh respects exact field edits without losing a reques
     expect(result.attempts[0]?.steps[0]?.actions).toHaveLength(commit ? 3 : 2);
 });
 
+it('fresh reviews an already delivered UI activation without requiring a declared write', async () => {
+    const spec: TestSpec<void> = { id: 'fresh-delivered-activation', title: 'Commit once after editing', risk: 'Missing a declared request proof repeats a delivered final control', start: '/fresh-edit', data: { alias: 'Pending alias', notes: 'Entry notes' }, steps: () => [act('Change Alias to {alias} and Notes to {notes}, then commit the entry'), verify('one commit', ({ page }) => page.locator('#commits').textContent().then(text => text === '1'))] };
+    const policy = (view: View) => view.history.some(entry => entry.element?.includes('Commit entry')) ? { done: 0.83, achieved: 0.63, remaining: 0.57, needed: 0.32, tool: 'click', target: (element: ViewElement) => element.name === 'Commit entry', delivered: 0.01 } : freshEditPolicy(view);
+    const result = (await suite([spec], { policy, helper: view => view.history.some(entry => entry.element?.includes('Commit entry')) ? { outcome: 'step_already_done', completion_proof: view.deliveryProofs?.includes('activation_history') ? 'activation_history' : null, tool: null, element: null, value_key: null, text: null, reason: 'The requested fields and final control were already delivered once' } : { outcome: 'act', tool: 'click', element: view.elements.find(element => element.name === 'Commit entry')?.i ?? null, value_key: null, text: null, reason: 'The requested final activation is still pending' } }).run).results[0]!;
+    expect(result.status, result.summary).toBe('passed');
+    expect(result.attempts[0]?.steps[0]?.actions).toHaveLength(3);
+});
+
 it.each([0.29, 0.89])('fresh rejects an unrequested commit when a finished stage still proposes activation (%s)', async (done) => {
     const spec: TestSpec<void> = { id: `fresh-competing-commit-${Math.round(done * 100)}`, title: 'Edit a draft', risk: 'An activation overrides a completed edit stage', start: '/fresh-edit', data: { alias: 'Pending alias', notes: 'Opening passage\n\nFinal passage' }, steps: () => [act('Change Alias to {alias} and Notes to {notes}'), verify('draft remains uncommitted', ({ page }) => page.locator('#commits').textContent().then(text => text === '0'), { timeoutMs: 1 })] };
     const policy = (view: View) => view.history.some(entry => entry.value === 'notes') ? { done, achieved: done < 0.5 ? 0.2 : 0.79, remaining: 0.51, needed: 0.59, tool: 'click', target: (element: ViewElement) => element.name === 'Commit entry', delivered: 0.99 } : freshEditPolicy(view);

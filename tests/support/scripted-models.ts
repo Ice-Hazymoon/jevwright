@@ -8,6 +8,7 @@ type EvaluationQuestion = Parameters<Evaluate>[0]['questions'][string];
 
 /** The page as the engine serializes it for Jev (see `pageState`). */
 export interface View {
+    deliveryProofs?: string[];
     step?: string;
     field?: string;
     control?: string;
@@ -122,7 +123,7 @@ export function scriptedModels(policy: (view: View) => Belief, helper?: (view: V
         doGenerate: async ({ prompt }) => {
             const text = JSON.stringify(prompt);
             const payload = JSON.parse(extractJson(text)) as Record<string, unknown>;
-            const view = toView({ task: { step: payload.step, values: payload.values, history: payload.history, next_step: payload.next_step }, page: payload.page, claim: payload.claim, prior_actions: payload.prior_actions, control: payload.control, control_activations: payload.control_activations });
+            const view = { ...toView({ task: { step: payload.step, values: payload.values, history: payload.history, next_step: payload.next_step }, page: payload.page, claim: payload.claim, prior_actions: payload.prior_actions, control: payload.control, control_activations: payload.control_activations }), deliveryProofs: Object.keys((payload.delivery_proofs as Record<string, unknown> | undefined) ?? {}) };
             const proofs = payload.delivery_proofs as Record<string, unknown> | undefined;
             const output = proofs && (policy(view).delivered ?? 0) >= 0.5
                 ? { reason: 'The current step requests only the code-observed delivery', completion_proof: Object.keys(proofs)[0], outcome: 'step_already_done', tool: null, element: null, value_key: null, text: null }
