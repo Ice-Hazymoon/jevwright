@@ -201,12 +201,17 @@ export async function readSurface(page: Page | Frame, scope?: ElementHandle<Elem
                 || hoverSelectors.some((selector) => { try { return element.matches(selector); } catch { return false; } }) || Boolean(parent && pointerSignal(parent)));
             pointerSignals.set(element, value); return value;
         };
-        const liveSelector = 'output,[aria-live]:not([aria-live=off]),[role=status],[role=log],[role=marquee],[role=timer],[data-slot=toaster],[data-slot=toast],.Toastify,[data-sonner-toaster],[data-sonner-toast],[data-radix-toast-viewport],[data-radix-toast-root],[class*=toaster i],[class*=toast-container i],[id*=toaster i],[id*=toast-container i]';
+        const liveSelector = 'output,[aria-live]:not([aria-live=off]),[role=alert],[role=status],[role=log],[role=marquee],[role=timer],[data-slot=toaster],[data-slot=toast],.Toastify,[data-sonner-toaster],[data-sonner-toast],[data-radix-toast-viewport],[data-radix-toast-root],[class*=toaster i],[class*=toast-container i],[id*=toaster i],[id*=toast-container i]';
+        // Accessible announcements can be separate from fixed visual toast cards in the same landmark.
+        const feedback = new Set(all.filter(element => element.matches('[aria-live]:not([aria-live=off])')).flatMap((element) => {
+            const region = element.closest('section[aria-label],aside[aria-label],[role=region]');
+            return region && [...region.querySelectorAll('*')].some(child => styleOf(child).position === 'fixed') ? [region] : [];
+        }));
         const live = new Map<Element, boolean>();
         const transient = (element: Element): boolean => {
             if (live.has(element)) { return live.get(element)!; }
             const parent = parentOf(element);
-            const value = element.matches(liveSelector) || Boolean(parent && transient(parent));
+            const value = element.matches(liveSelector) || feedback.has(element) || Boolean(parent && transient(parent));
             live.set(element, value); return value;
         };
         const transientTexts = all.filter(element => transient(element) && visible(element)).map(text).filter(Boolean);
@@ -330,7 +335,7 @@ export async function readBusy(page: Page | Frame): Promise<boolean> {
         for (const root of shadowRoots ?? []) { if (!root.host.isConnected) { shadowRoots!.delete(root); } }
         const scopes: Array<Document | ShadowRoot> = [document, ...shadowRoots ?? []];
         const visible = (element: Element) => element.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }) && !element.closest('[hidden],[inert]');
-        const signals = scopes.flatMap(root => [...root.querySelectorAll('[aria-busy="true"],[role=progressbar]:not([aria-valuenow]),[role=status],[aria-live],[class*="loading" i],[class*="skeleton" i],[class*="spinner" i],[id*="loading" i],[id*="skeleton" i],[id*="spinner" i],[data-state*="loading" i]')]).filter(visible);
+        const signals = scopes.flatMap(root => [...root.querySelectorAll('[aria-busy="true"],[role=progressbar]:not([aria-valuenow]),[role=status],[aria-live]:not([aria-live=off]),[class*="loading" i],[class*="skeleton" i],[class*="spinner" i],[id*="loading" i],[id*="skeleton" i],[id*="spinner" i],[data-state*="loading" i]')]).filter(visible);
         const markers = new Set(signals.filter(element => /(?:^|\b)(?:loading|skeleton|spinner)(?:\b|$)/i.test(`${element.getAttribute('class') ?? ''} ${element.id} ${element.getAttribute('data-state') ?? ''}`)));
         const previous = Reflect.get(window, '__jevwrightLoadingMarkers') as Set<Element> | undefined;
         const transient = (Reflect.get(window, '__jevwrightTransientMarkers') as Map<Element, number> | undefined) ?? new Map<Element, number>();
@@ -338,7 +343,12 @@ export async function readBusy(page: Page | Frame): Promise<boolean> {
         if (previous) { for (const marker of markers) { if (!previous.has(marker)) { transient.set(marker, now); } } }
         for (const marker of transient.keys()) { if (!markers.has(marker)) { transient.delete(marker); } }
         Reflect.set(window, '__jevwrightLoadingMarkers', markers); Reflect.set(window, '__jevwrightTransientMarkers', transient);
-        return document.readyState === 'loading' || [...transient.values()].some(start => now - start < 2000) || signals.some(element => element.getAttribute('aria-busy') === 'true' || (element.getAttribute('role') === 'progressbar' && !element.hasAttribute('aria-valuenow')) || ((element.getAttribute('role') === 'status' || element.hasAttribute('aria-live')) && /^(?:loading|saving|processing|please wait)(?:\b|…)/i.test((element.textContent ?? '').trim())));
+        return document.readyState === 'loading' || [...transient.values()].some(start => now - start < 2000) || signals.some((element) => {
+            if (element.getAttribute('aria-busy') === 'true' || (element.getAttribute('role') === 'progressbar' && !element.hasAttribute('aria-valuenow'))) { return true; }
+            // eslint-disable-next-line unicorn/prefer-dom-node-text-content -- busy text must reflect rendered content, excluding hidden loading instructions
+            const text = element instanceof HTMLElement ? element.innerText.trim() : '';
+            return (element.getAttribute('role') === 'status' || (element.hasAttribute('aria-live') && element.getAttribute('aria-live') !== 'off')) && /^(?:loading|saving|processing|please wait)(?:\b|…)/i.test(text);
+        });
     });
 }
 

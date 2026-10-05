@@ -146,6 +146,7 @@ export async function runAct(input: ActInput): Promise<ActResult> {
     let mismatch = false;
     let unique = false;
     const finish = async (result: Pick<ActResult, 'status' | 'source' | 'failure' | 'reason' | 'endMismatch' | 'replayOnTarget' | 'discardRecording'>): Promise<ActResult> => {
+        if (result.status === 'done' && result.source !== 'replay') { await settle(input.page, input.monitor); }
         const recordedEnd = result.endMismatch
             ? input.recorded?.end
             : result.status === 'done' && start.observation
@@ -576,6 +577,18 @@ async function decideLoop(input: ActInput, models: Models, actions: ActionRecord
         }
         if (!canFinish && done >= THRESHOLDS.doneAt && saved && !missing.length) {
             history.push({ event: 'Review task.step and perform its missing requested actions, including necessary final controls for its requested committed result. Respect next_step and do not repeat delivered actions.' });
+        }
+        // A completed view can still suggest its edit controls; review scope before starting unrelated work.
+        if (!canFinish && acted() && done >= 0.9 && navigation < 0.5 && saved && !missing.length && TARGETED.has(decision.tool as Tool) && decision.target && escalations < 2) {
+            const authorized = (await auditAction(decision))[0] ?? 0;
+            if (authorized < 0.25) {
+                escalations++;
+                const help = await escalateToLlm(input, models, observation, history, 'Completion conflicts with a next action outside the current step; review all requested actions before proceeding', stale);
+                rounds.push({ round, source: 'llm', tool: help.outcome === 'act' ? help.decision.tool : help.outcome, note: help.reason, elements: observation.elements.length });
+                if (help.outcome === 'done') { return { status: 'done' }; }
+                if (help.outcome !== 'act') { return { status: 'failed', failure: 'stuck', reason: help.reason ?? 'Completion review supplied no authorized action' }; }
+                decision = help.decision;
+            }
         }
         const everything = acted() || round > 0;
 

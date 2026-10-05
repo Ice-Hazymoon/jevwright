@@ -57,6 +57,22 @@ function escapeHtml(text: string): string {
 function pages(state: FixtureState, url: URL): string | undefined {
     const bug = url.searchParams.get('bug');
     switch (url.pathname) {
+        case '/fresh-effects':
+            return layout('Entry workspace', '<label>Alias<input id="alias" value="Initial"></label><button id="open">Open preferences</button><button id="save">Store entry</button><div id="panel"></div><section aria-label="Feedback"><div aria-live="polite" style="position:absolute;width:1px;height:1px;overflow:hidden"></div><div id="feedback" style="position:fixed;right:20px;top:20px"></div></section>', `
+document.getElementById('save').onclick = () => { document.querySelector('[aria-live]').textContent = 'Entry stored'; document.getElementById('feedback').innerHTML = '<h3>Entry stored</h3><button>Dismiss message</button>'; document.getElementById('panel').innerHTML = '<h2>Stored entry</h2><button>…R4M7</button><button aria-label="Row actions">Entry …R4M7</button>'; };
+document.getElementById('open').onclick = () => { document.getElementById('panel').innerHTML = '<h2>Preferences</h2><label>Handle<input value="user-4928abcd"></label><button role="switch" aria-checked="true">Receive updates</button>'; document.getElementById('alias').value = 'Server refreshed'; };
+`);
+        case '/fresh-navigation':
+            return layout('Editing entry', '<label>Alias<input value="Initial"></label><div role="alertdialog" aria-label="Leave entry"><button id="discard">Discard edits</button></div>', `
+document.getElementById('discard').onclick = () => { document.querySelector('[role=alertdialog]').remove(); history.pushState({}, '', '/fresh-navigation?view=activity'); document.querySelector('main').setAttribute('aria-busy', 'true'); setTimeout(() => { document.querySelector('main').innerHTML = '<h1>Activity</h1><button>Open entry</button>'; document.querySelector('main').removeAttribute('aria-busy'); }, 600); };
+`);
+        case '/fresh-section':
+            return layout('Entry settings', '<button id="expand" aria-expanded="false">Rates</button><section id="rates" hidden><h2>Rates</h2><button id="add">Add rate</button></section><div role="dialog" aria-label="New rate" hidden><label>Amount<input type="number"></label><button>Store rate</button></div>', `
+document.getElementById('expand').onclick = () => { document.getElementById('expand').setAttribute('aria-expanded', 'true'); document.getElementById('rates').hidden = false; };
+document.getElementById('add').onclick = () => document.querySelector('[role=dialog]').hidden = false;
+`);
+        case '/fresh-loading':
+            return layout('Delivery workspace', `<section ${bug === 'stale' ? 'aria-busy="true"' : ''}><h2>Delivery details</h2><p>Parcel ready</p><div role="status"><span hidden>Loading pending requests</span>Nothing pending</div><div aria-live="off">Processing instructions</div></section>`);
         case '/completion-gestures':
             return layout('Item gestures', '<button id="hold">Hold item</button><output id="held">Ready</output><button id="inspect">Inspect item</button><output id="inspected">Ready</output>', `
 let down = 0; document.getElementById('hold').onpointerdown = () => { down = Date.now(); };

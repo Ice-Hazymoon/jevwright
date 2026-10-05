@@ -89,6 +89,8 @@ The helper LLM (DeepSeek V4.1 Flash by default) is consulted when Jev is stuck:
 - when it repeats itself;
 - when an action it just chose failed.
 
+A high-confidence completed view can conflict with a proposal to edit its contents. If the scope audit rejects that proposal, the helper reviews completion before more work begins. This review shares the two-call limit and does not decide the test verdict.
+
 The helper is called at most twice per step. It may:
 - act on a numbered control;
 - type a data value or an exact span from the current observation;
@@ -128,7 +130,7 @@ Before executing a model action, the engine uses the original connected referenc
 ## Settle
 
 Before each decision, the engine waits until the page is quiet: no data or navigation request is in flight, and there has been no DOM mutation for 350 ms.
-- Visible `aria-busy`, indeterminate progressbars without `aria-valuenow`, loading text in status/live regions, and newly appearing loading markers keep the page busy. Ordinary text, determinate progress and initially present decorative markers do not. Newly mounted class/id loading decorations expire after two seconds if they remain; explicit semantic busy signals still block. Settle polls only busy signal nodes, rather than rebuilding the DOM observation. Busy has its own settle reason. Bounded busy waits precede completion review and do not consume action rounds.
+- Visible `aria-busy`, indeterminate progressbars without `aria-valuenow`, rendered loading text in active status/live regions, and newly appearing loading markers keep the page busy. Ordinary text, determinate progress and initially present decorative markers do not. Newly mounted class/id loading decorations expire after two seconds if they remain; explicit semantic busy signals still block. Settle polls only busy signal nodes, rather than rebuilding the DOM observation. Busy has its own settle reason. Bounded busy waits precede completion review and do not consume action rounds.
 - The app's own scripts and stylesheets count as requests, because a lazily loaded component renders nothing until its module arrives.
 - Inline-style changes, SVG attribute churn, `<head>` changes and semantic `time`/`role=timer` updates do not count as mutations. Document and shadow observers apply the same rules and record the last genuine mutation.
 
@@ -165,8 +167,8 @@ The shared subject/scope rules appear once as `claim_scope`, outside untrusted p
 - The report keeps the observation the final verdict was judged against.
 
 With a `reference`, the judge compares the page with your trusted data. Before judging or replaying evidence,
-each check observation waits up to 15 additional seconds while visible content is loading. Persistent loading is a timeout,
-so an unsettled page cannot supply a product-missing verdict.
+each check observation waits up to 15 additional seconds while visible content is loading. At the wait limit, the check inspects the visible evidence. Complete evidence can pass despite a stale busy marker.
+Missing evidence while loading remains a timeout, so loading alone cannot supply a product-missing verdict.
 
 In auto/AI mode, a separate evidence choice records the exact quoted page text and its visible region
 when one evidence option directly supports the whole claim. Options omit unrelated navigation and long whole-page duplicates. Options can combine up to six named fields or
@@ -178,7 +180,7 @@ Body-field candidates can use a visible label's subject word; entity controls ca
 ASCII control labels respect alphanumeric word boundaries, so one action name cannot match a longer, different name. Quoted subjects and unquoted capitalized labels can offer unique local excerpts of at most 256 characters, with up to 80 characters of surrounding text on either side plus complete boundary words. These excerpts exclude changing dates, generated ids, ellipses and live content. Stored proof containing an ellipsis also remains unverified, as shortened identifier suffixes can change between runs. Replay requires the whole selected excerpt, preserving its surrounding object instead of accepting the same label elsewhere. Changes to surrounding text can invalidate this proof even when the claim still holds.
 Replay deterministically checks every selected quote, its recorded container/nearby context and any field value/state/content.
 Element-name proof excludes generated ids and dates. Labeled read-only controls retain rendered paragraph boundaries
-when their rendered text agrees with the visible-text filter. Their original accessible label can identify a proof option.
+when their rendered text agrees with the visible-text filter. Their original accessible label can identify a proof option. JSON-escaped quoted data can also identify exact field or card content; the decoded literal must equal that observed value or content, including paragraph breaks.
 If replay proof mismatches, the engine waits 1.5 seconds and settles before checking again, as for auto checks.
 A mismatch after that second observation still fails. Replay retains the final check observation for audit.
 New evidence marks its region normalization: generated route ids and unstable container ids do not bind it
@@ -212,9 +214,9 @@ determine the test result, as before. Legacy end observation retains inherited e
 Strict new end states require all appeared anchors. A unique gone control
 must disappear; repeated identities record before/after counts and require that count reduction. New appeared anchors also record their absence
 before the step; replay rejects effects already present before its actions. Dates, durations, live counters
-and generated ids are filtered when recording. Toast/live-region contents and their controls are also excluded; ordinary numeric result text remains evidence.
-Changed field values and checked, selected, expanded or pressed states are recorded, including typing-only
-steps. Keyed inputs recheck current data; page inputs recheck their recorded source. A step without an
+and generated ids are filtered when recording. Toast/live-region contents and their controls are also excluded, including fixed visual cards sharing a landmark with separate live announcements. Truncated names, content, nearby labels and contexts cannot supply anchors; ordinary numeric result text remains evidence.
+Field values are recorded only for fields this step typed, selected or targeted with keyboard input. Revealed forms supply no initial value/state anchors. Changed states and formatting require a matching element before the action.
+The engine settles before recording the end and retries observations whose route changes between accessibility and DOM reads. Keyed inputs recheck current data; page inputs recheck their recorded source. A step without an
 observable effect records `effect: 'none'`, so replay verifies action delivery without claiming an effect.
 A `likely-done` step records no end state.
 

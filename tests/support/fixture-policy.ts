@@ -1,6 +1,17 @@
 import type { Belief, View } from './scripted-models.ts';
 import { find, is, near, within } from './scripted-models.ts';
 
+/** Reproduce navigation completion disagreeing with a proposal to edit inside the opened section. */
+export function freshSectionPolicy(view: View): Belief {
+    if (view.proposal) { return { onTarget: view.proposal.element === 'button "Add rate"' ? 0.02 : 0.98 }; }
+    if (view.control) { return { needed: 0.02 }; }
+    if (view.elements.some(element => element.name === 'Rates' && element.state?.includes('expanded'))) {
+        return { done: 0.91, remaining: 0.97, achieved: 0.08, tool: 'click', target: element => element.name === 'Add rate' };
+    }
+    if (view.dialog) { return { tool: 'type', inputSource: 'step', target: element => element.name === 'Amount' }; }
+    return { tool: 'click', target: element => element.name === 'Rates' };
+}
+
 const typed = (view: View, key: string) => view.history.some(entry => entry.action === 'type' && entry.value === key);
 const clicked = (view: View) => view.history.some(entry => entry.action === 'click');
 

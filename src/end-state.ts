@@ -21,16 +21,20 @@ export function normalizedRoute(url: string, origin?: string): string {
 
 /** Dates, durations, live counters and generated ids are unstable; ordinary result numbers remain evidence. */
 export function volatileAnchor(text: string): boolean {
-    return stable(text) !== text || /\b\d+\s*(?:ms|seconds?|minutes?|hours?)\b|\b(?:countdown|elapsed|remaining)\s*(?::\s*)?\d+|\b\d+\s+of\s+\d+\b|\(\d+\)|\b(?:count|counter)\s*(?::\s*)?\d+|\b(?:moments? ago|a moment ago)\b/i.test(text);
+    return text.includes('…') || text.includes('...') || stable(text) !== text || /\b\d+\s*(?:ms|seconds?|minutes?|hours?)\b|\b(?:countdown|elapsed|remaining)\s*(?::\s*)?\d+|\b\d+\s+of\s+\d+\b|\(\d+\)|\b(?:count|counter)\s*(?::\s*)?\d+|\b(?:moments? ago|a moment ago)\b/i.test(text);
 }
 const anchorName = (name: string) => normalize(name) !== '' && !volatileAnchor(name);
+function durableElement(element: Observation['elements'][number]) {
+    return !element.transient && anchorName(element.name)
+        && [element.ariaName, element.near, element.context, element.content].every(text => text === undefined || !volatileAnchor(text));
+}
 
 function anchors(observation: Observation): Anchor[] {
     const durable = (text: string) => anchorName(text) && !observation.transientTexts?.some(value => normalize(text).includes(normalize(value)));
     return [
         ...(observation.dialog && durable(observation.dialog) ? [{ kind: 'dialog' as const, text: observation.dialog }] : []),
         ...observation.headings.filter(durable).map(text => ({ kind: 'heading' as const, text })),
-        ...observation.elements.filter(element => !element.transient && durable(element.name)).map(element => ({ kind: 'element' as const, target: describeTarget(element, observation) })),
+        ...observation.elements.filter(element => durableElement(element) && durable(element.name)).map(element => ({ kind: 'element' as const, target: describeTarget(element, observation) })),
     ];
 }
 function present(anchor: Anchor, observation: Observation): boolean {
@@ -46,23 +50,25 @@ export function recordEnd(start: Observation, end: Observation, actions: Recorde
     const base = !!baseURL && new URL(absoluteRoute).origin === new URL(baseURL).origin;
     const route = base ? absoluteRoute.slice(new URL(baseURL!).origin.length) : absoluteRoute;
     const appeared = anchors(end).filter(anchor => !redact.contains(JSON.stringify(anchor)) && !present(anchor, start)).slice(0, 4);
-    const disappearing = start.elements.filter(element => !element.transient && anchorName(element.name)).map(element => describeTarget(element, start)).filter(target => !redact.contains(JSON.stringify(target)) && targetCount(target, end) < targetCount(target, start));
+    const disappearing = start.elements.filter(durableElement).map(element => describeTarget(element, start)).filter(target => !redact.contains(JSON.stringify(target)) && targetCount(target, end) < targetCount(target, start));
     const gone = disappearing.filter(target => targetCount(target, start) === 1 && targetCount(target, end) === 0).slice(0, 2);
     const reduced = disappearing.filter(target => targetCount(target, start) > 1).filter((target, index, all) => all.findIndex(other => other.role === target.role && other.name === target.name && stable(other.near) === stable(target.near) && stable(other.context) === stable(target.context)) === index).slice(0, 2).map(target => ({ target, before: targetCount(target, start), after: targetCount(target, end) }));
-    const values: ValueAnchor[] = end.elements.filter(element => !element.transient && anchorName(element.name)).flatMap((element) => {
+    const values: ValueAnchor[] = end.elements.filter(durableElement).flatMap((element) => {
         const target = describeTarget(element, end);
         const before = resolveTarget(target, start, true);
         const states = durableStates(element.states);
-        const valueChanged = element.value !== undefined && element.value !== before?.value;
-        const stateChanged = JSON.stringify(states ?? []) !== JSON.stringify(durableStates(before?.states) ?? []);
-        const formattingChanged = element.formatting !== undefined && JSON.stringify(element.formatting) !== JSON.stringify(before?.formatting);
-        if (!valueChanged && !stateChanged && !formattingChanged) { return []; }
         const typed = actions.findLast((action) => {
             if (!action.target || !['type', 'select'].includes(action.tool)) { return false; }
             if (resolveTarget(action.target, end, true)?.i === element.i) { return true; }
             const pageValue = action.pageValue ? readPageValue(start, action.pageValue, redact) : undefined;
             return action.target.role === element.role && action.target.name.replaceAll('{page value}', pageValue ?? '') === element.name && end.elements.filter(other => other.role === element.role && other.name === element.name).length === 1;
         });
+        // Revealing a form is not editing its initial values; asynchronous refreshes are not authored input.
+        const edited = typed || actions.some(action => action.tool === 'press' && action.target && resolveTarget(action.target, end, true)?.i === element.i);
+        const valueChanged = !!edited && element.value !== undefined && element.value !== before?.value;
+        const stateChanged = !!before && JSON.stringify(states ?? []) !== JSON.stringify(durableStates(before.states) ?? []);
+        const formattingChanged = !!before && element.formatting !== undefined && JSON.stringify(element.formatting) !== JSON.stringify(before.formatting);
+        if (!valueChanged && !stateChanged && !formattingChanged) { return []; }
         let template = element.value ?? '';
         if (typed?.valueKey && data[typed.valueKey] !== undefined && element.value !== data[typed.valueKey]) {
             for (const [key, value] of Object.entries(data).filter(([, value]) => value).toSorted(([, a], [, b]) => b.length - a.length)) { template = template.replaceAll(value, `{${key}}`); }

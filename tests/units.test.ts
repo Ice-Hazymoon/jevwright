@@ -856,6 +856,50 @@ describe('legacy end-state compatibility', () => {
 });
 
 describe('recorded end states', () => {
+    it('fresh retries an observation when the route changes between its accessibility and DOM reads', async () => {
+        await open('/fresh-navigation', async (page) => {
+            const snapshot = page.ariaSnapshotJSON.bind(page);
+            let changed = false;
+            page.ariaSnapshotJSON = async (options) => {
+                const tree = await snapshot(options);
+                if (!changed) {
+                    changed = true;
+                    await page.evaluate(() => { history.pushState({}, '', '?view=activity'); document.querySelector('main')!.innerHTML = '<h1>Activity</h1><button>Open entry</button>'; });
+                }
+                return tree;
+            };
+            const observation = await observe(page);
+            expect(observation.url).toContain('view=activity');
+            expect(observation.headings).toEqual(['Activity']);
+            expect(observation.elements.some(element => element.name === 'Discard edits')).toBe(false);
+        });
+    });
+    it('fresh excludes mirrored toast children and clipped identities from every end anchor', async () => {
+        await open('/fresh-effects', async (page) => {
+            const before = await observe(page);
+            await page.getByRole('button', { name: 'Store entry' }).click();
+            const after = await observe(page);
+            const { recordEnd } = await import('../src/end-state.ts');
+            const end = recordEnd(before, after, [{ tool: 'click', target: describeTarget(before.elements.find(element => element.name === 'Store entry')!, before) }]);
+            expect(JSON.stringify(end.appeared)).not.toMatch(/Entry stored|Dismiss message|…/);
+            expect(end.appeared).toContainEqual({ kind: 'heading', text: 'Stored entry' });
+            expect(after.elements.find(element => element.name === 'Dismiss message')?.transient).toBe(true);
+        });
+    });
+    it('fresh excludes revealed field values and states that the action did not edit', async () => {
+        await open('/fresh-effects', async (page) => {
+            const before = await observe(page);
+            await page.getByRole('button', { name: 'Open preferences' }).click();
+            const after = await observe(page);
+            const { recordEnd } = await import('../src/end-state.ts');
+            const end = recordEnd(before, after, [{ tool: 'click', target: describeTarget(before.elements.find(element => element.name === 'Open preferences')!, before) }]);
+            expect(end.values).toBeUndefined();
+        });
+    });
+    it('fresh ignores hidden loading words and an aria-live off instruction', async () => {
+        const { observation } = await open('/fresh-loading');
+        expect(observation.busy).toBe(false);
+    });
     it('normalizes dynamic paths and requires all appeared anchors', async () => {
         const { endMatches, normalizedPath } = await import('../src/end-state.ts');
         expect(normalizedPath('/items/123/ab12cd34')).toBe('/items/:id/:id');
@@ -873,7 +917,8 @@ describe('integrity regressions', () => {
         const { recordEnd, endMatches } = await import('../src/end-state.ts');
         const before = { ...observation, elements: [{ i: 0, ref: 'e1', role: 'textbox', name: 'Draft', value: 'Before' }, { i: 1, ref: 'e2', role: 'checkbox', name: 'Enabled', states: ['unchecked'] }] };
         const after = { ...before, elements: [{ ...before.elements[0]!, value: 'After' }, { ...before.elements[1]!, states: ['checked'] }] };
-        const end = recordEnd(before, after, [{ tool: 'type' }]);
+        const end = recordEnd(before, after, [{ tool: 'type', target: describeTarget(before.elements[0]!, before) }]);
+        expect(end.values).toHaveLength(2);
         expect(endMatches(end, after).matched).toBe(true);
         expect(endMatches(end, before).matched).toBe(false);
     });
@@ -1002,6 +1047,19 @@ describe('integrity regressions', () => {
             const { checkEvidenceOptions } = await import('../src/judge.ts');
             const options = checkEvidenceOptions(await observe(page), 'The Message card shows both paragraphs');
             expect(options.flat().some(entry => entry.target?.ariaName === 'Message')).toBe(true);
+        });
+    });
+    it('fresh offers exact rendered paragraph proof for an escaped data literal', async () => {
+        await open('/paragraph-card', async (page) => {
+            const { checkEvidenceOptions, checkEvidenceMatches } = await import('../src/judge.ts');
+            const shown = await observe(page);
+            const claim = `The text card shows both paragraphs of ${JSON.stringify('Opening passage\n\nFinal passage')}`;
+            const proof = checkEvidenceOptions(shown, claim).find(option => option.some(entry => entry.source === 'element' && entry.content === 'Opening passage\n\nFinal passage'));
+            expect(proof).toBeDefined();
+            expect(checkEvidenceMatches(proof!, shown)).toBe(true);
+            await page.goto(`${app.origin}/paragraph-card?bug=inline`);
+            await page.evaluate(() => history.replaceState({}, '', '/paragraph-card'));
+            expect(checkEvidenceMatches(proof!, await observe(page))).toBe(false);
         });
     });
     it('keeps disabled action captions on their own elements', async () => {

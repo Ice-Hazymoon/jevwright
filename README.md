@@ -185,6 +185,7 @@ without one, it can save a verified partial prefix. Secret checks still apply be
 | A visible label conflicts with an aria name | The visible label becomes the primary name; `aria_name` and `content` retain the original name and rendered text. Review the app’s accessible labels. |
 | A drag reports no observed effect | Check that the destination is correct and that the page reflects the move. A delivered gesture alone does not establish a drop. |
 | Secret input fails with a password-purpose message | Use a password field, or declare `secret(value, { purpose: 'any' })` for an API key or another editable field. |
+| Fresh replay misses transient or form-value anchors | Re-record with the current engine. New anchors exclude toast children, clipped identities and fields the step did not edit. |
 | `check` steps show as unverified | The recording lacks sufficient direct evidence, the claim changed, or it uses a runtime reference. Run in auto mode to judge it; use `verify` for exact absence or reference checks. |
 | `env` is `unknown` in fixtures | Declare its type once through `Register`; see [Starting the app per run](https://github.com/Ice-Hazymoon/jevwright/blob/main/docs/configuration.md#starting-the-app-per-run). |
 
@@ -217,7 +218,7 @@ missing anchors. Confirm the cause with an auto run; a mismatch alone does not e
 - Scroll searches use a container-sized budget, share at most 120 seconds per step, and stop after 500 viewports or five unchanged positions. Missing goals fail explicitly.
 - Desktop defaults to 1280×900. Use `device: "mobile"` for touch and a mobile user agent, or provide a custom device.
 - Page values can be entered only when their exact text appears in the current observation. Replay re-reads them from recorded surrounding text; changed or ambiguous sources need an auto run. Declared secrets remain available only through their keys.
-- `check` waits up to 15 additional seconds per observation for visible loading to finish; persistent loading is a timeout. `check` requires the asserted content to be visible. A count or saved-button state cannot prove what another tab contains.
+- `check` waits up to 15 additional seconds per observation for visible loading. It then checks the visible content; missing evidence while loading is a timeout. `check` requires the asserted content to be visible. A count or saved-button state cannot prove what another tab contains.
 - Failed checks receive a second look. Visible contradictions, or missing expected content in an open visible region, are `product`; a collapsed or unopened region is `agent`. Uncertain region evidence receives adjudication.
 - Compound factual checks can record several fields or exact page quotes. Replay rechecks every selected piece in its recorded region. Missing direct evidence and recognized absence or negative clauses remain `unverified`.
 - A positive adjudication can retain proof from a check that already leaned positive. The proof must match its observation; adjudication creates no proof.

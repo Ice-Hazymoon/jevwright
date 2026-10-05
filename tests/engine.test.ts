@@ -12,7 +12,7 @@ import { act, check, reload, run, runSuite, secret, verify } from '../src/index.
 import { describePageValue, pageValueChoices, readPageValue } from '../src/page-values.ts';
 import { createRedactor } from '../src/secrets.ts';
 import { startFixtureApp } from './fixtures/app.ts';
-import { deferredPolicy, fixturePolicy, gestureNavigationPolicy, integrityPolicy, reservationPolicy, reservationScopePolicy, savedViewPolicy, singlePageSearchPolicy } from './support/fixture-policy.ts';
+import { deferredPolicy, fixturePolicy, freshSectionPolicy, gestureNavigationPolicy, integrityPolicy, reservationPolicy, reservationScopePolicy, savedViewPolicy, singlePageSearchPolicy } from './support/fixture-policy.ts';
 import { scriptedModels } from './support/scripted-models.ts';
 
 type App = Awaited<ReturnType<typeof startFixtureApp>>;
@@ -64,6 +64,31 @@ function suite(specs: Array<TestSpec<void>>, options: Partial<SuiteOptions> & { 
 }
 
 const statusOf = (summary: RunSummary) => Object.fromEntries(summary.results.map(result => [result.id, result.status === 'passed' ? 'passed' : `${result.status}:${result.cause}`]));
+
+it('fresh records the settled destination after a discard-triggered SPA navigation', async () => {
+    const recordingsDir = join(root, 'fresh-navigation');
+    const spec: TestSpec<void> = { id: 'fresh-navigation', title: 'Discard and leave an entry', risk: 'The source form is recorded as destination evidence', start: '/fresh-navigation', steps: () => [act('Discard edits'), verify('activity opened', ({ page }) => page.getByRole('heading', { name: 'Activity' }).isVisible())] };
+    const policy = (view: View) => view.history.some(entry => entry.action === 'click') ? { done: 0.99 } : { tool: 'click', target: (element: ViewElement) => element.name === 'Discard edits' };
+    const recorded = await suite([spec], { recordingsDir, policy }).run;
+    expect(recorded.results[0]?.status).toBe('passed');
+    const stored = JSON.parse(await readFile(join(recordingsDir, 'fresh-navigation.json'), 'utf8'));
+    expect(JSON.stringify(stored.steps[0].end.appeared)).not.toContain('Editing entry');
+    expect(stored.steps[0].end.values).toBeUndefined();
+    expect((await suite([spec], { recordingsDir, mode: 'replay' }).run).totals.passed).toBe(1);
+});
+
+it('fresh finishes section navigation before unrelated editing despite conflicting model judgments', async () => {
+    const spec: TestSpec<void> = { id: 'fresh-section', title: 'Open a settings section', risk: 'Navigation opens an unrequested input dialog', start: '/fresh-section', steps: () => [act('Open the Rates section of the entry settings'), verify('section open without an edit dialog', async ({ page }) => await page.locator('#rates').isVisible() && !await page.getByRole('dialog').isVisible())] };
+    const result = (await suite([spec], { policy: freshSectionPolicy, helper: () => ({ outcome: 'step_already_done', tool: null, element: null, value_key: null, text: null, reason: 'Only opening the section was requested; its edit control belongs to another instruction' }) }).run).results[0]!;
+    expect(result.status, result.summary).toBe('passed');
+    expect(result.attempts[0]?.steps[0]?.actions).toHaveLength(1);
+});
+
+it('fresh judges visible complete content after a bounded stale busy wait', async () => {
+    const spec: TestSpec<void> = { id: 'fresh-stale-busy', title: 'Read delivery details', risk: 'A stale busy attribute hides visible evidence', start: '/fresh-loading?bug=stale', steps: () => [check('The delivery details show Parcel ready')] };
+    const result = (await suite([spec], { policy: () => ({ holds: 0.99, support: 'supports', region: 'open' }) }).run).results[0]!;
+    expect(result.status, result.summary).toBe('passed');
+}, 45000);
 
 describe('integrity regression paths', () => {
     const base = { id: 'integrity-save', title: 'Store a draft', risk: 'A receipt is missing', start: '/integrity', ready: async ({ page }: { page: import('playwright').Page }) => { await page.evaluate(() => { history.replaceState({}, '', '/integrity'); }); } };
@@ -2109,7 +2134,8 @@ it('preserves a check loading timeout through step exception handling', async ()
     expect(result.status).toBe('failed');
     expect(result.cause, result.summary).toBe('timeout');
     expect(result.attempts[0]?.steps[0]?.failure).toBe('timeout');
-    expect(execution.calls).toHaveLength(0);
+    expect(execution.calls).toHaveLength(1);
+    expect(execution.calls[0]?.questions).toContain('holds');
 });
 
 it('keeps field proof in the recording without duplicating values in evidence choices', async () => {

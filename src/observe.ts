@@ -111,7 +111,8 @@ export interface ObserveOptions {
     viewport?: { width: number; height: number };
 }
 
-export async function observe(page: Page, options: ObserveOptions = {}): Promise<Observation> {
+export async function observe(page: Page, options: ObserveOptions = {}, navigationRetries = 2): Promise<Observation> {
+    const url = page.url();
     const [tree, title, inert] = await Promise.all([
         page.ariaSnapshotJSON({ mode: 'ai', boxes: true, timeout: 10_000 }) as Promise<unknown>,
         page.title().catch(() => ''),
@@ -131,7 +132,7 @@ export async function observe(page: Page, options: ObserveOptions = {}): Promise
     });
     const dialogs: AriaNode[] = []; collect(roots, node => node.role === 'dialog' || node.role === 'alertdialog', dialogs);
     const supplemented = surface.dialog && !dialogs.length ? [surface.dialog] : [...roots, ...added];
-    const result = buildObservation(supplemented, { url: page.url(), title, viewport, masked, values, inert, redact: options.redact, instruction: options.instruction });
+    const result = buildObservation(supplemented, { url, title, viewport, masked, values, inert, redact: options.redact, instruction: options.instruction });
     const texts = [surface.text];
     if (!result.dialog) {
         const frames = page.frames().filter(frame => frame !== page.mainFrame());
@@ -175,6 +176,11 @@ export async function observe(page: Page, options: ObserveOptions = {}): Promise
     result.canGoBack = await canGoBack(page).catch(() => false);
     result.scroll = surface.pageScroll;
     result.signature = createHash('sha1').update(JSON.stringify([result.signature, result.text, result.elements.map(element => [element.content, element.near, element.value, element.selection, element.formatting, element.ariaName, element.dropTarget, element.scroll]), surface.busy, surface.pageScroll, result.canGoBack])).digest('hex').slice(0, 16);
+    // Navigation during separate accessibility/DOM reads cannot bind the old view to the new route.
+    if (page.url() !== url) {
+        if (!navigationRetries) { throw new Error('Page route kept changing during observation'); }
+        return observe(page, options, navigationRetries - 1);
+    }
     return result;
 }
 

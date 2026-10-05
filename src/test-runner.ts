@@ -534,7 +534,6 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
                         await settle(page!, monitor, { maxMs: Math.min(8000, deadline - Date.now()) });
                         observed = await observe(page!, { redact });
                     }
-                    if (observed.busy) { throw new AttemptError('timeout', `Visible content remained loading before checking: ${claim}`); }
                     return observed;
                 };
                 if (!models) {
@@ -555,7 +554,7 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
                         result.observation = `step-${String(index + 1).padStart(2, '0')}-observation.json`;
                         await writeArtifact(join(directory, result.observation), pageState(observed), redact);
                         if (!checkEvidenceMatches(recorded.checkEvidence, observed)) {
-                            result.status = 'failed'; result.failure = 'assertion'; result.error = `Recorded check evidence is no longer visible: ${claim}`;
+                            result.status = 'failed'; result.failure = observed.busy ? 'timeout' : 'assertion'; result.error = observed.busy ? `Visible content remained loading before checking: ${claim}` : `Recorded check evidence is no longer visible: ${claim}`;
                         }
                     }
                     return;
@@ -566,6 +565,7 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
                 let observed = await observeReady();
                 let verdict = await judgeClaim(models, observed, claim, reference, signal, priorActions, options.collectCheckEvidence);
                 const attempts: unknown[] = [verdict];
+                if (!verdict.passed && observed.busy) { throw new AttemptError('timeout', `Visible content remained loading before checking: ${claim}`); }
                 if (!verdict.passed || verdict.uncertain) {
                     // A second look after the page settles; UI updates can trail the data.
                     await page!.waitForTimeout(1500);
