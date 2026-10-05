@@ -31,6 +31,8 @@ export interface TextFormatting { start: number; end: number; bold: boolean; ita
 export interface PageElement {
     i: number;
     ref?: string;
+    /** Identity of the connected DOM control within this document, independent of accessibility labels. */
+    connectedRef?: string;
     role: string;
     name: string;
     value?: string;
@@ -144,6 +146,8 @@ export async function observe(page: Page, options: ObserveOptions = {}, navigati
         const node = [...surface.nodes].find(node => node.ref === element.ref);
         const snapshot: AriaNode[] = []; collect(roots, item => element.ref ? item.ref === element.ref : item.role === element.role && clean(item.name ?? '') === element.name, snapshot);
         const box = node?.box ?? snapshot[0]?.box;
+        const connected = box ? surface.nodes.filter(node => node.role === element.role && node.box && sameBox(node.box, box)) : [];
+        if (connected.length === 1 && connected[0]?.ref) { element.connectedRef = `${surface.documentId}:${connected[0].ref}`; }
         const detail = box ? surface.details.find(detail => sameBox(detail.box, box)) : undefined;
         if (!detail) {
             if (element.ref && TEXT_FIELDS.has(element.role)) {

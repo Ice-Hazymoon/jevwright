@@ -501,14 +501,15 @@ async function decideLoop(input: ActInput, models: Models, actions: ActionRecord
             if (controls[0] && total > 0 && controls[0].probability / total >= 0.5) { controlCandidate = controls[0].element; }
         }
         const activatedControl = controlCandidate;
-        const activations = activatedControl?.ref ? actions.filter(action => action.ok && actionTargets.get(action) === activatedControl.ref && ['click', 'double_click', 'press_enter', 'upload'].includes(action.tool)).map(action => ({ action: action.tool, element: action.element ?? describeElement(activatedControl), ...(action.fileKeys?.length ? { file_keys: JSON.stringify(action.fileKeys) } : {}) })) : [];
-        const auditAction = (proposal: Decision, controlActivations: Array<Record<string, string>> = [], controlReview?: string) => actedOnTarget(models, [{
+        const activations = activatedControl?.ref ? actions.filter(action => action.ok && actionTargets.get(action) === (activatedControl.connectedRef ?? activatedControl.ref) && ['click', 'double_click', 'press_enter', 'upload'].includes(action.tool)).map(action => ({ action: action.tool, element: action.element ?? describeElement(activatedControl), ...(action.fileKeys?.length ? { file_keys: JSON.stringify(action.fileKeys) } : {}) })) : [];
+        const actionAudit = (proposal: Decision, controlActivations: Array<Record<string, string>> = [], controlReview?: string) => ({
             step: input.instruction,
             next_step: input.next ?? null,
             history: history.filter(entry => entry.action && !entry.error),
             proposal: { action: proposal.tool, ...(proposal.target ? { element: describeElement(proposal.target) } : {}) },
             context: { page: pageState(observation), target: proposal.target?.i, ...(input.previous ? { previous_step: input.previous } : {}), control_activations: controlActivations, ...(controlReview ? { control_review: controlReview } : {}) },
-        }], input.signal, 0);
+        });
+        const auditAction = (proposal: Decision, controlActivations: Array<Record<string, string>> = [], controlReview?: string) => actedOnTarget(models, [actionAudit(proposal, controlActivations, controlReview)], input.signal, 0);
         const completionProposed = done >= 0.35 || decision.tool === 'none' || activations.length > 0;
         if (saved && !missing.length && completionProposed && (acted() || done < 0.9 || proposedAction)) {
             try {
@@ -558,7 +559,18 @@ async function decideLoop(input: ActInput, models: Models, actions: ActionRecord
                 const help = await escalateToLlm(input, models, observation, history, reason, stale, undefined, proofs);
                 trace.deliveryReview = `${Object.keys(proofs).join(', ') || 'overlapping_inputs'}: ${help.outcome}; ${help.reason ?? ''}`;
                 if (help.outcome === 'done' && help.proof && Object.hasOwn(proofs, help.proof)) { trace.deliveryProof = help.proof; trace.note = `Helper delivery review: ${help.reason}`; return { status: 'done' }; }
-                if (help.outcome === 'act') { decision = help.decision; controlCandidate = undefined; canFinish = false; trace.tool = decision.tool; trace.target = decision.target && describeElement(decision.target); trace.pTarget = 1; trace.pTool = 1; trace.value = typedLabel(decision); }
+                if (help.outcome === 'act') {
+                    let proposal = help.decision;
+                    const helperTarget = proposal.target;
+                    const helperActivations = helperTarget?.ref ? actions.filter(action => action.ok && actionTargets.get(action) === (helperTarget.connectedRef ?? helperTarget.ref) && ['click', 'double_click', 'press_enter', 'select'].includes(action.tool)).map(action => ({ action: action.tool, element: action.element ?? describeElement(helperTarget) })) : [];
+                    // A renamed delivered control can resemble a different pending view; audit both scopes before replacing it.
+                    if (helperTarget && ACTIVATION_ROLES.has(helperTarget.role) && ['click', 'double_click', 'press_enter', 'select'].includes(proposal.tool) && helperActivations.length && controlCandidate?.ref && (controlCandidate.connectedRef ?? controlCandidate.ref) !== (helperTarget.connectedRef ?? helperTarget.ref) && !activations.length) {
+                        const pending = { tool: 'click' as const, target: controlCandidate, source: 'jev' as const };
+                        const [repeat, needed] = await actedOnTarget(models, [actionAudit(proposal, helperActivations), actionAudit(pending, activations)], input.signal, 0);
+                        if (repeat! <= 0.25 && needed! >= 0.75) { proposal = pending; }
+                    }
+                    decision = proposal; controlCandidate = undefined; canFinish = false; trace.tool = decision.tool; trace.target = decision.target && describeElement(decision.target); trace.pTarget = 1; trace.pTool = 1; trace.value = typedLabel(decision);
+                }
             } catch (error) { return { status: 'failed', failure: 'model', reason: error instanceof Error ? error.message : String(error) }; }
         }
         if (!missing.length && (decision.tool === 'none' || (canFinish && (decision.tool === 'click' || proposedAction))) && controlCandidate) {
@@ -718,7 +730,7 @@ async function decideLoop(input: ActInput, models: Models, actions: ActionRecord
         if (next.tool === 'scroll' && next.scrollText) { searchSpentMs += record.durationMs; }
         if (record.ok && next.tool === 'scroll' && !next.scrollText && recording.filter(action => action.tool === 'scroll' && !action.scrollText).length === 2) { history.push({ event: 'Two single-page scrolls have been performed. If task.step names a target entity, choose scoped scroll search for that entity using scroll_start/scroll_end instead of another single-page move.' }); }
         actions.push(record);
-        if (record.ok && next.target?.ref) { actionTargets.set(record, next.target.ref); }
+        if (record.ok && next.target?.ref) { actionTargets.set(record, next.target.connectedRef ?? next.target.ref); }
         history.push({ ...actionHistory(record, Boolean(next.pageValue)), ...(record.destination ? { destination: record.destination } : {}) });
     }
     return { status: 'failed', failure: 'max-actions', reason: `Step not complete after ${maxActions} actions${missing.length ? `: ${neverEntered(missing)}` : ''}` };

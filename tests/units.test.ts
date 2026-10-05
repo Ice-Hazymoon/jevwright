@@ -55,6 +55,22 @@ async function open(path: string, run?: (page: Page) => Promise<void>, monitorOp
 const named = (observation: Observation, role: string, name: string) => observation.elements.filter(element => element.role === role && (element.name === name || element.ariaName === name));
 
 describe('observe', () => {
+    it('keeps connected control identity across renames but not replacement or reload', async () => {
+        await open('/completion-list', async (page) => {
+            const original = named(await observe(page), 'button', 'Save entry')[0]!;
+            expect(original.connectedRef).toBeDefined();
+            await page.getByRole('button', { name: 'Save entry', exact: true }).click();
+            const renamed = named(await observe(page), 'button', 'Saved')[0]!;
+            expect(renamed.connectedRef).toBe(original.connectedRef);
+            await page.locator('#save').evaluate(element => element.replaceWith(element.cloneNode(true)));
+            const replaced = named(await observe(page), 'button', 'Saved')[0]!;
+            expect(replaced.connectedRef).not.toBe(original.connectedRef);
+            await page.reload();
+            const reloaded = named(await observe(page), 'button', 'Save entry')[0]!;
+            expect(reloaded.connectedRef).not.toBe(original.connectedRef);
+        });
+    });
+
     it('labels generically named switches with their visible row text', async () => {
         const { observation } = await open('/settings');
         const switches = named(observation, 'switch', 'Toggle setting');

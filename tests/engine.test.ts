@@ -80,6 +80,26 @@ it('fresh reviews an already delivered UI activation without requiring a declare
     expect(result.attempts[0]?.steps[0]?.actions).toHaveLength(3);
 });
 
+it('fresh keeps an authorized pending control when helper repeats a renamed delivered control', async () => {
+    const spec: TestSpec<void> = { id: 'fresh-helper-renamed-control', title: 'Save and open a list', risk: 'A renamed delivered button is mistaken for the pending view control', start: '/completion-list', steps: () => [act('Save the entry, then open the Saved entries view'), verify('requested view opened', ({ page }) => page.locator('#tab').getAttribute('aria-pressed').then(value => value === 'true'), { timeoutMs: 1 })] };
+    const policy = (view: View) => view.proposal ? { onTarget: view.proposal.element?.includes('Saved entries') ? 0.99 : 0.01 } : view.history.some(entry => entry.element === 'button "Saved"') ? { done: 0.99, needed: 0, onTarget: 0.99 } : { ...savedViewPolicy(view), delivered: 0.01 };
+    const result = (await suite([spec], { policy, helper: view => view.control ? { activation: 'finished', reason: 'History appears to show the requested view activation' } : { outcome: 'act', tool: 'click', element: view.elements.find(element => element.name === 'Saved')?.i ?? null, value_key: null, text: null, reason: 'The renamed button appears to open the saved view' } }).run).results[0]!;
+    expect(result.status, result.summary).toBe('passed');
+    expect(result.attempts[0]?.steps[0]?.actions?.map(action => action.element)).toEqual(['button "Save entry"', 'button "Saved entries (1)"']);
+});
+
+it('fresh preserves an authorized repeat before a different pending control', async () => {
+    const spec: TestSpec<void> = { id: 'fresh-helper-requested-repeat', title: 'Activate twice then open a list', risk: 'A different pending control cancels an explicitly requested repeat', start: '/completion-list', steps: () => [act('Click Save entry twice, then open the Saved entries view'), verify('requested view opened', ({ page }) => page.locator('#tab').getAttribute('aria-pressed').then(value => value === 'true'), { timeoutMs: 1 })] };
+    const policy = (view: View) => {
+        if (view.proposal) { return { onTarget: 0.99 }; }
+        if (view.history.some(entry => entry.element === 'button "Saved"') && !view.history.some(entry => entry.element?.includes('Saved entries (1)'))) { return { done: 0.1, tool: 'click', target: (element: ViewElement) => element.name === 'Saved entries (1)' }; }
+        return { ...savedViewPolicy(view), delivered: 0.01 };
+    };
+    const result = (await suite([spec], { policy, helper: view => ({ outcome: 'act', tool: 'click', element: view.elements.find(element => element.name === 'Saved')?.i ?? null, value_key: null, text: null, reason: 'The instruction requires a second activation before opening the list' }) }).run).results[0]!;
+    expect(result.status, result.summary).toBe('passed');
+    expect(result.attempts[0]?.steps[0]?.actions?.map(action => action.element)).toEqual(['button "Save entry"', 'button "Saved"', 'button "Saved entries (1)"']);
+});
+
 it.each([0.29, 0.89])('fresh rejects an unrequested commit when a finished stage still proposes activation (%s)', async (done) => {
     const spec: TestSpec<void> = { id: `fresh-competing-commit-${Math.round(done * 100)}`, title: 'Edit a draft', risk: 'An activation overrides a completed edit stage', start: '/fresh-edit', data: { alias: 'Pending alias', notes: 'Opening passage\n\nFinal passage' }, steps: () => [act('Change Alias to {alias} and Notes to {notes}'), verify('draft remains uncommitted', ({ page }) => page.locator('#commits').textContent().then(text => text === '0'), { timeoutMs: 1 })] };
     const policy = (view: View) => view.history.some(entry => entry.value === 'notes') ? { done, achieved: done < 0.5 ? 0.2 : 0.79, remaining: 0.51, needed: 0.59, tool: 'click', target: (element: ViewElement) => element.name === 'Commit entry', delivered: 0.99 } : freshEditPolicy(view);

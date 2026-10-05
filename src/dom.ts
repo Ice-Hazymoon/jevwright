@@ -40,6 +40,7 @@ export function trackRoots() {
 }
 
 export interface DomSurface {
+    documentId: string;
     nodes: AriaNode[];
     details: Array<{ transient?: true; box: NonNullable<AriaNode['box']>; content?: string; visibleName?: string; selection?: string; formatting?: import('./observe.ts').TextFormatting[]; dropTarget?: boolean; near?: string; value?: string; inputType?: string; autocomplete?: string; nativeSelect?: boolean; context?: string; draggable?: boolean; scroll?: { top: number; height: number; viewport: number } }>;
     text: string;
@@ -54,6 +55,8 @@ export interface DomSurface {
 export async function readSurface(page: Page | Frame, scope?: ElementHandle<Element>, instruction = '', legacyEditors = false): Promise<DomSurface> {
     const surface = await page.evaluate(({ scope, instruction, legacyEditors }) => {
         const roots = Reflect.get(window, '__jevwrightRoots') as WeakMap<Element, ShadowRoot> | undefined;
+        const documentId = (Reflect.get(window, '__jevwrightDocumentId') as string | undefined) ?? crypto.getRandomValues(new Uint32Array(4)).join('-');
+        Reflect.set(window, '__jevwrightDocumentId', documentId);
         const refs = new Map<string, Element>();
         const ids = (Reflect.get(window, '__jevwrightIds') as WeakMap<Element, string> | undefined) ?? new WeakMap<Element, string>();
         Reflect.set(window, '__jevwrightIds', ids);
@@ -322,7 +325,7 @@ export async function readSurface(page: Page | Frame, scope?: ElementHandle<Elem
         }
         // Main content gets the bounded observation budget before navigation and surrounding chrome.
         const shown = [...mainText, ...otherText].join(' ').replace(/\s+/g, ' ').trim();
-        return { nodes, details, transientTexts, text: shown, ...(dialog ? { dialog: { role: dialog.getAttribute('role') ?? 'dialog', name: dialog.getAttribute('aria-label') ?? text(dialog.querySelector('h1,h2,h3,[role=heading]') ?? dialog), children: [...nodes, shown] } } : {}), busy: false, scrollable, pageScroll: { top: document.scrollingElement?.scrollTop ?? 0, height: document.scrollingElement?.scrollHeight ?? innerHeight, viewport: innerHeight } };
+        return { documentId, nodes, details, transientTexts, text: shown, ...(dialog ? { dialog: { role: dialog.getAttribute('role') ?? 'dialog', name: dialog.getAttribute('aria-label') ?? text(dialog.querySelector('h1,h2,h3,[role=heading]') ?? dialog), children: [...nodes, shown] } } : {}), busy: false, scrollable, pageScroll: { top: document.scrollingElement?.scrollTop ?? 0, height: document.scrollingElement?.scrollHeight ?? innerHeight, viewport: innerHeight } };
     }, { scope, instruction, legacyEditors });
     surface.busy = await readBusy(page);
     return surface;
