@@ -57,6 +57,7 @@ export interface PageElement {
     selection?: string;
     /** UTF-16 ranges in the exact field value, measured from computed text styles. */
     formatting?: TextFormatting[];
+    transient?: true;
     dropTarget?: boolean;
     draggable?: boolean;
     scroll?: { top: number; height: number; viewport: number };
@@ -71,6 +72,7 @@ export interface Observation {
     dialog?: string;
     /** Live status, alert and toast text. */
     notices: string[];
+    transientTexts?: string[];
     headings: string[];
     /** Visible main-content text in reading order, bounded. */
     text: string;
@@ -100,6 +102,8 @@ const SECRET = /password|passcode|secret|token|api[\s_-]?key|otp|verification co
 export const LIMITS = { elements: 220, text: 4000, notice: 300, near: 80 };
 
 export interface ObserveOptions {
+    /** Old end anchors can name inherited editable paragraphs; actions still use the complete editor. */
+    legacyEnd?: boolean;
     instruction?: string;
     redact?: Redactor;
     viewport?: { width: number; height: number };
@@ -112,7 +116,7 @@ export async function observe(page: Page, options: ObserveOptions = {}): Promise
         inertBoxes(page),
     ]);
     const viewport = options.viewport ?? page.viewportSize() ?? { width: 1280, height: 900 };
-    const surface = await readSurface(page, undefined, options.instruction);
+    const surface = await readSurface(page, undefined, options.instruction, options.legacyEnd);
     const roots = normalize(tree);
     const boxes: Box[] = [];
     collect(roots, node => { if (node.box && isElement(node)) { boxes.push(node.box); } return false; }, []);
@@ -145,8 +149,9 @@ export async function observe(page: Page, options: ObserveOptions = {}): Promise
             }
             continue;
         }
+        if (detail.transient) { element.transient = true; }
         if (detail.context && element.ref?.startsWith('dom:')) { element.context = detail.context; }
-        if (detail.visibleName && element.name && !detail.visibleName.includes('••••') && !element.name.toLowerCase().includes(detail.visibleName.toLowerCase())) {
+        if (!options.legacyEnd && detail.visibleName && element.name && !detail.visibleName.includes('••••') && !element.name.toLowerCase().includes(detail.visibleName.toLowerCase())) {
             element.ariaName = element.name;
             element.name = clipProtected(detail.visibleName, 160, options.redact);
         }
@@ -162,6 +167,7 @@ export async function observe(page: Page, options: ObserveOptions = {}): Promise
         if (detail.draggable) { element.draggable = true; }
         if (detail.scroll) { element.scroll = detail.scroll; }
     }
+    result.transientTexts = surface.transientTexts?.map(text => clipProtected(text, LIMITS.text, options.redact));
     result.busy = surface.busy;
     result.scrollable = surface.scrollable;
     result.canGoBack = await canGoBack(page).catch(() => false);

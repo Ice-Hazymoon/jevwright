@@ -126,6 +126,17 @@ describe('integrity regression paths', () => {
         const drift = await suite([{ ...spec, ready: async ({ page }) => { await page.getByLabel('Nickname').fill('Wrong'); } }], { recordingsDir, mode: 'replay' }).run;
         expect(drift.results[0]?.status).toBe('failed');
     });
+    it('records every field in a compound factual check', async () => {
+        const recordingsDir = join(root, 'compound-check-evidence');
+        const spec = { ...base, id: 'compound-check', ready: async ({ page }: { page: import('playwright').Page }) => { await page.goto(app.origin + '/profile'); }, steps: () => [check('The Nickname field shows "Ada" and the Bio field shows "Notes"')] };
+        const prepared = { ...spec, ready: async ({ page }: { page: import('playwright').Page }) => { await spec.ready({ page }); await page.getByLabel('Nickname').fill('Ada'); await page.getByLabel('Bio').fill('Notes'); } };
+        const policy = () => ({ holds: 0.99, support: 'supports' as const, region: 'open' as const });
+        expect((await suite([prepared], { recordingsDir, policy }).run).totals.passed).toBe(1);
+        const recording = JSON.parse(await readFile(join(recordingsDir, spec.id + '.json'), 'utf8'));
+        expect(recording.steps[0].checkEvidence.map((entry: { target?: { name: string } }) => entry.target?.name)).toEqual(['Nickname', 'Bio']);
+        const drift = { ...prepared, ready: async ({ page }: { page: import('playwright').Page }) => { await prepared.ready({ page }); await page.getByLabel('Bio').fill('Wrong'); } };
+        expect((await suite([drift], { recordingsDir, mode: 'replay' }).run).results[0]?.status).toBe('failed');
+    });
     it('keeps check evidence in its recorded region', async () => {
         const recordingsDir = join(root, 'integrity-evidence-region');
         const spec = { ...base, id: 'region-bound-check', start: '/integrity-region', ready: undefined, steps: () => [check('The Draft field in Draft area shows "Original"')] };
@@ -153,6 +164,66 @@ describe('integrity regression paths', () => {
         const result = await suite([spec], { recordingsDir, mode: 'replay' }).run;
         expect(result.results[0]?.status).toBe('passed');
         expect(result.results[0]?.attempts[0]?.steps[1]?.actions?.[0]?.element).toBe('button "Details"');
+    });
+    it('lets declared request evidence retain legacy precedence over cached end anchors', async () => {
+        const recordingsDir = join(root, 'legacy-request-precedence');
+        const spec = { ...base, steps: () => [act('Save draft', { expect: { write: { method: 'POST', path: '/api/integrity', status: 500 } }, expectError: true })], start: '/integrity?bug=500' };
+        expect((await suite([spec], { recordingsDir, policy }).run).totals.passed).toBe(1);
+        const path = join(recordingsDir, base.id + '.json');
+        const recording = JSON.parse(await readFile(path, 'utf8'));
+        recording.steps[0].end = { appeared: [{ kind: 'heading', text: 'Old cached heading' }] };
+        await writeFile(path, JSON.stringify(recording));
+        expect((await suite([spec], { recordingsDir, mode: 'replay' }).run).totals.passed).toBe(1);
+    });
+    it('reports legacy end drift while allowing later code checks to judge it', async () => {
+        const recordingsDir = join(root, 'legacy-replay-drift');
+        const spec = { ...base, steps: () => [act('Save draft'), verify('receipt visible', ({ page }) => page.getByRole('heading', { name: 'Draft stored', exact: true }).isVisible())] };
+        expect((await suite([spec], { recordingsDir, policy }).run).totals.passed).toBe(1);
+        const path = join(recordingsDir, base.id + '.json');
+        const recording = JSON.parse(await readFile(path, 'utf8'));
+        recording.steps[0].end = { appeared: [{ kind: 'heading', text: 'Old cached heading' }] };
+        await writeFile(path, JSON.stringify(recording));
+        const result = await suite([spec], { recordingsDir, mode: 'replay' }).run;
+        expect(result.totals.passed).toBe(1);
+        expect(result.results[0]?.attempts[0]?.steps[0]?.endMismatch).toBe(true);
+    });
+    it('reuses an unnumbered legacy recipe for repeated instructions after reload', async () => {
+        const recordingsDir = join(root, 'legacy-occurrences');
+        const spec = { ...base, id: 'legacy-repeated', steps: () => [act('Save draft'), reload(), act('Save draft')] };
+        expect((await suite([spec], { recordingsDir, policy }).run).totals.passed).toBe(1);
+        const path = join(recordingsDir, spec.id + '.json');
+        const recording = JSON.parse(await readFile(path, 'utf8'));
+        for (const entry of recording.steps) { entry.key = recording.steps[0].key; delete entry.occurrence; delete entry.end.strict; }
+        await writeFile(path, JSON.stringify(recording));
+        expect((await suite([spec], { recordingsDir, mode: 'replay' }).run).totals.passed).toBe(1);
+    });
+    it.each(['info', 'warning', 'status'])('ignores informational or transient replay notices: %s', async bug => {
+        const recordingsDir = join(root, 'notice-' + bug);
+        const spec = { ...base, steps: () => [act('Save draft')] };
+        expect((await suite([spec], { recordingsDir, policy }).run).totals.passed).toBe(1);
+        expect((await suite([{ ...spec, start: '/integrity?bug=' + bug }], { recordingsDir, mode: 'replay' }).run).totals.passed).toBe(1);
+    });
+    it('does not call an existing notice new when its error role changes', async () => {
+        const recordingsDir = join(root, 'existing-notice');
+        const spec = { ...base, steps: () => [act('Save draft')] };
+        expect((await suite([spec], { recordingsDir, policy }).run).totals.passed).toBe(1);
+        expect((await suite([{ ...spec, start: '/integrity?bug=existing-notice' }], { recordingsDir, mode: 'replay' }).run).totals.passed).toBe(1);
+    });
+    it('accepts an error already visible at the recorded end of this step', async () => {
+        const recordingsDir = join(root, 'recorded-error');
+        const spec = { ...base, start: '/integrity?bug=alert', steps: () => [act('Save draft')] };
+        expect((await suite([spec], { recordingsDir, policy }).run).totals.passed).toBe(1);
+        expect((await suite([spec], { recordingsDir, mode: 'replay' }).run).totals.passed).toBe(1);
+    });
+    it('does not apply new error checks to unmarked legacy recordings', async () => {
+        const recordingsDir = join(root, 'legacy-errors');
+        const spec = { ...base, steps: () => [act('Save draft')] };
+        expect((await suite([spec], { recordingsDir, policy }).run).totals.passed).toBe(1);
+        const path = join(recordingsDir, base.id + '.json');
+        const recording = JSON.parse(await readFile(path, 'utf8'));
+        delete recording.steps[0].end.strict;
+        await writeFile(path, JSON.stringify(recording));
+        expect((await suite([{ ...spec, start: '/integrity?bug=alert' }], { recordingsDir, mode: 'replay' }).run).totals.passed).toBe(1);
     });
     it('rejects a result that was already present before replay', async () => {
         const recordingsDir = join(root, 'integrity-preexisting');
@@ -887,7 +958,7 @@ describe('recorded effects and fresh retries', () => {
         expect((await suite([spec], { recordingsDir }).run).totals.passed).toBe(1);
         const path = join(recordingsDir, 'profile-save.json');
         const recording = JSON.parse(await readFile(path, 'utf8'));
-        recording.steps[1].end = { appeared: [{ kind: 'heading', text: 'Recorded completion' }] };
+        recording.steps[1].end = { strict: true, appeared: [{ kind: 'heading', text: 'Recorded completion' }] };
         await writeFile(path, JSON.stringify(recording));
         const before = await readFile(path, 'utf8');
         const summary = await suite([spec], { recordingsDir, policy: view => view.step === 'Save the profile' ? { done: 0.99, tool: 'none' } : fixturePolicy(view) }).run;
@@ -1124,7 +1195,7 @@ describe('reviewed replay boundaries', () => {
         const path = join(recordingsDir, 'profile-save.json');
         const recording = JSON.parse(await readFile(path, 'utf8'));
         recording.steps = recording.steps.slice(0, 1);
-        recording.steps[0].end = { appeared: [{ kind: 'heading', text: 'Missing effect' }] };
+        recording.steps[0].end = { strict: true, appeared: [{ kind: 'heading', text: 'Missing effect' }] };
         await writeFile(path, JSON.stringify(recording));
         const summary = await suite([spec], { recordingsDir, mode: 'replay' }).run;
         expect(summary.results[0]?.attempts[0]?.steps[0]?.endMismatch).toBe(true);

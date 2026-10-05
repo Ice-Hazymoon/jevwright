@@ -41,8 +41,9 @@ export function trackRoots() {
 
 export interface DomSurface {
     nodes: AriaNode[];
-    details: Array<{ box: NonNullable<AriaNode['box']>; content?: string; visibleName?: string; selection?: string; formatting?: import('./observe.ts').TextFormatting[]; dropTarget?: boolean; near?: string; value?: string; inputType?: string; autocomplete?: string; nativeSelect?: boolean; context?: string; draggable?: boolean; scroll?: { top: number; height: number; viewport: number } }>;
+    details: Array<{ transient?: true; box: NonNullable<AriaNode['box']>; content?: string; visibleName?: string; selection?: string; formatting?: import('./observe.ts').TextFormatting[]; dropTarget?: boolean; near?: string; value?: string; inputType?: string; autocomplete?: string; nativeSelect?: boolean; context?: string; draggable?: boolean; scroll?: { top: number; height: number; viewport: number } }>;
     text: string;
+    transientTexts?: string[];
     dialog?: AriaNode;
     busy: boolean;
     scrollable: boolean;
@@ -50,8 +51,8 @@ export interface DomSurface {
 }
 
 /** DOM complements the accessibility tree; leaf text also supplies hover, context-menu and scroll targets. */
-export async function readSurface(page: Page | Frame, scope?: ElementHandle<Element>, instruction = ''): Promise<DomSurface> {
-    const surface = await page.evaluate(({ scope, instruction }) => {
+export async function readSurface(page: Page | Frame, scope?: ElementHandle<Element>, instruction = '', legacyEditors = false): Promise<DomSurface> {
+    const surface = await page.evaluate(({ scope, instruction, legacyEditors }) => {
         const roots = Reflect.get(window, '__jevwrightRoots') as WeakMap<Element, ShadowRoot> | undefined;
         const refs = new Map<string, Element>();
         const ids = (Reflect.get(window, '__jevwrightIds') as WeakMap<Element, string> | undefined) ?? new WeakMap<Element, string>();
@@ -195,6 +196,15 @@ export async function readSurface(page: Page | Frame, scope?: ElementHandle<Elem
                 || hoverSelectors.some(selector => { try { return element.matches(selector); } catch { return false; } }) || Boolean(parent && pointerSignal(parent)));
             pointerSignals.set(element, value); return value;
         };
+        const liveSelector = 'output,[aria-live]:not([aria-live=off]),[role=status],[role=log],[role=marquee],[role=timer],[data-slot=toaster],[data-slot=toast],.Toastify,[data-sonner-toaster],[data-sonner-toast],[data-radix-toast-viewport],[data-radix-toast-root],[class*=toaster i],[class*=toast-container i],[id*=toaster i],[id*=toast-container i]';
+        const live = new Map<Element, boolean>();
+        const transient = (element: Element): boolean => {
+            if (live.has(element)) { return live.get(element)!; }
+            const parent = parentOf(element);
+            const value = element.matches(liveSelector) || Boolean(parent && transient(parent));
+            live.set(element, value); return value;
+        };
+        const transientTexts = all.filter(element => transient(element) && visible(element)).map(text).filter(Boolean);
         const textCandidates: AriaNode[] = [];
         const nodes: AriaNode[] = [];
         const details: DomSurface['details'] = [];
@@ -203,13 +213,13 @@ export async function readSurface(page: Page | Frame, scope?: ElementHandle<Elem
         for (const element of all) {
             if (!visible(element) || inertTree(element) || !inScope(element)) { continue; }
             // Inline formatting is part of its editor, not another independently editable control.
-            if (element instanceof HTMLElement && element.isContentEditable && element.parentElement?.isContentEditable && !element.matches('button,input,textarea,select,[role],[tabindex]')) { continue; }
+            if (!legacyEditors && element instanceof HTMLElement && element.isContentEditable && element.parentElement?.isContentEditable && !element.matches('button,input,textarea,select,[role],[tabindex]')) { continue; }
             const b = boxOf(element);
             const css = styleOf(element);
             const box = { x: b.x, y: b.y, width: b.width, height: b.height };
             const rendered = text(element);
             const field = element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement;
-            const editable = element instanceof HTMLElement && element.isContentEditable && !element.parentElement?.isContentEditable;
+            const editable = element instanceof HTMLElement && element.isContentEditable && (legacyEditors || !element.parentElement?.isContentEditable);
             const select = element instanceof HTMLSelectElement;
             const nativeRole = select ? 'combobox' : field ? element instanceof HTMLInputElement && element.type === 'file' ? 'button' : element instanceof HTMLInputElement && ['checkbox', 'radio'].includes(element.type) ? element.type : 'textbox' : editable ? 'textbox' : element.matches('button, summary') ? 'button' : element.matches('a[href]') ? 'link' : undefined;
             const group = groupName(element);
@@ -252,7 +262,7 @@ export async function readSurface(page: Page | Frame, scope?: ElementHandle<Elem
                 const name = groupName(parent);
                 if (name) { context = `group "${name}"`; break; }
             }
-            if (nativeRole || label || group || actionRoles.has(role) || scrolling || draggable || dropTarget) { details.push({ box, ...(visibleName ? { visibleName } : {}), ...(selected !== undefined ? { selection: selected } : {}), ...(dropTarget ? { dropTarget: true } : {}), ...(context ? { context } : {}), ...(label && rendered && !field && !select && rendered !== label ? { content: rendered } : {}), ...(field && near && near !== name ? { near } : {}), ...(element instanceof HTMLInputElement ? { inputType: element.type, autocomplete: element.autocomplete } : {}), ...(editable ? { value, ...(element.textContent === value ? { formatting } : {}) } : {}), ...(select ? { nativeSelect: true } : {}), ...(draggable ? { draggable: true } : {}), ...(scrolling ? { scroll: { top: element.scrollTop, height: element.scrollHeight, viewport: element.clientHeight } } : {}) }); }
+            if (transient(element) || nativeRole || label || group || actionRoles.has(role) || scrolling || draggable || dropTarget) { details.push({ box, ...(transient(element) ? { transient: true as const } : {}), ...(visibleName ? { visibleName } : {}), ...(selected !== undefined ? { selection: selected } : {}), ...(dropTarget ? { dropTarget: true } : {}), ...(context ? { context } : {}), ...(label && rendered && !field && !select && rendered !== label ? { content: rendered } : {}), ...(field && near && near !== name ? { near } : {}), ...(element instanceof HTMLInputElement ? { inputType: element.type, autocomplete: element.autocomplete } : {}), ...(editable ? { value, ...(element.textContent === value ? { formatting } : {}) } : {}), ...(select ? { nativeSelect: true } : {}), ...(draggable ? { draggable: true } : {}), ...(scrolling ? { scroll: { top: element.scrollTop, height: element.scrollHeight, viewport: element.clientHeight } } : {}) }); }
             scrollable ||= scrolling;
             const clickable = css.cursor === 'pointer' && rendered && rendered.length <= 160 && !interactiveParent(element);
             const leaf = rendered && rendered.length <= 160 && ![...element.children].some(child => text(child)) && !interactiveParent(element) && (pointerSignal(element) || instruction.toLowerCase().includes(rendered.toLowerCase()));
@@ -294,8 +304,8 @@ export async function readSurface(page: Page | Frame, scope?: ElementHandle<Elem
         }
         // Main content gets the bounded observation budget before navigation and surrounding chrome.
         const shown = [...mainText, ...otherText].join(' ').replace(/\s+/g, ' ').trim();
-        return { nodes, details, text: shown, ...(dialog ? { dialog: { role: dialog.getAttribute('role') ?? 'dialog', name: dialog.getAttribute('aria-label') ?? text(dialog.querySelector('h1,h2,h3,[role=heading]') ?? dialog), children: [...nodes, shown] } } : {}), busy: false, scrollable, pageScroll: { top: document.scrollingElement?.scrollTop ?? 0, height: document.scrollingElement?.scrollHeight ?? innerHeight, viewport: innerHeight } };
-    }, { scope, instruction });
+        return { nodes, details, transientTexts, text: shown, ...(dialog ? { dialog: { role: dialog.getAttribute('role') ?? 'dialog', name: dialog.getAttribute('aria-label') ?? text(dialog.querySelector('h1,h2,h3,[role=heading]') ?? dialog), children: [...nodes, shown] } } : {}), busy: false, scrollable, pageScroll: { top: document.scrollingElement?.scrollTop ?? 0, height: document.scrollingElement?.scrollHeight ?? innerHeight, viewport: innerHeight } };
+    }, { scope, instruction, legacyEditors });
     surface.busy = await readBusy(page);
     return surface;
 }

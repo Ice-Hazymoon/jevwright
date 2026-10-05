@@ -149,14 +149,14 @@ export async function runAct(input: ActInput): Promise<ActResult> {
         const recordedEnd = result.endMismatch
             ? input.recorded?.end
             : result.status === 'done' && start.observation
-                ? result.source === 'replay' && input.recorded?.end !== undefined ? input.recorded.end : recordEnd(start.observation, await observeEnd(input), recording, input.redact, input.values, input.baseURL)
+                ? result.source === 'replay' && input.recorded?.end !== undefined ? input.recorded.end : recordEnd(start.observation, await observeEnd(input), recording, input.redact, input.values, input.baseURL, await replayErrors(input.page))
                 : undefined;
         return { ...result, actions, rounds, recording, end: { ...end, ...(recordedEnd?.effect ? { effect: recordedEnd.effect } : {}), ...(result.status === 'done' ? { recorded: recordedEnd !== undefined && Boolean(recordedEnd.path || recordedEnd.route || recordedEnd.appeared?.length || recordedEnd.gone?.length || recordedEnd.values?.length) } : {}) }, ...(recordedEnd !== undefined ? { recordedEnd } : {}), ...(replayMiss ? { replayMiss } : {}) };
     };
     // An empty recorded path is valid: the step was already achieved when it was recorded.
     if (input.recorded) {
         start.observation = await observeEnd(input);
-        start.errors = await replayErrors(input.page);
+        if (input.recorded.end?.strict) { start.errors = await replayErrors(input.page); }
         const replay = await replaySteps(input, input.recorded.actions, actions, recording, start);
         unique = replay.unique === true;
         if (replay.failure) {
@@ -170,7 +170,7 @@ export async function runAct(input: ActInput): Promise<ActResult> {
             if (!expectation.ok) {
                 replayMiss = `expectation after replay: ${expectation.reason}`;
                 if (!input.models) { return finish({ status: 'failed', source: 'replay', failure: 'expectation', reason: replayMiss }); }
-            } else if (input.recorded.end === undefined) {
+            } else if (input.recorded.end === undefined || (!input.recorded.end.strict && (input.expect?.write || input.expect?.url || input.expect?.download))) {
                 return finish({ status: 'done', source: 'replay' });
             } else {
                 end = await awaitEnd(input, input.recorded.end, start.observation, start.errors);
@@ -178,7 +178,7 @@ export async function runAct(input: ActInput): Promise<ActResult> {
                 if (end.failure) { return finish({ status: 'failed', source: 'replay', failure: end.failure, reason: end.missing?.join(', ') }); }
                 mismatch = true;
                 replayMiss = `recorded end state missing: ${end.missing?.join(', ')}`;
-                if (!input.models) { return finish({ status: 'failed', source: 'replay', failure: 'end-mismatch', reason: replayMiss, endMismatch: true }); }
+                if (!input.models) { return finish(input.recorded.end.strict ? { status: 'failed', source: 'replay', failure: 'end-mismatch', reason: replayMiss, endMismatch: true } : { status: 'done', source: 'replay', endMismatch: true }); }
                 input.events.push(`${replayMiss}; current route ${input.redact?.text(input.page.url()) ?? input.page.url()}${end.missing?.every(anchor => anchor.startsWith('route ')) ? '; all other recorded end conditions matched' : ''}`);
             }
         } else { replayMiss = replay.reason; }
@@ -214,19 +214,19 @@ async function awaitEnd(input: ActInput, end: import('./recording.ts').StepEnd, 
     const deadline = performance.now() + 5000;
     for (;;) {
         input.signal.throwIfAborted();
-        if (!input.expectError) {
-            const errors = (await replayErrors(input.page)).filter(error => !priorErrors?.includes(error));
+        if (end.strict && !input.expectError) {
+            const errors = await newReplayErrors(input.page, end, start, priorErrors);
             if (errors.length) { return { checked: true, matched: false, failure: 'error-shown', missing: ['new error during replay: ' + (input.redact?.text(errors.join(' | ')) ?? errors.join(' | '))] }; }
         }
-        const result = endMatches(end, await observeEnd(input), start, input.values, input.baseURL);
+        const result = endMatches(end, await observeEnd(input, !end.strict), start, input.values, input.baseURL);
         if (result.matched || performance.now() >= deadline) { return result; }
         await input.page.waitForTimeout(Math.min(500, Math.max(0, deadline - performance.now())));
     }
 }
 
 /** Full field values are deterministic evidence; clipped model observations cannot prove the tail of an input. */
-async function observeEnd(input: ActInput): Promise<Observation> {
-    const observation = await observe(input.page, { redact: input.redact, instruction: input.instruction });
+async function observeEnd(input: ActInput, legacyEnd = false): Promise<Observation> {
+    const observation = await observe(input.page, { redact: input.redact, instruction: input.instruction, legacyEnd });
     for (const element of observation.elements.filter(element => element.ref && ['textbox', 'searchbox', 'spinbutton'].includes(element.role))) {
         const locator = domLocator(input.page, element.ref!);
         element.value = await locator.inputValue({ timeout: 500 }).catch(() => locator.innerText({ timeout: 500 }).catch(() => element.value));
@@ -286,17 +286,27 @@ async function replaySteps(input: ActInput, recorded: RecordedAction[], actions:
             actions.push({ tool: action.tool, element: element ? describeElement(element) : undefined, source: 'replay', ok: false, error: actionError(error, input.redact), durationMs: Math.round(performance.now() - started) });
             return { ok: false, reason: `${action.tool} failed: ${actionError(error, input.redact)}` };
         }
-        if (!input.expectError) {
-            const errors = (await replayErrors(input.page)).filter(error => !start.errors?.includes(error));
+        if (input.recorded?.end?.strict && !input.expectError) {
+            const errors = await newReplayErrors(input.page, input.recorded!.end!, start.observation, start.errors);
             if (errors.length) { return { ok: false, failure: 'error-shown', reason: `new error during replay: ${input.redact?.text(errors.join(' | ')) ?? errors.join(' | ')}` }; }
         }
     }
     await settle(input.page, input.monitor);
-    if (!input.expectError) {
-        const errors = (await replayErrors(input.page)).filter(error => !start.errors?.includes(error));
+    if (input.recorded?.end?.strict && !input.expectError) {
+        const errors = await newReplayErrors(input.page, input.recorded!.end!, start.observation, start.errors);
         if (errors.length) { return { ok: false, failure: 'error-shown', reason: `new error during replay: ${input.redact?.text(errors.join(' | ')) ?? errors.join(' | ')}` }; }
     }
     return { ok: true, unique };
+}
+
+/** A changed role cannot make unchanged notice text a newly introduced error. */
+async function newReplayErrors(page: Page, end: import('./recording.ts').StepEnd, start?: Observation, priorErrors?: string[]): Promise<string[]> {
+    const notices = [...start?.notices ?? [], ...end.notices ?? []].map(text => text.trim().replace(/\s+/g, ' '));
+    return (await replayErrors(page)).filter(error => {
+        if (priorErrors?.includes(error) || end.errors?.includes(error)) { return false; }
+        const surface = JSON.parse(error) as { text: string; related: string[] };
+        return ![surface.text, ...surface.related].filter(Boolean).some(text => notices.includes(text.trim().replace(/\s+/g, ' ')));
+    });
 }
 
 /** Read error surfaces before and after replay, so a stale validation message does not fail a later step. */
@@ -316,8 +326,17 @@ async function replayErrors(page: Page): Promise<string[]> {
                 for (const element of root.querySelectorAll('*')) {
                     const shadow = element.shadowRoot ?? captured?.get(element);
                     if (shadow) { walk(shadow); }
-                    if (!element.matches('[role=alert], [aria-invalid=true], .error, .field-error, .validation-error, [data-error]') || element.closest('[aria-hidden=true], [inert]') || !element.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) { continue; }
-                    errors.push(`${element.getAttribute('role') ?? element.tagName}:${element.getAttribute('aria-label') ?? ''}:${(element as HTMLElement).innerText ?? ''}:${element.getAttribute('aria-invalid') ?? ''}`);
+                    if (!element.matches('[role=alert], [role=alertdialog], [aria-invalid=true], .error, .field-error, .validation-error, [data-error], [data-state=error], [data-status=error], [data-type=error]') || element.closest('[aria-hidden=true], [inert]') || !element.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) { continue; }
+                    const text = ((element as HTMLElement).innerText ?? '').trim().replace(/\s+/g, ' ');
+                    const semantic = element.matches('[aria-invalid=true], .error, .field-error, .validation-error, [data-error], [data-state=error], [data-status=error], [data-type=error]')
+                        || /\b(?:error|failed|failure|rejected|invalid|forbidden|could not)\b/i.test(text);
+                    if (!semantic || element.matches('[data-state=warning], [data-type=warning], [data-status=warning], [data-type=info], [data-status=info]')) { continue; }
+                    const root = element.getRootNode() as Document | ShadowRoot;
+                    const related = element.getAttribute('aria-invalid') === 'true' ? ['aria-errormessage', 'aria-describedby'].flatMap(attribute => (element.getAttribute(attribute) ?? '').split(/\s+/).filter(Boolean)).flatMap(id => {
+                        const message = root.getElementById(id);
+                        return message && message.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }) ? [(message as HTMLElement).innerText ?? ''] : [];
+                    }) : [];
+                    errors.push(JSON.stringify({ role: element.getAttribute('role') ?? element.tagName, name: element.getAttribute('aria-label') ?? '', text, invalid: element.getAttribute('aria-invalid') ?? '', related }));
                 }
             };
             walk(document);

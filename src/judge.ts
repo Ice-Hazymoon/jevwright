@@ -2,9 +2,10 @@ import type { Models, Question } from './models.ts';
 import type { Observation } from './observe.ts';
 import type { CheckEvidence } from './recording.ts';
 import { z } from 'zod';
+import { normalizedPath } from './end-state.ts';
 import { pageState } from './act.ts';
 import { choiceOf, probabilityOf } from './models.ts';
-import { describeTarget, resolveTarget } from './recording.ts';
+import { describeTarget, resolveTarget, stable } from './recording.ts';
 
 export interface CheckVerdict {
     passed: boolean;
@@ -64,7 +65,7 @@ const FAIL = { support: 0.6 };
  * Trusted `reference` data turns an opinion into a comparison with ground truth.
  */
 export async function judgeClaim(models: Models, observation: Observation, claim: string, reference: unknown, signal: AbortSignal, priorActions: PriorActions = []): Promise<CheckVerdict> {
-    const candidates = checkEvidenceCandidates(observation);
+    const candidates = checkEvidenceOptions(observation, claim);
     const state = {
         claim,
         ...(reference !== undefined ? { reference } : {}),
@@ -84,14 +85,14 @@ export async function judgeClaim(models: Models, observation: Observation, claim
             },
         },
         region: { type: 'choice', instructions: REGION, criteria: { open: 'The relevant region is open and visible, regardless of its contents', closed: 'The relevant region is not open in the current view', unknown: 'The region or its visibility cannot be established' } },
-        evidence: { type: 'choice', instructions: 'Which quoted current-page evidence directly proves EVERY part of claim? Select none for absence, indirect summaries, uncertain evidence or if no single candidate is sufficient. This choice does not decide the verdict.', criteria: { none: 'No complete directly recheckable evidence', ...Object.fromEntries(candidates.map((candidate, i) => [String(i), JSON.stringify(candidate)])) } },
+        evidence: { type: 'choice', instructions: 'Which current-page evidence option directly proves EVERY part of claim? An option may combine several quotes or fields; every part must be covered. Select none for absence, indirect summaries or uncertain evidence. This choice does not decide the verdict.', criteria: { none: 'No complete directly recheckable evidence', ...Object.fromEntries(candidates.map((candidate, i) => [String(i), JSON.stringify(candidate.map(({ target, ...entry }) => ({ ...entry, ...(target ? { role: target.role } : {}) })))])) } },
     }, signal, 'check');
     const holds = probabilityOf(answers.holds);
     const support = choiceOf(answers.support);
     const region = choiceOf(answers.region);
     const selection = choiceOf(answers.evidence);
     const selected = selection && (selection.probabilities[selection.choice] ?? 0) >= 0.7 ? candidates[Number(selection.choice)] : undefined;
-    const verdict = { holds: Math.round(holds * 100) / 100, support: support?.choice ?? 'unknown', pSupport: Math.round((support?.probabilities[support.choice] ?? 0) * 100) / 100, region: (region?.choice ?? 'unknown') as CheckVerdict['region'], pRegion: Math.round((region?.probabilities[region.choice] ?? 0) * 100) / 100, ...(selected ? { evidence: [selected] } : {}) };
+    const verdict = { holds: Math.round(holds * 100) / 100, support: support?.choice ?? 'unknown', pSupport: Math.round((support?.probabilities[support.choice] ?? 0) * 100) / 100, region: (region?.choice ?? 'unknown') as CheckVerdict['region'], pRegion: Math.round((region?.probabilities[region.choice] ?? 0) * 100) / 100, ...(selected ? { evidence: selected } : {}) };
     if (holds >= PASS.holds && verdict.support === 'supports' && verdict.pSupport >= PASS.support) { return { passed: true, uncertain: false, ...verdict }; }
     if (verdict.support === 'contradicts' && verdict.pSupport >= FAIL.support) { return { passed: false, uncertain: false, ...verdict }; }
     if (verdict.support === 'not_shown' && verdict.pSupport >= FAIL.support && verdict.region === 'open' && verdict.pRegion >= PASS.holds) { return { passed: false, uncertain: false, ...verdict }; }
@@ -99,13 +100,36 @@ export async function judgeClaim(models: Models, observation: Observation, claim
 }
 
 export function checkEvidenceCandidates(observation: Observation): CheckEvidence[] {
-    const region = evidenceRegion(observation);
+    const region = evidenceRegion(observation, undefined, 1);
     return [
-        ...observation.elements.filter(element => element.name && !element.offscreen).map(element => ({ source: 'element' as const, text: element.name, region: evidenceRegion(observation, element), target: describeTarget(element, observation), ...(element.value !== undefined ? { value: element.value } : {}), ...(element.states ? { states: element.states.filter(state => state !== 'focused') } : {}), ...(element.formatting ? { formatting: element.formatting } : {}) })),
-        ...observation.notices.map(text => ({ source: 'notice' as const, text, region })),
-        ...observation.headings.map(text => ({ source: 'heading' as const, text, region })),
-        ...(observation.text ? [{ source: 'text' as const, text: observation.text, region }] : []),
+        ...observation.elements.filter(element => element.name && !element.offscreen).map(element => ({ regionVersion: 1 as const, source: 'element' as const, text: element.name, region: evidenceRegion(observation, element, 1), target: describeTarget(element, observation), ...(element.value !== undefined ? { value: element.value } : {}), ...(element.content ? { content: element.content } : {}), ...(element.states ? { states: element.states.filter(state => state !== 'focused') } : {}), ...(element.formatting ? { formatting: element.formatting } : {}) })),
+        ...observation.notices.map(text => ({ regionVersion: 1 as const, source: 'notice' as const, text, region })),
+        ...observation.headings.map(text => ({ regionVersion: 1 as const, source: 'heading' as const, text, region })),
+        ...(observation.text ? [{ regionVersion: 1 as const, source: 'text' as const, text: observation.text, region }] : []),
     ].filter(entry => replayableCheckEvidence([entry]));
+}
+
+/** Offer compound field proof and literal page quotes without requiring unrelated changing page text. */
+export function checkEvidenceOptions(observation: Observation, claim: string): CheckEvidence[][] {
+    const lower = claim.toLowerCase();
+    const candidates = checkEvidenceCandidates(observation);
+    const relevant = candidates.filter(entry => entry.source === 'element' && (lower.includes(entry.text.toLowerCase().replace(/\s*\*$/, '')) || (entry.value !== undefined && entry.value.length >= 3 && lower.includes(entry.value.toLowerCase()))));
+    const fields = relevant.filter(entry => entry.value !== undefined);
+    const quotes: CheckEvidence[] = [...claim.matchAll(/"([^"\n]+)"|“([^”\n]+)”/g)].flatMap(match => {
+        const text = match[1] ?? match[2]!;
+        return text.length >= 3 && observation.text.includes(text) && observation.text.indexOf(text) === observation.text.lastIndexOf(text)
+            ? [{ regionVersion: 1 as const, source: 'text' as const, text, region: evidenceRegion(observation, undefined, 1), match: 'contains' as const }] : [];
+    });
+    const combined = [...quotes, ...relevant.filter(entry => entry.source === 'element' && entry.value === undefined)];
+    const options = [
+        ...(fields.length > 1 && fields.length <= 6 ? [fields] : []),
+        ...(combined.length > 1 && combined.length <= 8 ? [combined] : []),
+        ...quotes.map(entry => [entry]),
+        ...relevant.slice(0, 16).map(entry => [entry]),
+        ...candidates.filter(entry => entry.source !== 'element').map(entry => [entry]),
+        ...candidates.filter(entry => entry.source === 'element' && !relevant.includes(entry)).slice(0, 12).map(entry => [entry]),
+    ];
+    return options.filter(replayableCheckEvidence);
 }
 
 /** A clipped quote or missing target cannot supply replay proof, even if an older recipe stored it. */
@@ -113,11 +137,14 @@ export function replayableCheckEvidence(evidence: CheckEvidence[]): boolean {
     return evidence.length > 0 && evidence.every(entry => Boolean(entry.text && entry.region)
         && (entry.source !== 'element' || entry.target?.name === entry.text)
         && !JSON.stringify(entry).includes('{secret}')
-        && [entry.text, entry.value, entry.target?.context, entry.target?.near].every(text => !text?.endsWith('…')));
+        && [entry.text, entry.value, entry.content, entry.target?.context, entry.target?.near].every(text => !text?.endsWith('…')));
 }
 
-function evidenceRegion(observation: Observation, element?: { context?: string; near?: string }): string {
-    return [observation.dialog ?? `page ${observation.url}`, element?.context, element?.near].filter(Boolean).join(' > ');
+function evidenceRegion(observation: Observation, element?: { context?: string; near?: string }, version?: 1): string {
+    const page = version ? new URL(observation.url, 'http://jevwright.invalid') : undefined;
+    page?.searchParams.sort();
+    const region = observation.dialog ?? `page ${page ? normalizedPath(page.href) + page.search + page.hash : observation.url}`;
+    return [region, element?.context, element?.near].filter(Boolean).map(text => version ? stable(text) : text).join(' > ');
 }
 
 /** Evidence stays bound to its visible region and exact field state, rather than any matching page substring. */
@@ -127,9 +154,9 @@ export function checkEvidenceMatches(evidence: CheckEvidence[], observation: Obs
         if (entry.source === 'element') {
             if (!entry.target) { return false; }
             const element = resolveTarget(entry.target, observation, true);
-            return !!element && entry.region === evidenceRegion(observation, element) && !element.offscreen && element.name === entry.text && (entry.value === undefined || element.value === entry.value) && (!entry.states || JSON.stringify(element.states?.filter(state => state !== 'focused') ?? []) === JSON.stringify(entry.states)) && (entry.formatting === undefined || JSON.stringify(element.formatting) === JSON.stringify(entry.formatting));
+            return !!element && entry.region === evidenceRegion(observation, element, entry.regionVersion) && !element.offscreen && element.name === entry.text && (entry.value === undefined || element.value === entry.value) && (entry.content === undefined || element.content === entry.content) && (!entry.states || JSON.stringify(element.states?.filter(state => state !== 'focused') ?? []) === JSON.stringify(entry.states)) && (entry.formatting === undefined || JSON.stringify(element.formatting) === JSON.stringify(entry.formatting));
         }
-        return entry.region === evidenceRegion(observation) && (entry.source === 'text' ? observation.text === entry.text : (entry.source === 'heading' ? observation.headings : observation.notices).includes(entry.text));
+        return entry.region === evidenceRegion(observation, undefined, entry.regionVersion) && (entry.source === 'text' ? entry.match === 'contains' ? observation.text.includes(entry.text) && observation.text.indexOf(entry.text) === observation.text.lastIndexOf(entry.text) : observation.text === entry.text : (entry.source === 'heading' ? observation.headings : observation.notices).includes(entry.text));
     });
 }
 

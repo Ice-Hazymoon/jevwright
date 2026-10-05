@@ -184,9 +184,12 @@ function answer(id: string, question: EvaluationQuestion, belief: Belief, view: 
     if (id === 'page_value') { chosen = options.find(key => question.criteria[key] === belief.pageValue); }
     if (id === 'support') { chosen = belief.support ?? 'not_shown'; }
     if (id === 'evidence') {
-        const quoted = (option: string) => { try { return JSON.parse(String(question.criteria[option])) as { text?: string; value?: string; source?: string }; } catch { return {}; } };
-        const field = options.find(option => { const entry = quoted(option); return entry.source === 'element' && entry.value !== undefined && view.claim?.includes(entry.text ?? '') && view.claim?.includes(entry.value); });
-        chosen = belief.support === 'supports' && (belief.holds ?? 0) >= 0.7 ? field ?? options.find(option => quoted(option).source === 'text') ?? 'none' : 'none';
+        const quoted = (option: string) => {
+            try { const entry = JSON.parse(String(question.criteria[option])); return (Array.isArray(entry) ? entry : [entry]) as Array<{ text?: string; value?: string; source?: string }>; } catch { return []; }
+        };
+        const fields = (option: string) => quoted(option).filter(entry => entry.source === 'element' && entry.value !== undefined && view.claim?.includes(entry.text ?? '') && view.claim?.includes(entry.value));
+        const field = options.toSorted((a, b) => fields(b).length - fields(a).length).find(option => fields(option).length);
+        chosen = belief.support === 'supports' && (belief.holds ?? 0) >= 0.7 ? field ?? options.find(option => quoted(option).some(entry => entry.source === 'text')) ?? 'none' : 'none';
     }
     if (id === 'region') { chosen = belief.region ?? 'unknown'; }
     return distribution(options, chosen && options.includes(chosen) ? chosen : undefined, id === 'support' ? belief.pSupport : id === 'target' ? belief.pTarget : undefined);

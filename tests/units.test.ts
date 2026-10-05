@@ -772,12 +772,67 @@ it('rebuilds JUnit through the report command and removes stale selection from r
     } finally { await rm(directory, { recursive: true, force: true }); }
 });
 
+describe('legacy end-state compatibility', () => {
+    it('keeps the half-anchor rule and ignores absentBefore for unmarked recordings', async () => {
+        const { endMatches } = await import('../src/end-state.ts');
+        const page: Observation = { url: '/draft', title: '', text: '', headings: ['Saved', 'Ready'], notices: [], elements: [], omitted: 0, signature: '' };
+        const appeared = ['Saved', 'Ready', 'Done', 'Complete'].map(text => ({ kind: 'heading' as const, text }));
+        expect(endMatches({ appeared, absentBefore: appeared }, page, page).matched).toBe(true);
+        expect(endMatches({ strict: true, appeared }, page).matched).toBe(false);
+    });
+    it('uses exact legacy gone descriptors rather than treating another row as the removed row', async () => {
+        const { endMatches } = await import('../src/end-state.ts');
+        const page: Observation = { url: '/draft', title: '', text: '', headings: [], notices: [], elements: [{ i: 0, ref: 'e1', role: 'button', name: 'Details', context: 'Row B' }], omitted: 0, signature: '' };
+        expect(endMatches({ gone: [{ role: 'button', name: 'Details', context: 'Row A', nth: 1 }] }, page).matched).toBe(true);
+    });
+    it('records count reductions when an element is not unique', async () => {
+        const { recordEnd, endMatches } = await import('../src/end-state.ts');
+        const before: Observation = { url: '/draft', title: '', text: '', headings: [], notices: [], elements: [0, 1].map(i => ({ i, ref: `e${i}`, role: 'button', name: 'Details' })), omitted: 0, signature: '' };
+        const after = { ...before, elements: before.elements.slice(0, 1) };
+        const end = recordEnd(before, after, [{ tool: 'click' }]);
+        expect(end.reduced).toMatchObject([{ before: 2, after: 1 }]);
+        expect(end.gone).toBeUndefined();
+        expect(endMatches(end, after, before).matched).toBe(true);
+        expect(endMatches(end, before, before).matched).toBe(false);
+    });
+    it('supplies legacy inherited editor paragraphs only for old end-state matching', async () => {
+        const context = await newTestContext(browser, { viewport: { width: 1280, height: 900 }, dialogs: 'accept' });
+        try {
+            const page = await context.newPage(); await page.goto(app.origin + '/compatibility-editor');
+            expect((await observe(page)).elements.filter(element => element.role === 'textbox').map(element => element.name)).toEqual(['Document']);
+            const legacy = await observe(page, { legacyEnd: true });
+            expect(legacy.elements.filter(element => element.role === 'textbox').map(element => element.name)).toContain('First passage');
+            const { endMatches } = await import('../src/end-state.ts');
+            expect(endMatches({ appeared: [{ kind: 'element', target: { role: 'textbox', name: 'Final passage', nth: 0 } }] }, legacy).matched).toBe(true);
+        } finally { await context.close(); }
+    });
+    it('excludes changing counter controls from value and state anchors', async () => {
+        const context = await newTestContext(browser, { viewport: { width: 1280, height: 900 }, dialogs: 'accept' });
+        try {
+            const page = await context.newPage(); await page.goto(app.origin + '/integrity?bug=counter');
+            const before = await observe(page); await page.getByRole('button', { name: 'Save draft' }).click();
+            const after = await observe(page); const { recordEnd } = await import('../src/end-state.ts');
+            expect(JSON.stringify(recordEnd(before, after, [{ tool: 'click' }]))).not.toMatch(/Count [12]/);
+        } finally { await context.close(); }
+    });
+    it('excludes live-region headings and controls from required anchors', async () => {
+        const context = await newTestContext(browser, { viewport: { width: 1280, height: 900 }, dialogs: 'accept' });
+        try {
+            const page = await context.newPage(); await page.goto(app.origin + '/integrity?bug=status');
+            const before = await observe(page); await page.getByRole('button', { name: 'Save draft' }).click();
+            const after = await observe(page); const { recordEnd } = await import('../src/end-state.ts');
+            const end = recordEnd(before, after, [{ tool: 'click' }]);
+            expect(JSON.stringify(end.appeared)).not.toMatch(/Draft saved|Dismiss notification|moments ago/);
+        } finally { await context.close(); }
+    });
+});
+
 describe('recorded end states', () => {
     it('normalizes dynamic paths and requires all appeared anchors', async () => {
         const { endMatches, normalizedPath } = await import('../src/end-state.ts');
         expect(normalizedPath('/items/123/ab12cd34')).toBe('/items/:id/:id');
         const observation: Observation = { url: 'http://localhost/items/456/ef56gh78', title: '', notices: [], headings: ['Saved', 'Ready'], text: '', elements: [], omitted: 0, signature: '' };
-        const end = { path: '/items/:id/:id', appeared: ['Saved', 'Ready', 'Done', 'Complete'].map(text => ({ kind: 'heading' as const, text })) };
+        const end = { strict: true as const, path: '/items/:id/:id', appeared: ['Saved', 'Ready', 'Done', 'Complete'].map(text => ({ kind: 'heading' as const, text })) };
         expect(endMatches(end, observation).matched).toBe(false);
         expect(endMatches(end, { ...observation, headings: ['Saved', 'Ready', 'Done', 'Complete'] }).matched).toBe(true);
         expect(endMatches(end, { ...observation, headings: ['Saved'] }).matched).toBe(false);
@@ -854,11 +909,28 @@ describe('integrity regressions', () => {
         const clipped = { ...observation, text: 'Long content…', notices: ['Long notice…'], headings: ['Long heading…'], elements: [{ i: 0, ref: 'e1', role: 'textbox', name: 'Draft', value: 'Long value…' }] };
         expect(checkEvidenceCandidates(clipped)).toEqual([]);
     });
+    it('binds new check evidence to the same route across generated record ids', async () => {
+        const { checkEvidenceCandidates, checkEvidenceMatches } = await import('../src/judge.ts');
+        const field = { i: 0, ref: 'e1', role: 'textbox', name: 'Draft', value: 'Original' };
+        const before = { ...observation, url: '/draft/ab12cd34', elements: [field] };
+        const evidence = checkEvidenceCandidates(before).filter(entry => entry.source === 'element');
+        expect(checkEvidenceMatches(evidence, { ...before, url: '/draft/ef56gh78' })).toBe(true);
+        expect(checkEvidenceMatches(evidence, { ...before, url: '/review/ef56gh78' })).toBe(false);
+    });
+    it('offers exact page quotes when unrelated page text exceeds the observation budget', async () => {
+        const { checkEvidenceOptions, checkEvidenceMatches } = await import('../src/judge.ts');
+        const shown = { ...observation, text: 'Draft area Private revision B ' + 'Other content '.repeat(400) + '…' };
+        const options = checkEvidenceOptions(shown, 'The text card shows "Private revision B"');
+        const quote = options.find(option => option.some(entry => entry.match === 'contains'))!;
+        expect(quote).toBeDefined();
+        expect(checkEvidenceMatches(quote, shown)).toBe(true);
+        expect(checkEvidenceMatches(quote, { ...shown, text: shown.text.replace('Private revision B', 'Different revision') })).toBe(false);
+    });
     it('marks a step with no observable effect explicitly', async () => {
         const { recordEnd } = await import('../src/end-state.ts');
-        expect(recordEnd(observation, observation, [{ tool: 'hover' }])).toEqual({ effect: 'none' });
+        expect(recordEnd(observation, observation, [{ tool: 'hover' }])).toMatchObject({ strict: true, effect: 'none' });
         const { createRedactor, secret } = await import('../src/secrets.ts');
-        expect(recordEnd(observation, { ...observation, url: '/draft?token=opaque-sequence-9127' }, [], createRedactor([secret('opaque-sequence-9127')]))).toEqual({ effect: 'none' });
+        expect(recordEnd(observation, { ...observation, url: '/draft?token=opaque-sequence-9127' }, [], createRedactor([secret('opaque-sequence-9127')]))).toMatchObject({ strict: true, effect: 'none' });
     });
 });
 

@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Preserve unmarked legacy end-state rules and repeated instruction keys; apply strict checks only to marked new recordings.
+- Compare replay errors against the step start and recorded end. Ignore informational alert roles and warning states.
+- Exclude toast/live-region contents, relative times and counters from required anchors; record count reductions for repeated controls.
+- Record compound factual check evidence and unique exact page excerpts, with normalized new regions and compact evidence choices.
+
 - When no action is proposed, review the strongest activation control independently of completed fields in the target ranking. Keep required-action scope, prior activation counts and the 0.75 execution audit.
 
 - Permit editor/selection prerequisites that reveal required final controls; an individual action need not finish the whole step.

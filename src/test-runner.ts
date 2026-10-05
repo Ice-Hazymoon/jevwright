@@ -19,7 +19,7 @@ import { actedOnTarget, adjudicateClaim, checkEvidenceMatches, judgeClaim, repla
 import { createModels, emptyUsage, ModelError } from './models.ts';
 import { createMonitor } from './monitor.ts';
 import { observe, shortUrl } from './observe.ts';
-import { stepKey } from './recording.ts';
+import { findStepRecording, stepKey } from './recording.ts';
 import { createRedactor, forResults, reveal, secretPurpose } from './secrets.ts';
 import { secretCheckProblems } from './select.ts';
 import { describeStep, fillTemplate, templateKeys, writeRules } from './spec.ts';
@@ -454,7 +454,7 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
                 const keys = templateKeys(step.instruction);
                 const stepValues = Object.fromEntries(keys.filter(key => Object.hasOwn(values, key)).map(key => [key, values[key]!]));
                 const { key, occurrence } = keysByIndex.get(index)!;
-                const recorded = options.fresh ? undefined : options.recording?.steps.find(entry => entry.key === key);
+                const recorded = options.fresh ? undefined : options.recording && findStepRecording(options.recording.steps, step, occurrence);
                 if (!models && recorded === undefined) {
                     // Replay has no model to fall back on. A new test, or a step reworded since it was recorded.
                     result.status = 'failed';
@@ -528,7 +528,7 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
                 const claim = fillTemplate(step.assertion, displayData);
                 if (!models) {
                     result.source = 'replay';
-                    const recorded = options.recording?.steps.find(entry => entry.key === key);
+                    const recorded = options.recording && findStepRecording(options.recording.steps, { instruction: `check:${step.assertion}` }, occurrence);
                     if (!recorded?.checkEvidence?.length || !replayableCheckEvidence(recorded.checkEvidence) || recorded.checkClaim !== claim || step.reference) {
                         result.status = 'unverified';
                         result.error = 'Check has no directly recheckable evidence for this claim; record it with an auto run';

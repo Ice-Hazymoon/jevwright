@@ -188,8 +188,11 @@ Replay rechecks the direct page evidence recorded by passing `check` steps. Chec
 
 Anything else, or an engine that gets a well-worded step wrong: [open an issue](https://github.com/Ice-Hazymoon/jevwright/issues) with the run's `report.md`.
 
-Replay fails when recorded end states do not match. The report lists missing anchors. Confirm the cause
-with an auto run; a mismatch alone does not establish a product defect.
+Unmarked legacy end states retain their half-anchor rule. New strict end states require every durable anchor
+and reject newly introduced errors that were absent when recording. Informational `role=alert` content
+does not qualify as an error. Strict replay fails when required end states do not match. Legacy replay
+reports end-state drift and leaves the test verdict to later checks and code verification. The report lists
+missing anchors. Confirm the cause with an auto run; a mismatch alone does not establish a product defect.
 
 ## Limitations
 
@@ -214,6 +217,7 @@ with an auto run; a mismatch alone does not establish a product defect.
 - Page values can be entered only when their exact text appears in the current observation. Replay re-reads them from recorded surrounding text; changed or ambiguous sources need an auto run. Declared secrets remain available only through their keys.
 - `check` requires the asserted content to be visible. A count or saved-button state cannot prove what another tab contains.
 - Failed checks receive a second look. Visible contradictions, or missing expected content in an open visible region, are `product`; a collapsed or unopened region is `agent`. Uncertain region evidence receives adjudication.
+- Compound factual checks can record several fields or exact page quotes. Replay rechecks every selected piece in its recorded region. Missing direct evidence remains `unverified`.
 - `check` is a model judgment in auto/AI mode. Replay verifies recorded direct evidence; checks without it remain `unverified`. Exact values (money, multilingual text, line breaks) and negative claims belong in `verify`.
 - New recordings bind app routes to the run’s `baseURL`, so changing the host or port alone does not invalidate the route check. Path, sorted query and recorded effects must still match. Routes to other origins remain literal. Unmarked legacy routes retain path-only checks.
 - Chromium only.

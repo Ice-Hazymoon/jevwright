@@ -166,8 +166,13 @@ A `check` asks Jev three independent questions: does the claim hold, how does th
 With a `reference`, the judge compares the page with your trusted data.
 
 In auto/AI mode, a separate evidence choice records the exact quoted page text and its visible region
-when one candidate directly supports the whole claim. This choice does not change the existing verdict.
-Replay deterministically checks that quote, its recorded container/nearby context and any field value/state.
+when one evidence option directly supports the whole claim. Options can combine up to six named fields or
+several exact page quotes and controls. The model must cover every clause; positive quotes cannot prove absence.
+Evidence options keep target descriptors in the recording rather than duplicating them in the model request. This choice does not change the existing verdict.
+Replay deterministically checks every selected quote, its recorded container/nearby context and any field value/state/content.
+New evidence marks its region normalization: generated route ids and unstable container ids do not bind it
+to a previous fixture. Unmarked evidence keeps its original literal region comparison. Exact quote excerpts
+must remain uniquely visible in the same recorded page or dialog; old whole-page text remains an exact comparison.
 Its source is `replay`. Quotes ending in an ellipsis are conservatively treated as clipped and unusable;
 use `verify` when the page itself ends its literal evidence with an ellipsis.
 Checks without sufficient evidence, with changed interpolated claims, or with runtime references are
@@ -180,16 +185,23 @@ recheckable positive quote; use a code `verify` for exact absence or a runtime r
 
 This engine reads 0.1.x–0.6.0 recordings. New gestures and optional `fileKeys`, `scrollText`, `pageValue`, `key`, `times` and target `ariaName` fields require this Unreleased engine, or 0.7.0+ once released. Older 0.6.0 readers can reject new tools or silently discard these fields. Recordings retain schema version 1; waits are runtime timing decisions and are no longer recorded.
 
+Repeated unnumbered legacy recipes retain their reuse semantics; numbered recipes remain occurrence-specific.
+
 Legacy accessible-name targets remain resolvable after visible-label promotion. New targets retain the original aria name to disambiguate swapped labels.
 
 Successful act steps record semantic targets, optional drag destinations, file-key lists and scroll searches.
 New end states compare normalized path and query parameters sorted by key. A route at the run’s baseURL
 origin records `base: true` with a relative path/query; replay resolves it against the current baseURL.
 Other origins record `base: false` with their literal origin and must match exactly. Unmarked legacy
-routes keep path-only comparison, including when the app port changes. All appeared anchors
-must remain visible and every gone control must disappear. New appeared anchors also record their absence
+routes keep path-only comparison, including when the app port changes. End states without `strict: true`
+keep the legacy half-anchor rule and original gone-target resolution. They do not check new errors or
+require absence before replay. Declared requests/downloads/URLs retain precedence over cached legacy
+anchors. Legacy replay drift remains reported as `endMismatch`; later checks and code verification
+determine the test result, as before. Legacy end observation retains inherited editor paragraphs.
+Strict new end states require all appeared anchors. A unique gone control
+must disappear; repeated identities record before/after counts and require that count reduction. New appeared anchors also record their absence
 before the step; replay rejects effects already present before its actions. Dates, durations, live counters
-and generated ids are filtered when recording; ordinary numeric result text remains evidence.
+and generated ids are filtered when recording. Toast/live-region contents and their controls are also excluded; ordinary numeric result text remains evidence.
 Changed field values and checked, selected, expanded or pressed states are recorded, including typing-only
 steps. Keyed inputs recheck current data; page inputs recheck their recorded source. A step without an
 observable effect records `effect: 'none'`, so replay verifies action delivery without claiming an effect.
@@ -203,7 +215,10 @@ events; model history identifies their starting field and notes that automatic f
 fields. That history does not replace an independent check of the accepted result.
 
 Replay checks declared expectations and recorded end states. The engine polls end states for up to
-five seconds. New alerts, invalid fields and visible validation error regions stop replay in both replay and auto modes.
+five seconds. Strict recordings store the visible notices and error surfaces at the recorded end. A replay
+error must be absent both before replay and at that recorded end. Invalid fields, explicit error states
+and failure language qualify; `role=alert` alone does not. Information and warning states do not qualify.
+The monitor independently retains its request/crash/error-screen checks in all modes.
 An observed rejected declared request retains its expectation failure even when a validation message appears.
 Healing receives the actual missing conditions and current route. A cached route difference alone does
 not establish a missing product effect when all other recorded conditions match.

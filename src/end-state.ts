@@ -3,7 +3,7 @@ import type { Anchor, RecordedAction, StepEnd, ValueAnchor } from './recording.t
 import type { Redactor } from './secrets.ts';
 import type { Values } from './spec.ts';
 import { readPageValue } from './page-values.ts';
-import { describeTarget, resolveTarget, stable } from './recording.ts';
+import { describeTarget, resolveTarget, stable, targetCount } from './recording.ts';
 import { createRedactor } from './secrets.ts';
 
 export interface EndCheck { checked: boolean; matched?: boolean; missing?: string[]; recorded?: boolean; effect?: 'none'; failure?: 'error-shown' }
@@ -21,33 +21,35 @@ export function normalizedRoute(url: string, origin?: string): string {
 
 /** Dates, durations, live counters and generated ids are unstable; ordinary result numbers remain evidence. */
 export function volatileAnchor(text: string): boolean {
-    return stable(text) !== text || /\b\d+\s*(?:ms|seconds?|minutes?|hours?)\b|\b(?:countdown|elapsed|remaining)\s*:?\s*\d+|\b\d+\s+of\s+\d+\b/i.test(text);
+    return stable(text) !== text || /\b\d+\s*(?:ms|seconds?|minutes?|hours?)\b|\b(?:countdown|elapsed|remaining)\s*:?\s*\d+|\b\d+\s+of\s+\d+\b|\(\d+\)|\b(?:count|counter)\s*:?\s*\d+|\b(?:moments? ago|a moment ago)\b/i.test(text);
 }
 const anchorName = (name: string) => normalize(name) !== '' && !volatileAnchor(name);
 
 function anchors(observation: Observation): Anchor[] {
+    const durable = (text: string) => anchorName(text) && !observation.transientTexts?.some(value => normalize(text).includes(normalize(value)));
     return [
-        ...(observation.dialog && anchorName(observation.dialog) ? [{ kind: 'dialog' as const, text: observation.dialog }] : []),
-        ...observation.notices.filter(anchorName).map(text => ({ kind: 'notice' as const, text })),
-        ...observation.headings.filter(anchorName).map(text => ({ kind: 'heading' as const, text })),
-        ...observation.elements.filter(element => anchorName(element.name)).map(element => ({ kind: 'element' as const, target: describeTarget(element, observation) })),
+        ...(observation.dialog && durable(observation.dialog) ? [{ kind: 'dialog' as const, text: observation.dialog }] : []),
+        ...observation.headings.filter(durable).map(text => ({ kind: 'heading' as const, text })),
+        ...observation.elements.filter(element => !element.transient && durable(element.name)).map(element => ({ kind: 'element' as const, target: describeTarget(element, observation) })),
     ];
 }
 function present(anchor: Anchor, observation: Observation): boolean {
-    if (anchor.kind === 'element') { return Boolean(resolveTarget({ ...anchor.target, nth: 0, of: undefined }, observation, true)); }
+    if (anchor.kind === 'element') { return Boolean(resolveTarget(anchor.target, observation, true)); }
     const text = normalize(anchor.text);
     if (anchor.kind === 'notice') { return observation.notices.some(notice => normalize(notice) === text); }
     return anchor.kind === 'heading' ? observation.headings.some(heading => normalize(heading) === text) : normalize(observation.dialog ?? '') === text;
 }
 const durableStates = (states: string[] | undefined) => states?.filter(state => state !== 'focused');
 
-export function recordEnd(start: Observation, end: Observation, actions: RecordedAction[], redact: Redactor = createRedactor(), data: Values = {}, baseURL?: string): StepEnd {
+export function recordEnd(start: Observation, end: Observation, actions: RecordedAction[], redact: Redactor = createRedactor(), data: Values = {}, baseURL?: string, errors: string[] = []): StepEnd {
     const absoluteRoute = normalizedRoute(end.url, end.origin);
     const base = !!baseURL && new URL(absoluteRoute).origin === new URL(baseURL).origin;
     const route = base ? absoluteRoute.slice(new URL(baseURL!).origin.length) : absoluteRoute;
     const appeared = anchors(end).filter(anchor => !redact.contains(JSON.stringify(anchor)) && !present(anchor, start)).slice(0, 4);
-    const gone = start.elements.filter(element => anchorName(element.name)).map(element => describeTarget(element, start)).filter(target => !redact.contains(JSON.stringify(target)) && !present({ kind: 'element', target }, end)).slice(0, 2);
-    const values: ValueAnchor[] = end.elements.flatMap(element => {
+    const disappearing = start.elements.filter(element => !element.transient && anchorName(element.name)).map(element => describeTarget(element, start)).filter(target => !redact.contains(JSON.stringify(target)) && targetCount(target, end) < targetCount(target, start));
+    const gone = disappearing.filter(target => targetCount(target, start) === 1 && targetCount(target, end) === 0).slice(0, 2);
+    const reduced = disappearing.filter(target => targetCount(target, start) > 1).filter((target, index, all) => all.findIndex(other => other.role === target.role && other.name === target.name && stable(other.near) === stable(target.near) && stable(other.context) === stable(target.context)) === index).slice(0, 2).map(target => ({ target, before: targetCount(target, start), after: targetCount(target, end) }));
+    const values: ValueAnchor[] = end.elements.filter(element => !element.transient && anchorName(element.name)).flatMap(element => {
         const target = describeTarget(element, end);
         const before = resolveTarget(target, start, true);
         const states = durableStates(element.states);
@@ -72,8 +74,9 @@ export function recordEnd(start: Observation, end: Observation, actions: Recorde
         return redact.contains(JSON.stringify(anchor)) || redact.contains(element.value ?? '') ? [] : [anchor];
     });
     const changedRoute = normalizedRoute(start.url, start.origin) !== absoluteRoute;
-    if ((!changedRoute || redact.contains(route)) && !appeared.length && !gone.length && !values.length) { return { effect: 'none' }; }
-    return { ...(!redact.contains(route) ? { route, base } : {}), ...(appeared.length ? { appeared, absentBefore: appeared } : {}), ...(gone.length ? { gone } : {}), ...(values.length ? { values } : {}) };
+    const baseline = { strict: true as const, errors: errors.filter(error => !redact.contains(error)), notices: end.notices.filter(notice => !redact.contains(notice)) };
+    if ((!changedRoute || redact.contains(route)) && !appeared.length && !gone.length && !reduced.length && !values.length) { return { ...baseline, effect: 'none' }; }
+    return { ...baseline, ...(reduced.length ? { reduced } : {}), ...(!redact.contains(route) ? { route, base } : {}), ...(appeared.length ? { appeared, absentBefore: appeared } : {}), ...(gone.length ? { gone } : {}), ...(values.length ? { values } : {}) };
 }
 
 export function endMatches(end: StepEnd, observation: Observation, start?: Observation, values: Values = {}, baseURL?: string): EndCheck {
@@ -85,14 +88,22 @@ export function endMatches(end: StepEnd, observation: Observation, start?: Obser
             : normalizedRoute(observation.url, observation.origin) === normalizedRoute(end.route, end.base ? baseURL : undefined);
         if (!matched) { missing.push(`route ${end.route}`); }
     }
-    missing.push(...(end.appeared ?? []).filter(anchor => !present(anchor, observation)).map(anchor => anchor.kind === 'element' ? `${anchor.target.role} ${anchor.target.name}` : `${anchor.kind} ${anchor.text}`));
-    if (start) {
+    const absent = (end.appeared ?? []).filter(anchor => !present(anchor, observation));
+    if (end.strict || (end.appeared?.length ?? 0) - absent.length < Math.ceil((end.appeared?.length ?? 0) / 2)) {
+        missing.push(...absent.map(anchor => anchor.kind === 'element' ? `${anchor.target.role} ${anchor.target.name}` : `${anchor.kind} ${anchor.text}`));
+    }
+    if (end.strict && start) {
         for (const anchor of end.absentBefore ?? []) {
             if (present(anchor, start)) { missing.push(`already present before replay: ${anchor.kind === 'element' ? anchor.target.name : anchor.text}`); }
         }
     }
     for (const target of end.gone ?? []) {
-        if (present({ kind: 'element', target }, observation)) { missing.push(`still present: ${target.role} ${target.name}`); }
+        if (end.strict ? targetCount(target, observation) > 0 : resolveTarget(target, observation, true)) { missing.push(`still present: ${target.role} ${target.name}`); }
+    }
+    if (end.strict) {
+        for (const reduction of end.reduced ?? []) {
+            if (targetCount(reduction.target, observation) !== reduction.after || (start && targetCount(reduction.target, start) !== reduction.before)) { missing.push(`count: ${reduction.target.role} ${reduction.target.name} (${reduction.before} to ${reduction.after})`); }
+        }
     }
     for (const anchor of end.values ?? []) {
         const element = resolveTarget(anchor.target, observation, true);

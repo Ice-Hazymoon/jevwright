@@ -54,8 +54,8 @@ export interface RecordedAction {
 export type Anchor = { kind: 'element'; target: TargetDescriptor } | { kind: 'heading' | 'dialog' | 'notice'; text: string };
 export interface ValueAnchor { target: TargetDescriptor; value?: string; states?: string[]; formatting?: TextFormatting[]; valueKey?: string; pageValue?: PageValueDescriptor; template?: string }
 /** base=true binds a route to the run baseURL; false keeps its literal origin; absent retains legacy path checks. */
-export interface StepEnd { path?: string; route?: string; base?: boolean; appeared?: Anchor[]; gone?: TargetDescriptor[]; absentBefore?: Anchor[]; values?: ValueAnchor[]; effect?: 'none' }
-export interface CheckEvidence { text: string; region: string; target?: TargetDescriptor; value?: string; states?: string[]; formatting?: TextFormatting[]; source: 'text' | 'notice' | 'heading' | 'element' }
+export interface StepEnd { strict?: true; errors?: string[]; notices?: string[]; reduced?: Array<{ target: TargetDescriptor; before: number; after: number }>; path?: string; route?: string; base?: boolean; appeared?: Anchor[]; gone?: TargetDescriptor[]; absentBefore?: Anchor[]; values?: ValueAnchor[]; effect?: 'none' }
+export interface CheckEvidence { regionVersion?: 1; match?: 'contains'; content?: string; text: string; region: string; target?: TargetDescriptor; value?: string; states?: string[]; formatting?: TextFormatting[]; source: 'text' | 'notice' | 'heading' | 'element' }
 
 export interface StepRecording {
     /** Hash of the step definition; a changed instruction invalidates its recording. */
@@ -89,9 +89,13 @@ const recordingSchema = z.object({
         key: z.string(),
         instruction: z.string(),
         occurrence: z.number().int().positive().optional(),
-        checkEvidence: z.array(z.object({ text: z.string(), region: z.string(), source: z.enum(['text', 'notice', 'heading', 'element']), target: descriptorSchema.optional(), value: z.string().optional(), states: z.array(z.string()).optional(), formatting: formattingSchema.optional() })).optional(),
+        checkEvidence: z.array(z.object({ regionVersion: z.literal(1).optional(), match: z.literal('contains').optional(), content: z.string().optional(), text: z.string(), region: z.string(), source: z.enum(['text', 'notice', 'heading', 'element']), target: descriptorSchema.optional(), value: z.string().optional(), states: z.array(z.string()).optional(), formatting: formattingSchema.optional() })).optional(),
         checkClaim: z.string().optional(),
         end: z.object({
+            strict: z.literal(true).optional(),
+            errors: z.array(z.string()).optional(),
+            notices: z.array(z.string()).optional(),
+            reduced: z.array(z.object({ target: descriptorSchema, before: z.number().int().positive(), after: z.number().int().min(0) })).optional(),
             path: z.string().optional(),
             route: z.string().optional(),
             base: z.boolean().optional(),
@@ -191,6 +195,17 @@ export function resolveTargetMatch(target: TargetDescriptor, observation: Observ
     const near = target.near ? actionable.filter(element => element.role === target.role && element.near === target.near) : [];
     if (near.length === 1 && target.nth === 0) { return { element: near[0], unique: false }; }
     return { unique: false };
+}
+
+/** Exact observed identity counts do not fall back to a similarly named control in another row. */
+export function targetCount(target: TargetDescriptor, observation: Observation): number {
+    return observation.elements.filter(element => sameIdentity(element, target)).length;
+}
+
+/** Unnumbered recipes predate occurrence keys and were reused for every identical instruction. */
+export function findStepRecording(steps: StepRecording[], identity: Parameters<typeof stepKey>[0], occurrence: number): StepRecording | undefined {
+    return steps.find(entry => entry.key === stepKey(identity, occurrence))
+        ?? steps.find(entry => entry.occurrence === undefined && entry.key === stepKey(identity));
 }
 
 export function createRecordingStore(directory: string | undefined) {

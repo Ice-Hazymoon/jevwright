@@ -84,20 +84,29 @@ document.getElementById('tab').onclick = () => { document.getElementById('browse
 `);
         case '/integrity-audit':
             return layout('Draft editor', '<label>Draft<input id="draft"></label><label>Reference<input id="reference"></label><button id="store">Store draft</button>', `document.getElementById('store').onclick = () => send('/api/draft-validation', { draft: document.getElementById('draft').value });`);
+        case '/compatibility-editor':
+            return layout('Writing workspace', '<section aria-label="Writing area"><div contenteditable="true" role="textbox" aria-label="Document"><p>First passage</p><p><br></p><p>Final passage</p></div></section>');
         case '/integrity-region':
             return layout('Draft workspace', '<section aria-label="' + (bug === 'moved' ? 'Review area' : 'Draft area') + '"><label>Draft<input value="Original"></label></section>');
         case '/integrity':
-            return layout('Request workspace', '<label>Draft<input id="draft" value="Original"></label><button id="save">Save draft</button><button id="toggle" aria-expanded="false">Details</button><output id="receipt"></output><div id="error"></div>', `
+            return layout('Request workspace', '<label>Draft<input id="draft" value="Original"></label><button id="save">Save draft</button><button id="toggle" aria-expanded="false">Details</button><div id="receipt"></div><div id="error"></div>', `
                 const bug = ${JSON.stringify(bug)};
+                if (bug === 'existing-notice') document.getElementById('error').innerHTML = '<p role=\"status\">Reference notice</p>';
+                if (bug === 'counter') document.getElementById('toggle').textContent = 'Count 1';
                 document.getElementById('toggle').onclick = e => { if (bug !== 'state') e.target.setAttribute('aria-expanded', 'true'); };
                 document.getElementById('save').onclick = async () => {
                     if (bug === '500') await fetch('/api/integrity', { method: 'POST' });
                     if (bug === '422' || bug === 'validation') await fetch('/api/integrity-validation', { method: 'POST' });
-                    if (bug === 'validation') document.getElementById('error').innerHTML = '<p role="alert">Required input missing</p>';
+                    if (bug === 'validation') document.getElementById('error').innerHTML = '<p role="alert" class="field-error">Required input missing</p>';
                     if (bug === 'alert') document.getElementById('error').innerHTML = '<p role="alert">Request rejected</p>';
                     if (bug === 'shadow-alert') { const host = document.createElement('div'); document.body.append(host); host.attachShadow({ mode: 'closed' }).innerHTML = '<p role=alert>Request rejected</p>'; }
                     if (bug === 'frame-alert') { const frame = document.createElement('iframe'); frame.srcdoc = '<p role=alert>Request rejected</p>'; document.body.append(frame); }
                     if (bug === 'hidden-alert') document.getElementById('error').innerHTML = '<p role=alert style=visibility:hidden>Decorative error</p>';
+                    if (bug === 'existing-notice') document.getElementById('error').innerHTML = '<p role=\"alert\" data-type=\"error\">Reference notice</p>';
+                    if (bug === 'info') document.getElementById('error').innerHTML = '<p role="alert">Settings apply to future entries.</p>';
+                    if (bug === 'warning') document.getElementById('error').innerHTML = '<p role="alert" data-state="warning">Existing entries keep their original limits.</p>';
+                    if (bug === 'status') document.getElementById('error').innerHTML = '<div data-sonner-toaster><h3>Draft saved</h3><button>Dismiss notification</button></div><p aria-live="polite">Updated moments ago</p>';
+                    if (bug === 'counter') { document.getElementById('toggle').textContent = 'Count 2'; document.getElementById('toggle').setAttribute('aria-expanded', 'true'); }
                     if (bug === 'invalid') document.getElementById('draft').setAttribute('aria-invalid', 'true');
                     if (bug !== 'missing') document.getElementById('receipt').innerHTML = '<h2>Draft stored</h2><h3>Receipt 42</h3>';
                     if (bug === 'half') document.querySelector('h3').remove();
