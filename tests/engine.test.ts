@@ -164,6 +164,61 @@ it.each(['warning', 'new-error'])('fresh reviews declared write delivery without
     expect(result.attempts[0]?.steps[0]?.actions).toHaveLength(3);
 });
 
+it('fresh reviews missing composition inputs before their autosave write exists', async () => {
+    const spec: TestSpec<void> = { id: 'fresh-missing-before-write', title: 'Compose an autosaving field', risk: 'Unfulfilled writes suppress the missing-value feedback and repeat the first input', start: '/fresh-edit?delay=1', fixture: async () => { app.reset(); }, data: { first: 'Opening passage', second: 'Final passage' }, steps: () => [act('Replace Notes with {first}, then one blank paragraph, then {second}', { expect: { write: { method: 'POST', path: '/api/profile', status: 200 }, timeoutMs: 4000 } }), verify('both parts persisted exactly', () => Promise.resolve(app.state.profile.bio === 'Opening passage\n\nFinal passage'))] };
+    const policy = (view: View) => {
+        const target = (element: ViewElement) => element.name === 'Notes';
+        if (view.history.some(entry => entry.value === 'second')) { return { done: 0.99, tool: 'none' }; }
+        if (!view.history.some(entry => entry.value === 'first')) { return { tool: 'type', target, value: 'first' }; }
+        if (view.history.filter(entry => entry.action === 'press_enter').length < 2) { return { tool: 'press_enter', target }; }
+        const reminded = view.history.some(entry => entry.event?.includes('second') && entry.event.includes('not on the page'));
+        return { tool: 'type', target, value: reminded ? 'second' : 'first' };
+    };
+    const result = (await suite([spec], { policy }).run).results[0]!;
+    expect(result.status, result.summary).toBe('passed');
+    expect(result.attempts[0]?.steps[0]?.actions?.filter(action => action.tool === 'type').map(action => action.value)).toEqual(['first', 'second']);
+});
+
+it('fresh awaits an author-declared delayed write after the last allowed action', async () => {
+    const spec: TestSpec<void> = { id: 'fresh-final-delayed-write', title: 'Edit an autosaving field', risk: 'The action limit ends before the author-provided request timeout', start: '/fresh-edit?delay=1', data: { notes: 'Final passage' }, fixture: async () => { app.reset(); }, steps: () => [act('Replace Notes with {notes}', { maxActions: 1, expect: { write: { method: 'POST', path: '/api/profile', status: 200 }, timeoutMs: 4000 } }), verify('delayed value persisted', () => Promise.resolve(app.state.profile.bio === 'Final passage'))] };
+    const policy = (view: View) => view.history.some(entry => entry.action === 'type') ? { done: 0.6, achieved: 0.99, remaining: 0.57, tool: 'none' } : { tool: 'type', target: (element: ViewElement) => element.name === 'Notes', value: 'notes' };
+    const result = (await suite([spec], { policy }).run).results[0]!;
+    expect(result.status, result.summary).toBe('passed');
+    expect(result.attempts[0]?.steps[0]?.actions).toHaveLength(1);
+});
+
+it.each(['warning', 'new-error'])('fresh reviews a fulfilled write when cleared fields provoke retyping (%s)', async (bug) => {
+    const spec: TestSpec<void> = { id: `fresh-cleared-write-${bug}`, title: 'Submit fields once', risk: 'Cleared fields cause another import or a stale warning failure', start: `/fresh-edit?bug=${bug}&clear=1`, data: { alias: 'Pending alias', notes: 'Entry notes' }, steps: () => [act('Change Alias to {alias} and Notes to {notes}, then commit the entry', { expect: { write: { method: 'POST', path: '/api/profile', status: 200 } } }), verify('exact commit count', ({ page }) => page.locator('#commits').textContent().then(text => text === '1'))] };
+    const policy = (view: View) => view.history.some(entry => entry.element?.includes('Commit entry')) ? { done: 0.33, achieved: 0.2, remaining: 0.86, error: 0.7, tool: 'type', target: (element: ViewElement) => element.name === 'Alias', value: 'alias', delivered: 0.99 } : freshEditPolicy(view);
+    const result = (await suite([spec], { policy }).run).results[0]!;
+    expect(result.status, result.summary).toBe(bug === 'warning' ? 'passed' : 'failed');
+    expect(result.attempts[0]?.steps[0]?.actions).toHaveLength(3);
+});
+
+it.each([true, false])('fresh requests bounded structured helper output without accepting plain completion text (%s)', async (responsive) => {
+    const spec: TestSpec<void> = { id: `fresh-helper-output-${responsive}`, title: 'Rename and save a profile', risk: 'Verbose natural-language helper output cannot be parsed as an action', start: '/profile', fixture: async () => { app.reset(); }, data: { nickname: 'Renamed entry' }, steps: () => [act('Replace Nickname with {nickname}, then save the profile', { expect: { write: { method: 'POST', path: '/api/profile', status: 200 }, timeoutMs: 1500 } }), verify('new name persisted', () => Promise.resolve(app.state.profile.nickname === 'Renamed entry'))] };
+    const policy = (view: View) => view.history.some(entry => entry.action === 'type') ? { done: 0.99, tool: 'none' } : { tool: 'type', target: (element: ViewElement) => element.name === 'Nickname', value: 'nickname' };
+    const result = (await suite([spec], { policy, helper: view => responsive && /\breason\b[^.]+\bshort\b[^.]+\bsentence\b/.test(view.helperInstructions ?? '') ? { outcome: 'act', tool: 'click', element: view.elements.find(element => element.name === 'Save profile')?.i ?? null, value_key: null, text: null, reason: 'The requested save is still pending' } : 'The requested save is still pending; click Save profile.' }).run).results[0]!;
+    expect(result.status, result.summary).toBe(responsive ? 'passed' : 'failed');
+    if (!responsive) { expect(result.cause).toBe('model'); }
+});
+
+it('fresh asks the helper for an explicit press key instead of an optional omitted argument', async () => {
+    const spec: TestSpec<void> = { id: 'fresh-helper-required-key', title: 'Submit with an explicit key', risk: 'An optional key field encourages a press action without its operand', start: '/profile', fixture: async () => { app.reset(); }, data: { nickname: 'Renamed entry' }, steps: () => [act('Replace Nickname with {nickname}, then submit using Enter', { expect: { write: { method: 'POST', path: '/api/profile', status: 200 }, timeoutMs: 1500 } }), verify('new name persisted', () => Promise.resolve(app.state.profile.nickname === 'Renamed entry'))] };
+    const policy = (view: View) => view.history.some(entry => entry.action === 'type') ? { done: 0.99, tool: 'none' } : { tool: 'type', target: (element: ViewElement) => element.name === 'Nickname', value: 'nickname' };
+    const result = (await suite([spec], { policy, helper: view => ({ outcome: 'act', tool: 'press', element: view.elements.find(element => element.name === 'Nickname')?.i ?? null, value_key: null, text: null, ...(view.helperKeyRequired ? { key: 'Enter' } : {}), reason: 'Submit the requested rename with Enter' }) }).run).results[0]!;
+    expect(result.status, result.summary).toBe('passed');
+    expect(result.attempts[0]?.steps[0]?.actions?.map(action => action.tool)).toEqual(['type', 'press']);
+});
+
+it('fresh recognizes an explicitly supplied control key in helper text', async () => {
+    const spec: TestSpec<void> = { id: 'fresh-helper-control-key', title: 'Rename and submit using Enter', risk: 'A helper uses text instead of key for a control key', start: '/profile', fixture: async () => { app.reset(); }, data: { nickname: 'Renamed entry' }, steps: () => [act('Replace Nickname with {nickname}, then submit using Enter', { expect: { write: { method: 'POST', path: '/api/profile', status: 200 }, timeoutMs: 1500 } }), verify('new name persisted', () => Promise.resolve(app.state.profile.nickname === 'Renamed entry'))] };
+    const policy = (view: View) => view.history.some(entry => entry.action === 'type') ? { done: 0.99, tool: 'none' } : { tool: 'type', target: (element: ViewElement) => element.name === 'Nickname', value: 'nickname' };
+    const result = (await suite([spec], { policy, helper: view => ({ outcome: 'act', tool: 'press', element: view.elements.find(element => element.name === 'Nickname')?.i ?? null, value_key: null, text: 'Enter', key: null, reason: 'Submit the requested rename with the specified Enter key' }) }).run).results[0]!;
+    expect(result.status, result.summary).toBe('passed');
+    expect(result.attempts[0]?.steps[0]?.actions?.map(action => action.tool)).toEqual(['type', 'press_enter']);
+});
+
 it('fresh reviews newly delivered dialog initiation after an incomplete expansion review', async () => {
     const spec: TestSpec<void> = { id: 'fresh-progress-review', title: 'Expand then initiate', risk: 'An early review blocks completion after additional requested work', start: '/fresh-section', data: { amount: '12.34' }, steps: () => [act('Open Rates and start adding a rate'), act('Enter {amount} as Amount'), verify('entry remains uncommitted', async ({ page }) => await page.getByRole('dialog').isVisible() && await page.getByRole('spinbutton', { name: 'Amount' }).inputValue() === '12.34')] };
     const policy = (view: View) => {

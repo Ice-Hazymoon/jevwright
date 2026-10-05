@@ -60,8 +60,11 @@ function pages(state: FixtureState, url: URL): string | undefined {
         case '/fresh-edit':
             return layout('Entry draft', `<label>Alias<input id="alias" value="Initial"></label><label>Notes<textarea id="notes"></textarea></label>${url.searchParams.has('mirror') ? '<div id="mirror" style="white-space:pre-wrap"></div>' : ''}<button id="commit">Commit entry</button><output id="commits">0</output>${bug ? '<div role="alert" data-type="warning">Review delivery preferences</div><div id="error"></div>' : ''}`, `
 ${url.searchParams.has('mirror') ? 'document.getElementById(\'notes\').oninput = () => { document.getElementById(\'mirror\').textContent = document.getElementById(\'notes\').value; };' : ''}
-document.getElementById('commit').onclick = async () => { document.getElementById('commits').textContent = String(Number(document.getElementById('commits').textContent) + 1); ${bug ? `await send('/api/profile', { nickname: document.getElementById('alias').value, bio: document.getElementById('notes').value }); ${bug === 'new-error' ? 'document.getElementById("error").innerHTML = \'<div role="alert">Entry failed validation</div>\';' : ''}` : ''} };
+${url.searchParams.has('delay') ? `let editTimer; document.getElementById('notes').addEventListener('input', () => { clearTimeout(editTimer); editTimer = setTimeout(() => send('/api/profile', { nickname: document.getElementById('alias').value, bio: document.getElementById('notes').value }), 2400); });` : ''}
+document.getElementById('commit').onclick = async () => { document.getElementById('commits').textContent = String(Number(document.getElementById('commits').textContent) + 1); ${bug ? `await send('/api/profile', { nickname: document.getElementById('alias').value, bio: document.getElementById('notes').value }); ${bug === 'new-error' ? 'document.getElementById("error").innerHTML = \'<div role="alert">Entry failed validation</div>\';' : ''}` : ''}${url.searchParams.has('clear') ? 'document.getElementById("alias").value = ""; document.getElementById("notes").value = "";' : ''} };
 `);
+        case '/fresh-dialog-transition':
+            return layout('Entry workspace', '<h2>Entries</h2><div role="dialog" aria-label="Edit entry"><label>Alias<input value="Pending"></label><button>Cancel edit</button></div>');
         case '/fresh-effects':
             return layout('Entry workspace', '<label>Alias<input id="alias" value="Initial"></label><button id="open">Open preferences</button><button id="save">Store entry</button><div id="panel"></div><section aria-label="Feedback"><div aria-live="polite" style="position:absolute;width:1px;height:1px;overflow:hidden"></div><div id="feedback" style="position:fixed;right:20px;top:20px"></div></section>', `
 document.getElementById('save').onclick = () => { document.querySelector('[aria-live]').textContent = 'Entry stored'; document.getElementById('feedback').innerHTML = '<h3>Entry stored</h3><button>Dismiss message</button>'; document.getElementById('panel').innerHTML = '<h2>Stored entry</h2><button>…R4M7</button><button aria-label="Row actions">Entry …R4M7</button>'; };
@@ -122,7 +125,7 @@ document.getElementById('tab').onclick = () => { document.getElementById('browse
         case '/proof-label-overlap':
             return layout('Publishing workspace', '<button>Publish</button><button>Unpublish</button>');
         case '/compatibility-editor':
-            return layout('Writing workspace', '<section aria-label="Writing area"><div contenteditable="true" role="textbox" aria-label="Document"><p>First passage</p><p><br></p><p>Final passage</p></div></section>');
+            return layout('Writing workspace', `<section aria-label="Writing area"><div contenteditable="true" role="textbox" aria-label="Document"><p>First passage</p><p><br></p><p>Final passage</p></div></section>${bug === 'spaced' ? '<style>p{margin:24px 0}</style>' : ''}`);
         case '/integrity-region':
             return layout('Draft workspace', `<section aria-label="${bug === 'moved' ? 'Review area' : 'Draft area'}"><label>Draft<input value="Original"></label></section>`);
         case '/integrity':

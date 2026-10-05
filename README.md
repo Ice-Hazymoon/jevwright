@@ -173,6 +173,8 @@ without one, it can save a verified partial prefix. Secret checks still apply be
 
 ## Troubleshooting
 
+A helper output generation or parsing failure is reported as `model`. Review the saved model error and retry the run. Delayed autosave receives the declared expectation timeout even after the last allowed action.
+
 | Message or symptom | What to do |
 | --- | --- |
 | `Nothing answers at http://…` | Start the app, correct `baseURL`, or give the config a `setup` function that starts it. |

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Recheck same-route dialog transitions and removed controls during observation; bind rich-editor templates to actual rendered separators.
+- Report missing authored inputs before autosave completes and honor declared delayed writes after the final action. Review fulfilled submissions even when cleared fields provoke retyping. Require explicit helper key arguments and bounded JSON output; preserve helper model failure attribution.
+
 - Decode escaped quoted check data when selecting exact field/card paragraph evidence; replay still requires its original rendered content and region.
 
 - Record durable end effects only: exclude mirrored visual toast cards, clipped descriptors and initial values/states of revealed fields. Preserve strict all-anchor and absence-before checks.

@@ -55,6 +55,24 @@ async function open(path: string, run?: (page: Page) => Promise<void>, monitorOp
 const named = (observation: Observation, role: string, name: string) => observation.elements.filter(element => element.role === role && (element.name === name || element.ariaName === name));
 
 describe('observe', () => {
+    it.each(['snapshot', 'final read'])('fresh retries when a dialog closes during %s on the same route', async (phase) => {
+        await open('/fresh-dialog-transition', async (page) => {
+            let closed = false;
+            const close = async () => { if (!closed) { closed = true; await page.getByRole('dialog').evaluate(element => element.remove()); } };
+            if (phase === 'snapshot') {
+                const snapshot = page.ariaSnapshotJSON.bind(page);
+                page.ariaSnapshotJSON = async (options) => { const tree = await snapshot(options); await close(); return tree; };
+            } else {
+                const session = page.context().newCDPSession.bind(page.context());
+                page.context().newCDPSession = async (...args) => { await close(); return session(...args); };
+            }
+            const observation = await observe(page);
+            expect(observation.dialog).toBeUndefined();
+            expect(observation.headings).toContain('Entries');
+            expect(named(observation, 'textbox', 'Alias')).toHaveLength(0);
+        });
+    });
+
     it('keeps connected control identity across renames but not replacement or reload', async () => {
         await open('/completion-list', async (page) => {
             const original = named(await observe(page), 'button', 'Save entry')[0]!;
@@ -872,6 +890,24 @@ describe('legacy end-state compatibility', () => {
 });
 
 describe('recorded end states', () => {
+    it('fresh templates bind the observed rich-editor separators rather than the action arguments', async () => {
+        await open('/compatibility-editor?bug=spaced', async (page) => {
+            const before = await observe(page);
+            await page.getByRole('textbox', { name: 'Document' }).evaluate((element) => { element.innerHTML = '<p>Opening passage</p><p><br></p><p><br></p><p><br></p><p>Final passage</p>'; });
+            const after = await observe(page);
+            const field = named(after, 'textbox', 'Document')[0]!;
+            // eslint-disable-next-line unicorn/prefer-dom-node-text-content -- the end anchor must retain exact rendered paragraph separators
+            field.value = await page.getByRole('textbox', { name: 'Document' }).innerText();
+            expect(field.value).not.toBe('Opening passage\n\nFinal passage');
+            const { recordEnd, endMatches } = await import('../src/end-state.ts');
+            const data = { first: 'Opening passage', second: 'Final passage' };
+            const end = recordEnd(before, after, [{ tool: 'type', target: describeTarget(field, after), template: '{first}\n\n{second}' }], undefined, data);
+            expect(endMatches(end, after, before, data).matched).toBe(true);
+            expect(end.values?.[0]?.template).toBe(field.value!.replace(data.first, '{first}').replace(data.second, '{second}'));
+            expect(endMatches(end, { ...after, elements: after.elements.map(element => element.i === field.i ? { ...element, value: 'Opening passage Final passage' } : element) }, before, data).matched).toBe(false);
+        });
+    });
+
     it('fresh retries an observation when the route changes between its accessibility and DOM reads', async () => {
         await open('/fresh-navigation', async (page) => {
             const snapshot = page.ariaSnapshotJSON.bind(page);

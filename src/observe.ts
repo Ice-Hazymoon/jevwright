@@ -133,6 +133,11 @@ export async function observe(page: Page, options: ObserveOptions = {}, navigati
         return node.name && content && content.length > 1 ? [{ name: node.name, text: content }] : [];
     });
     const dialogs: AriaNode[] = []; collect(roots, node => node.role === 'dialog' || node.role === 'alertdialog', dialogs);
+    // A modal can close between the accessibility and DOM samples without changing the route.
+    if (dialogs.length && !surface.dialog) {
+        if (!navigationRetries) { throw new Error('Page dialog kept changing during observation'); }
+        return observe(page, options, navigationRetries - 1);
+    }
     const supplemented = surface.dialog && !dialogs.length ? [surface.dialog] : [...roots, ...added];
     const result = buildObservation(supplemented, { url, title, viewport, masked, values, inert, redact: options.redact, instruction: options.instruction });
     const texts = [surface.text];
@@ -151,7 +156,7 @@ export async function observe(page: Page, options: ObserveOptions = {}, navigati
         const detail = box ? surface.details.find(detail => sameBox(detail.box, box)) : undefined;
         if (!detail) {
             if (element.ref && TEXT_FIELDS.has(element.role)) {
-                const metadata = await domLocator(page, element.ref).evaluate(node => ({ inputType: node instanceof HTMLInputElement ? node.type : undefined, autocomplete: node.getAttribute('autocomplete') ?? undefined })).catch(() => undefined);
+                const metadata = await domLocator(page, element.ref).evaluate(node => ({ inputType: node instanceof HTMLInputElement ? node.type : undefined, autocomplete: node.getAttribute('autocomplete') ?? undefined }), undefined, { timeout: 500 }).catch(() => undefined);
                 if (metadata) { Object.assign(element, metadata); }
             }
             continue;
@@ -180,9 +185,13 @@ export async function observe(page: Page, options: ObserveOptions = {}, navigati
     result.canGoBack = await canGoBack(page).catch(() => false);
     result.scroll = surface.pageScroll;
     result.signature = createHash('sha1').update(JSON.stringify([result.signature, result.text, result.elements.map(element => [element.content, element.near, element.value, element.selection, element.formatting, element.ariaName, element.dropTarget, element.scroll]), surface.busy, surface.pageScroll, result.canGoBack])).digest('hex').slice(0, 16);
-    // Navigation during separate accessibility/DOM reads cannot bind the old view to the new route.
-    if (page.url() !== url) {
-        if (!navigationRetries) { throw new Error('Page route kept changing during observation'); }
+    const disconnected = await page.evaluate((keys) => {
+        const refs = Reflect.get(window, '__jevwrightRefs') as Map<string, Element> | undefined;
+        return keys.some(key => !refs?.get(key)?.isConnected);
+    }, surface.nodes.filter(node => node.ref && INTERACTIVE.has(node.role)).map(node => node.ref!.replace(/^dom:/, ''))).catch(() => true);
+    // Removed controls and changed routes cannot bind an obsolete view to the current page.
+    if (page.url() !== url || disconnected) {
+        if (!navigationRetries) { throw new Error('Page view kept changing during observation'); }
         return observe(page, options, navigationRetries - 1);
     }
     return result;

@@ -70,12 +70,12 @@ export function recordEnd(start: Observation, end: Observation, actions: Recorde
         const formattingChanged = !!before && element.formatting !== undefined && JSON.stringify(element.formatting) !== JSON.stringify(before.formatting);
         if (!valueChanged && !stateChanged && !formattingChanged) { return []; }
         let template = element.value ?? '';
-        if (typed?.valueKey && data[typed.valueKey] !== undefined && element.value !== data[typed.valueKey]) {
+        if ((typed?.valueKey && data[typed.valueKey] !== undefined && element.value !== data[typed.valueKey]) || typed?.template) {
             for (const [key, value] of Object.entries(data).filter(([, value]) => value).toSorted(([, a], [, b]) => b.length - a.length)) { template = template.replaceAll(value, `{${key}}`); }
         }
         const dynamic = typed?.valueKey
             ? element.value === data[typed.valueKey] ? { valueKey: typed.valueKey } : template.includes(`{${typed.valueKey}}`) ? { template } : {}
-            : typed?.pageValue ? { pageValue: typed.pageValue } : typed?.template ? { template: typed.template } : {};
+            : typed?.pageValue ? { pageValue: typed.pageValue } : typed?.template ? { template } : {};
         const anchor: ValueAnchor = { target, ...(valueChanged && !Object.keys(dynamic).length ? { value: element.value } : dynamic), ...(stateChanged ? { states: states ?? [] } : {}), ...(element.formatting ? { formatting: element.formatting } : {}) };
         return redact.contains(JSON.stringify(anchor)) || redact.contains(element.value ?? '') ? [] : [anchor];
     });

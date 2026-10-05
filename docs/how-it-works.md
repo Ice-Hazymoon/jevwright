@@ -216,7 +216,7 @@ must disappear; repeated identities record before/after counts and require that 
 before the step; replay rejects effects already present before its actions. Dates, durations, live counters
 and generated ids are filtered when recording. Toast/live-region contents and their controls are also excluded, including fixed visual cards sharing a landmark with separate live announcements. Truncated names, content, nearby labels and contexts cannot supply anchors; ordinary numeric result text remains evidence.
 Field values are recorded only for fields this step typed, selected or targeted with keyboard input. Revealed forms supply no initial value/state anchors. Changed states and formatting require a matching element before the action.
-The engine settles before recording the end and retries observations whose route changes between accessibility and DOM reads. Keyed inputs recheck current data; page inputs recheck their recorded source. A step without an
+The engine settles before recording the end. It retries an observation when its route, modal scope or connected controls change during accessibility and DOM reads. Rich-editor templates bind the actual rendered separator text, which can differ from the typed arguments. Keyed inputs recheck current data; page inputs recheck their recorded source. A step without an
 observable effect records `effect: 'none'`, so replay verifies action delivery without claiming an effect.
 A `likely-done` step records no end state.
 
@@ -354,3 +354,5 @@ failures. `--last-failed` reads completed publications in finish order and remov
 a later pass or known product result. The run manifest lists failures carried outside the selected set.
 
 An editor or selection action can be a necessary prerequisite that reveals a final control. It need not finish the whole step. Completion still requires every requested action and any necessary final control within the current step boundary.
+
+Missing authored input feedback does not wait for autosave. After the final allowed action, a declared request still receives the author’s bounded expectation wait. Helper output must be schema JSON with a short reason and an explicit nullable keyboard key. An output generation or parsing failure is `model`; it cannot establish completion.

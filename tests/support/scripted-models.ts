@@ -9,6 +9,8 @@ type EvaluationQuestion = Parameters<Evaluate>[0]['questions'][string];
 /** The page as the engine serializes it for Jev (see `pageState`). */
 export interface View {
     deliveryProofs?: string[];
+    helperInstructions?: string;
+    helperKeyRequired?: boolean;
     step?: string;
     field?: string;
     control?: string;
@@ -97,7 +99,7 @@ function onTarget(p: number, authorized = false): Answer { const key = authorize
  * Deterministic stand-in for Jev and the helper LLM, driven through the real AI SDK
  * `experimental_evaluate` / `generateText` paths so answer validation runs as in production.
  */
-export function scriptedModels(policy: (view: View) => Belief, helper?: (view: View, why: string) => Record<string, unknown>, options: { costPerCall?: number } = {}) {
+export function scriptedModels(policy: (view: View) => Belief, helper?: (view: View, why: string) => Record<string, unknown> | string, options: { costPerCall?: number } = {}) {
     const calls: ScriptedCall[] = [];
     // Reported the same way OpenRouter reports it, so `costOf` in models.ts picks it up.
     const cost = options.costPerCall !== undefined ? { providerMetadata: { openrouter: { usage: { cost: options.costPerCall } } } } : {};
@@ -120,16 +122,16 @@ export function scriptedModels(policy: (view: View) => Belief, helper?: (view: V
         },
     });
     const language = new MockLanguageModelV4({
-        doGenerate: async ({ prompt }) => {
+        doGenerate: async ({ prompt, responseFormat }) => {
             const text = JSON.stringify(prompt);
             const payload = JSON.parse(extractJson(text)) as Record<string, unknown>;
-            const view = { ...toView({ task: { step: payload.step, values: payload.values, history: payload.history, next_step: payload.next_step }, page: payload.page, claim: payload.claim, prior_actions: payload.prior_actions, control: payload.control, control_activations: payload.control_activations }), deliveryProofs: Object.keys((payload.delivery_proofs as Record<string, unknown> | undefined) ?? {}) };
+            const view = { ...toView({ task: { step: payload.step, values: payload.values, history: payload.history, next_step: payload.next_step }, page: payload.page, claim: payload.claim, prior_actions: payload.prior_actions, control: payload.control, control_activations: payload.control_activations }), helperKeyRequired: responseFormat?.type === 'json' && Array.isArray(responseFormat.schema?.required) && responseFormat.schema.required.includes('key'), helperInstructions: prompt.filter(message => message.role === 'system').map(message => typeof message.content === 'string' ? message.content : JSON.stringify(message.content)).join('\n'), deliveryProofs: Object.keys((payload.delivery_proofs as Record<string, unknown> | undefined) ?? {}) };
             const proofs = payload.delivery_proofs as Record<string, unknown> | undefined;
             const output = proofs && (policy(view).delivered ?? 0) >= 0.5
                 ? { reason: 'The current step requests only the code-observed delivery', completion_proof: Object.keys(proofs)[0], outcome: 'step_already_done', tool: null, element: null, value_key: null, text: null }
                 : helper?.(view, String(payload.why_you_are_asked ?? '')) ?? (payload.control ? { reason: 'The fixture policy requested no pending activation of this control', activation: 'finished' } : { outcome: 'impossible', tool: null, element: null, value_key: null, text: null, reason: 'scripted helper has no answer' });
             return {
-                content: [{ type: 'text', text: JSON.stringify(proofs ? { completion_proof: null, ...output } : output) }],
+                content: [{ type: 'text', text: typeof output === 'string' ? output : JSON.stringify({ ...(view.helperKeyRequired ? { key: null } : {}), ...(proofs ? { completion_proof: null } : {}), ...output }) }],
                 finishReason: { unified: 'stop', raw: 'stop' },
                 usage: { inputTokens: { total: 500, noCache: 500, cacheRead: 0, cacheWrite: 0 }, outputTokens: { total: 40, text: 40, reasoning: 0 } },
                 warnings: [],
