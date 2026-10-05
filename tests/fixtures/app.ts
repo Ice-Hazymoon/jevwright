@@ -96,6 +96,10 @@ document.getElementById('tab').onclick = () => { document.getElementById('browse
             return layout('Draft workspace', '<label>Draft<input value="Original"></label><dialog open aria-label="Leave editor"><button>Keep writing</button></dialog>');
         case '/volatile-proof-row':
             return layout('Deliveries', '<div role="button">REF-8AZ34JXY Amber package 2027-08-04</div>');
+        case '/contextual-proof':
+            return layout('Delivery overview', '<article><h2>Amber parcel</h2><p>Status: ' + (bug === 'moved' ? 'Waiting' : 'Ready') + '</p><p>Owner: Inspector</p></article><article><h2>Sage parcel</h2><p>Status: ' + (bug === 'moved' ? 'Ready' : 'Waiting') + '</p><p>Owner: Editor</p></article><p>' + 'Unrelated information '.repeat(100) + '</p><p>Checked 2027-08-04 09:32</p>');
+        case '/proof-label-overlap':
+            return layout('Publishing workspace', '<button>Publish</button><button>Unpublish</button>');
         case '/compatibility-editor':
             return layout('Writing workspace', '<section aria-label="Writing area"><div contenteditable="true" role="textbox" aria-label="Document"><p>First passage</p><p><br></p><p>Final passage</p></div></section>');
         case '/integrity-region':

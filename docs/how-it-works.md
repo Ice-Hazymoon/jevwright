@@ -156,6 +156,7 @@ Two of them count as environment problems, not product ones:
 ## Checks
 
 A `check` asks Jev three independent questions: does the claim hold, how does the page support it, and is the region where its evidence belongs open and visible?
+The shared subject/scope rules appear once as `claim_scope`, outside untrusted page content. Both content questions apply those rules; their criteria and thresholds remain unchanged.
 - The content judgments require direct evidence from the view, list, record or field the assertion names. Counts, notifications and button states cannot prove the contents of another view. Missing content is `not_shown`, even when the truth judgment is confident. A claim about a badge or notification can use that object directly.
 - Direct support passes; an explicit visible contradiction fails as `product`. Missing content in a confidently open visible region also fails as `product`. Empty, loading or erroneous contents do not close a region. Collapsed sections, unselected tabs, unopened dialogs and other pages are not open regions. Unknown region evidence remains uncertain.
 - A failed or unclear answer gets a second look after the page settles again. Jev is asked again only if the page changed (its observation signature differs); otherwise the first answer stands.
@@ -173,6 +174,7 @@ several exact page quotes and controls. The model must cover every clause. Recog
 Evidence choices reference the element numbers already in the page state. Full target descriptors and field values remain in the recording. This choice does not change the existing verdict.
 When recording updates are disabled, including `--no-record`, the judge omits this unused choice. Runtime-reference checks also omit it. The three verdict questions, thresholds, observations and adjudication remain available.
 Body-field candidates can use a visible label's subject word; entity controls can use exact quoted names. The model must still select complete proof. Short whole-page options exclude incidental times, generated ids and live-region text.
+ASCII control labels respect alphanumeric word boundaries, so one action name cannot match a longer, different name. Unquoted capitalized labels can offer unique local excerpts of at most 256 characters, with up to 80 characters of surrounding text on either side plus complete boundary words. These excerpts exclude changing dates, generated ids and live content. Replay requires the whole selected excerpt, preserving its surrounding object instead of accepting the same label elsewhere.
 Replay deterministically checks every selected quote, its recorded container/nearby context and any field value/state/content.
 Element-name proof excludes generated ids and dates. Labeled read-only controls retain rendered paragraph boundaries
 when their rendered text agrees with the visible-text filter. Their original accessible label can identify a proof option.

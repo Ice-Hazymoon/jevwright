@@ -1023,6 +1023,43 @@ describe('integrity regressions', () => {
             expect(options.flat().some(entry => entry.source === 'element')).toBe(false);
         });
     });
+    it('offers stable local text proof for an unquoted status label', async () => {
+        await open('/contextual-proof', async page => {
+            const { checkEvidenceOptions, checkEvidenceMatches } = await import('../src/judge.ts');
+            const shown = await observe(page);
+            const proof = checkEvidenceOptions(shown, 'The Amber parcel shows a Ready status').find(option => option.some(entry => entry.source === 'text' && entry.text.includes('Amber parcel') && entry.text.includes('Status: Ready')));
+            expect(proof).toBeDefined();
+            expect(checkEvidenceMatches(proof!, shown)).toBe(true);
+            await page.goto(app.origin + '/contextual-proof?bug=moved');
+            await page.evaluate(() => history.replaceState({}, '', '/contextual-proof'));
+            expect(checkEvidenceMatches(proof!, await observe(page))).toBe(false);
+        });
+    });
+    it('keeps a shorter action name out of proof for a different whole label', async () => {
+        await open('/proof-label-overlap', async page => {
+            const { checkEvidenceOptions } = await import('../src/judge.ts');
+            const proof = checkEvidenceOptions(await observe(page), 'The Unpublish button is visible').flat();
+            expect(proof.some(entry => entry.target?.name === 'Unpublish')).toBe(true);
+            expect(proof.some(entry => entry.target?.name === 'Publish')).toBe(false);
+        });
+    });
+    it('keeps all verdicts and field facts within a bounded check instruction payload', async () => {
+        await open('/integrity', async page => {
+            const { judgeClaim } = await import('../src/judge.ts');
+            let overhead = 0;
+            const models = { judge: async (state: { page: { elements: Array<{ name: string; value?: string }> } }, questions: Record<string, unknown>) => {
+                expect(Object.keys(questions)).toEqual(['holds', 'support', 'region']);
+                const correct = state.page.elements.some(element => element.name === 'Draft' && element.value === 'Original');
+                overhead = JSON.stringify({ state, questions }).length - JSON.stringify(state.page).length;
+                return { holds: { type: 'boolean', probability: correct ? 0.99 : 0.01 }, support: { type: 'choice', choice: correct ? 'supports' : 'contradicts', probabilities: { supports: correct ? 0.99 : 0.01, contradicts: correct ? 0.01 : 0.99 } }, region: { type: 'choice', choice: 'open', probabilities: { open: 0.99, closed: 0.01 } } };
+            } } as unknown as import('../src/models.ts').Models;
+            const signal = new AbortController().signal;
+            expect((await judgeClaim(models, await observe(page), 'The Draft field shows "Original"', undefined, signal, [], false)).passed).toBe(true);
+            expect(overhead).toBeLessThan(2300);
+            await page.getByLabel('Draft').fill('Wrong');
+            expect((await judgeClaim(models, await observe(page), 'The Draft field shows "Original"', undefined, signal, [], false)).passed).toBe(false);
+        });
+    });
     it('marks a step with no observable effect explicitly', async () => {
         const { recordEnd } = await import('../src/end-state.ts');
         expect(recordEnd(observation, observation, [{ tool: 'hover' }])).toMatchObject({ strict: true, effect: 'none' });

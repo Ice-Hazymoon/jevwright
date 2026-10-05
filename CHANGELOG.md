@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Share check scope once while retaining all verdict questions; match whole control labels and offer bounded contextual proof for unquoted visible labels.
 - Keep CLI replay read-only and preserve complete verified recordings after a failed auto attempt.
 - Preserve rendered paragraphs in labeled read-only controls and match disabled-control metadata by identity.
 - Exclude volatile element names from check proof; offer labeled card content without relying on changing captions.

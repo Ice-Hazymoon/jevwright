@@ -69,16 +69,17 @@ export async function judgeClaim(models: Models, observation: Observation, claim
     const candidates = recordable ? checkEvidenceOptions(observation, claim) : [];
     const state = {
         claim,
+        claim_scope: DIRECT.trim(),
         ...(reference !== undefined ? { reference } : {}),
         ...(priorActions.length ? { prior_actions: priorActions } : {}),
         page: pageState(observation),
     };
     const withReference = reference !== undefined ? ' Compare with the trusted `reference` data, which is ground truth.' : '';
     const answers = await models.judge(state, {
-        holds: { type: 'boolean', instructions: `Is \`claim\` true of what \`page\` currently shows?${withReference} Judge from \`page.text\`, \`page.notices\` and \`page.elements\` (including field values and states).${DIRECT}` },
+        holds: { type: 'boolean', instructions: `Is \`claim\` true of what \`page\` currently shows?${withReference} Apply claim_scope. Judge from \`page.text\`, \`page.notices\` and \`page.elements\` (including field values and states).` },
         support: {
             type: 'choice',
-            instructions: `How does \`page\` relate to \`claim\`?${withReference}${DIRECT}`,
+            instructions: `How does \`page\` relate to \`claim\`?${withReference} Apply claim_scope.`,
             criteria: {
                 supports: 'The specific content the claim names is visible and directly shows every part of the claim',
                 contradicts: 'The page shows something that conflicts with the claim',
@@ -113,13 +114,21 @@ export function checkEvidenceCandidates(observation: Observation): CheckEvidence
 /** Offer compound field proof and literal page quotes without requiring unrelated changing page text. */
 export function checkEvidenceOptions(observation: Observation, claim: string): CheckEvidence[][] {
     const lower = claim.toLowerCase();
+    const mentions = (name: string): boolean => {
+        if (!name) { return false; }
+        for (let offset = lower.indexOf(name); offset >= 0; offset = lower.indexOf(name, offset + 1)) {
+            if ((!/^[a-z0-9]/.test(name) || !/[a-z0-9]/.test(lower[offset - 1] ?? ''))
+                && (!/[a-z0-9]$/.test(name) || !/[a-z0-9]/.test(lower[offset + name.length] ?? ''))) { return true; }
+        }
+        return false;
+    };
     const candidates = checkEvidenceCandidates(observation);
     const literals = [...claim.matchAll(/"([^"\n]+)"|“([^”\n]+)”/g)].map(match => match[1] ?? match[2]!);
     const relevant = candidates.filter(entry => {
         if (entry.source !== 'element') { return false; }
         const name = entry.text.toLowerCase().replace(/\s*\*$/, '');
         const subject = name.split(/\W+/).at(-1);
-        return lower.includes(name) || Boolean(entry.target?.ariaName && lower.includes(entry.target.ariaName.toLowerCase())) || literals.some(text => text.length >= 3 && entry.text.includes(text))
+        return mentions(name) || Boolean(entry.target?.ariaName && mentions(entry.target.ariaName.toLowerCase())) || literals.some(text => text.length >= 3 && entry.text.includes(text))
             || (entry.value !== undefined && ((entry.value.length >= 3 && lower.includes(entry.value.toLowerCase())) || (subject && subject.length >= 4 && lower.split(/\W+/).includes(subject))));
     });
     const fields = relevant.filter(entry => entry.value !== undefined);
@@ -129,14 +138,38 @@ export function checkEvidenceOptions(observation: Observation, claim: string): C
             ? [{ regionVersion: 1 as const, source: 'text' as const, text, region: evidenceRegion(observation, undefined, 1), match: 'contains' as const }] : [];
     });
     const combined = [...quotes, ...relevant.filter(entry => entry.source === 'element' && entry.value === undefined)];
+    const contextual = contextualTextEvidence(observation, claim, relevant);
     const options = [
         ...(fields.length > 1 && fields.length <= 6 ? [fields] : []),
         ...(combined.length > 1 && combined.length <= 8 ? [combined] : []),
         ...quotes.map(entry => [entry]),
         ...relevant.slice(0, 16).map(entry => [entry]),
+        ...(fields.length && fields.length <= 6 ? contextual.map(entry => [...fields, entry]) : []),
+        ...contextual.map(entry => [entry]),
         ...candidates.filter(entry => entry.source !== 'element' && (lower.includes(entry.text.toLowerCase()) || (entry.source === 'text' && entry.text.length <= 512 && stable(entry.text) === entry.text && !observation.transientTexts?.some(text => entry.text.includes(text)) && !relevant.length && !quotes.length))).map(entry => [entry]),
     ];
     return options.filter(replayableCheckEvidence);
+}
+
+/** Local labels retain their surrounding object, without recording changing text elsewhere on the page. */
+function contextualTextEvidence(observation: Observation, claim: string, represented: CheckEvidence[]): CheckEvidence[] {
+    const unquoted = claim.replace(/"(?:\\.|[^"\\])*"|“[^”]*”/g, '');
+    const labels = [...new Set([...unquoted.matchAll(/\b\p{Lu}[\p{L}\p{N}_-]{2,}\b/gu)].map(match => match[0]))]
+        .filter(label => !represented.some(entry => [entry.text, entry.value, entry.target?.ariaName].includes(label)));
+    const snippets = new Set<string>();
+    for (const label of labels) {
+        let offset = observation.text.indexOf(label);
+        for (let occurrence = 0; offset >= 0 && occurrence < 4; occurrence++, offset = observation.text.indexOf(label, offset + label.length)) {
+            let start = Math.max(0, offset - 80);
+            let end = Math.min(observation.text.length, offset + label.length + 80);
+            while (start > 0 && !/\s/.test(observation.text[start - 1]!)) { start--; }
+            while (end < observation.text.length && !/\s/.test(observation.text[end]!)) { end++; }
+            const text = observation.text.slice(start, end).trim();
+            if (text.length <= 256 && stable(text) === text && observation.text.indexOf(text) === observation.text.lastIndexOf(text)
+                && !observation.transientTexts?.some(transient => text.includes(transient) || transient.includes(text))) { snippets.add(text); }
+        }
+    }
+    return [...snippets].slice(0, 8).map(text => ({ regionVersion: 1, source: 'text', text, region: evidenceRegion(observation, undefined, 1), match: 'contains' }));
 }
 
 /** Positive fragments cannot prove a recognized absence clause; quoted literal wording is still evidence. */
