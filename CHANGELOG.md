@@ -5,6 +5,10 @@
 - Preserve unmarked legacy end-state rules and repeated instruction keys; apply strict checks only to marked new recordings.
 - Compare replay errors against the step start and recorded end. Ignore informational alert roles and warning states.
 - Exclude toast/live-region contents, relative times and counters from required anchors; record count reductions for repeated controls.
+- Wait for visible loading before judging or replaying checks; time out persistent loading without a product verdict.
+- Omit unrelated chrome and long whole-page duplicates from evidence options; reference existing element numbers instead of duplicating fields.
+- Restore bounded legacy names for unnamed scroll containers while retaining their full page text.
+- Keep recognized absence/negative clauses unverified, including older positive-fragment evidence; preserve quoted literal wording.
 - Record compound factual check evidence and unique exact page excerpts, with normalized new regions and compact evidence choices.
 
 - When no action is proposed, review the strongest activation control independently of completed fields in the target ranking. Keep required-action scope, prior activation counts and the 0.75 execution audit.

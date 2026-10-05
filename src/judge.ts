@@ -65,7 +65,8 @@ const FAIL = { support: 0.6 };
  * Trusted `reference` data turns an opinion into a comparison with ground truth.
  */
 export async function judgeClaim(models: Models, observation: Observation, claim: string, reference: unknown, signal: AbortSignal, priorActions: PriorActions = []): Promise<CheckVerdict> {
-    const candidates = checkEvidenceOptions(observation, claim);
+    const recordable = replayableCheckClaim(claim);
+    const candidates = recordable ? checkEvidenceOptions(observation, claim) : [];
     const state = {
         claim,
         ...(reference !== undefined ? { reference } : {}),
@@ -85,13 +86,13 @@ export async function judgeClaim(models: Models, observation: Observation, claim
             },
         },
         region: { type: 'choice', instructions: REGION, criteria: { open: 'The relevant region is open and visible, regardless of its contents', closed: 'The relevant region is not open in the current view', unknown: 'The region or its visibility cannot be established' } },
-        evidence: { type: 'choice', instructions: 'Which current-page evidence option directly proves EVERY part of claim? An option may combine several quotes or fields; every part must be covered. Select none for absence, indirect summaries or uncertain evidence. This choice does not decide the verdict.', criteria: { none: 'No complete directly recheckable evidence', ...Object.fromEntries(candidates.map((candidate, i) => [String(i), JSON.stringify(candidate.map(({ target, ...entry }) => ({ ...entry, ...(target ? { role: target.role } : {}) })))])) } },
+        ...(recordable ? { evidence: { type: 'choice' as const, instructions: 'Which option directly proves EVERY part of claim? An element number references page.elements by i, including its exact name, value/content and states. Combine pieces only if complete. Select none for absence, indirect or uncertain proof. This choice does not decide the verdict.', criteria: { none: 'No complete directly recheckable evidence', ...Object.fromEntries(candidates.map((candidate, i) => [String(i), JSON.stringify(candidate.map(entry => entry.target ? { element: resolveTarget(entry.target, observation, true)?.i } : { source: entry.source, text: entry.text }))])) } } } : {}),
     }, signal, 'check');
     const holds = probabilityOf(answers.holds);
     const support = choiceOf(answers.support);
     const region = choiceOf(answers.region);
     const selection = choiceOf(answers.evidence);
-    const selected = selection && (selection.probabilities[selection.choice] ?? 0) >= 0.7 ? candidates[Number(selection.choice)] : undefined;
+    const selected = recordable && selection && (selection.probabilities[selection.choice] ?? 0) >= 0.7 ? candidates[Number(selection.choice)] : undefined;
     const verdict = { holds: Math.round(holds * 100) / 100, support: support?.choice ?? 'unknown', pSupport: Math.round((support?.probabilities[support.choice] ?? 0) * 100) / 100, region: (region?.choice ?? 'unknown') as CheckVerdict['region'], pRegion: Math.round((region?.probabilities[region.choice] ?? 0) * 100) / 100, ...(selected ? { evidence: selected } : {}) };
     if (holds >= PASS.holds && verdict.support === 'supports' && verdict.pSupport >= PASS.support) { return { passed: true, uncertain: false, ...verdict }; }
     if (verdict.support === 'contradicts' && verdict.pSupport >= FAIL.support) { return { passed: false, uncertain: false, ...verdict }; }
@@ -126,10 +127,15 @@ export function checkEvidenceOptions(observation: Observation, claim: string): C
         ...(combined.length > 1 && combined.length <= 8 ? [combined] : []),
         ...quotes.map(entry => [entry]),
         ...relevant.slice(0, 16).map(entry => [entry]),
-        ...candidates.filter(entry => entry.source !== 'element').map(entry => [entry]),
-        ...candidates.filter(entry => entry.source === 'element' && !relevant.includes(entry)).slice(0, 12).map(entry => [entry]),
+        ...candidates.filter(entry => entry.source !== 'element' && (lower.includes(entry.text.toLowerCase()) || (entry.source === 'text' && entry.text.length <= 512 && !relevant.length && !quotes.length))).map(entry => [entry]),
     ];
     return options.filter(replayableCheckEvidence);
+}
+
+/** Positive fragments cannot prove a recognized absence clause; quoted literal wording is still evidence. */
+export function replayableCheckClaim(claim: string): boolean {
+    const unquoted = claim.replace(/"(?:\\.|[^"\\])*"|“[^”]*”/g, '');
+    return !/\b(?:not|never|no longer|only|without)\b|不存在|没有|未显示|不显示|不包含|未包含|只有|仅有|不得|从未/i.test(unquoted);
 }
 
 /** A clipped quote or missing target cannot supply replay proof, even if an older recipe stored it. */

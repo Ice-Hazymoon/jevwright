@@ -84,6 +84,8 @@ document.getElementById('tab').onclick = () => { document.getElementById('browse
 `);
         case '/integrity-audit':
             return layout('Draft editor', '<label>Draft<input id="draft"></label><label>Reference<input id="reference"></label><button id="store">Store draft</button>', `document.getElementById('store').onclick = () => send('/api/draft-validation', { draft: document.getElementById('draft').value });`);
+        case '/compatibility-scroller':
+            return layout('Scrollable workspace', '<div style="height:80px;overflow-y:auto"><p>' + 'Reference content '.repeat(150) + 'Final visible record</p></div>');
         case '/compatibility-editor':
             return layout('Writing workspace', '<section aria-label="Writing area"><div contenteditable="true" role="textbox" aria-label="Document"><p>First passage</p><p><br></p><p>Final passage</p></div></section>');
         case '/integrity-region':
@@ -93,6 +95,8 @@ document.getElementById('tab').onclick = () => { document.getElementById('browse
                 const bug = ${JSON.stringify(bug)};
                 if (bug === 'existing-notice') document.getElementById('error').innerHTML = '<p role=\"status\">Reference notice</p>';
                 if (bug === 'counter') document.getElementById('toggle').textContent = 'Count 1';
+                if (bug === 'negative-control') document.getElementById('error').innerHTML = '<button id="forbidden" hidden>Delete draft</button>';
+                if (bug === 'evidence-noise') document.getElementById('error').innerHTML = '<h2>Other records</h2><p>' + 'Other content '.repeat(250) + '</p><a href="/items">Unrelated navigation</a>';
                 document.getElementById('toggle').onclick = e => { if (bug !== 'state') e.target.setAttribute('aria-expanded', 'true'); };
                 document.getElementById('save').onclick = async () => {
                     if (bug === '500') await fetch('/api/integrity', { method: 'POST' });
@@ -115,8 +119,8 @@ document.getElementById('tab').onclick = () => { document.getElementById('browse
             `);
         case '/attribution-regions': {
             const region = url.searchParams.get('region') ?? 'loading';
-            const content = '<section aria-label="Delivery records"><p>' + (region === 'loading' ? 'Fetching records…' : region === 'empty' ? 'Nothing has arrived' : 'Record ZX-71') + '</p></section>';
-            return layout('Dispatch workspace', region === 'collapsed' ? '<details><summary>Delivery records</summary>' + content + '</details>' : region === 'unselected' ? '<div role="tablist"><button role="tab" aria-selected="true">Overview</button><button role="tab" aria-selected="false">Delivery records</button></div><section aria-label="Overview">Welcome</section><div hidden>' + content + '</div>' : content, url.searchParams.has('resolve') ? `setTimeout(() => document.querySelector('section p').textContent = 'Record ZX-71', 1200);` : '');
+            const content = '<section aria-label="Delivery records"' + (url.searchParams.get('resolve') === 'slow' ? ' aria-busy="true"' : '') + '><p>' + (region === 'loading' ? 'Fetching records…' : region === 'empty' ? 'Nothing has arrived' : 'Record ZX-71') + '</p></section>';
+            return layout('Dispatch workspace', region === 'collapsed' ? '<details><summary>Delivery records</summary>' + content + '</details>' : region === 'unselected' ? '<div role="tablist"><button role="tab" aria-selected="true">Overview</button><button role="tab" aria-selected="false">Delivery records</button></div><section aria-label="Overview">Welcome</section><div hidden>' + content + '</div>' : content, url.searchParams.has('resolve') ? `setTimeout(() => { document.querySelector('section p').textContent = 'Record ZX-71'; document.querySelector('section').removeAttribute('aria-busy'); }, ${url.searchParams.get('resolve') === 'slow' ? 21000 : 1200});` : '');
         }
         case '/attribution-segments':
             return layout('Access challenge', '<p>Access sequence: 681942</p><div>' + Array.from({ length: 6 }, (_, i) => '<input aria-label="Segment ' + (i + 1) + '" maxlength="1" autocomplete="one-time-code">').join('') + '</div><output id="result"></output>', `const fields = [...document.querySelectorAll('input')]; fields.forEach((field, i) => field.oninput = () => { if (field.value && i < fields.length - 1) fields[i + 1].focus(); if (fields.map(f => f.value).join('') === '681942') { document.getElementById('result').textContent = 'Access granted'; fields.forEach(f => f.remove()); } });`);

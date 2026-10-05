@@ -231,7 +231,8 @@ export async function readSurface(page: Page | Frame, scope?: ElementHandle<Elem
             const preceding = element.previousElementSibling;
             const near = labels || (preceding?.matches('label, span') && !preceding.children.length ? text(preceding) : '');
             const scrolling = /auto|scroll/.test(css.overflowY) && element.scrollHeight > element.clientHeight + 1;
-            const name = label || labelled || labels || group || (field ? element.getAttribute('placeholder') ?? '' : rendered.length <= 160 ? rendered : scrolling ? text(element.firstElementChild ?? element) : '');
+            // Legacy unnamed scroll recipes use a 60-character prefix; full content remains in page text.
+            const name = label || labelled || labels || group || (field ? element.getAttribute('placeholder') ?? '' : rendered.length <= 160 ? rendered : scrolling ? text(element.firstElementChild ?? element).slice(0, 60) : '');
             const draggable = element instanceof HTMLElement && draggableOf(element);
             const container = !nativeRole && !actionRoles.has(role) && !draggable && !interactiveParent(element) && b.width >= 24 && b.height >= 24 && !element.matches('html,body,main,header,footer,nav');
             const emptyBox = container && !rendered && !element.children.length && (css.backgroundColor !== 'rgba(0, 0, 0, 0)' || ['borderTopWidth', 'borderRightWidth', 'borderBottomWidth', 'borderLeftWidth', 'outlineWidth'].some(key => parseFloat(Reflect.get(css, key) as string) > 0));

@@ -215,9 +215,9 @@ missing anchors. Confirm the cause with an auto run; a mismatch alone does not e
 - Scroll searches use a container-sized budget, share at most 120 seconds per step, and stop after 500 viewports or five unchanged positions. Missing goals fail explicitly.
 - Desktop defaults to 1280×900. Use `device: "mobile"` for touch and a mobile user agent, or provide a custom device.
 - Page values can be entered only when their exact text appears in the current observation. Replay re-reads them from recorded surrounding text; changed or ambiguous sources need an auto run. Declared secrets remain available only through their keys.
-- `check` requires the asserted content to be visible. A count or saved-button state cannot prove what another tab contains.
+- `check` waits up to 15 additional seconds per observation for visible loading to finish; persistent loading is a timeout. `check` requires the asserted content to be visible. A count or saved-button state cannot prove what another tab contains.
 - Failed checks receive a second look. Visible contradictions, or missing expected content in an open visible region, are `product`; a collapsed or unopened region is `agent`. Uncertain region evidence receives adjudication.
-- Compound factual checks can record several fields or exact page quotes. Replay rechecks every selected piece in its recorded region. Missing direct evidence remains `unverified`.
+- Compound factual checks can record several fields or exact page quotes. Replay rechecks every selected piece in its recorded region. Missing direct evidence and recognized absence or negative clauses remain `unverified`.
 - `check` is a model judgment in auto/AI mode. Replay verifies recorded direct evidence; checks without it remain `unverified`. Exact values (money, multilingual text, line breaks) and negative claims belong in `verify`.
 - New recordings bind app routes to the run’s `baseURL`, so changing the host or port alone does not invalidate the route check. Path, sorted query and recorded effects must still match. Routes to other origins remain literal. Unmarked legacy routes retain path-only checks.
 - Chromium only.

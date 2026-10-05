@@ -15,7 +15,7 @@ import { newTestContext, settle } from './browser.ts';
 import { createDownloads } from './downloads.ts';
 import { JevwrightError } from './errors.ts';
 import { secretSurface } from './dom.ts';
-import { actedOnTarget, adjudicateClaim, checkEvidenceMatches, judgeClaim, replayableCheckEvidence } from './judge.ts';
+import { actedOnTarget, adjudicateClaim, checkEvidenceMatches, judgeClaim, replayableCheckClaim, replayableCheckEvidence } from './judge.ts';
 import { createModels, emptyUsage, ModelError } from './models.ts';
 import { createMonitor } from './monitor.ts';
 import { observe, shortUrl } from './observe.ts';
@@ -526,14 +526,25 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
             case 'check': {
                 const { key, occurrence } = keysByIndex.get(index)!;
                 const claim = fillTemplate(step.assertion, displayData);
+                const observeReady = async () => {
+                    let observed = await observe(page!, { redact });
+                    const deadline = Date.now() + 15000;
+                    while (observed.busy && Date.now() < deadline) {
+                        signal.throwIfAborted();
+                        await settle(page!, monitor, { maxMs: Math.min(8000, deadline - Date.now()) });
+                        observed = await observe(page!, { redact });
+                    }
+                    if (observed.busy) { throw new AttemptError('timeout', `Visible content remained loading before checking: ${claim}`); }
+                    return observed;
+                };
                 if (!models) {
                     result.source = 'replay';
                     const recorded = options.recording && findStepRecording(options.recording.steps, { instruction: `check:${step.assertion}` }, occurrence);
-                    if (!recorded?.checkEvidence?.length || !replayableCheckEvidence(recorded.checkEvidence) || recorded.checkClaim !== claim || step.reference) {
+                    if (!replayableCheckClaim(claim) || !recorded?.checkEvidence?.length || !replayableCheckEvidence(recorded.checkEvidence) || recorded.checkClaim !== claim || step.reference) {
                         result.status = 'unverified';
                         result.error = 'Check has no directly recheckable evidence for this claim; record it with an auto run';
                     } else {
-                        const observed = await observe(page!, { redact });
+                        const observed = await observeReady();
                         result.evidence = { claim, checked: recorded.checkEvidence };
                         if (!checkEvidenceMatches(recorded.checkEvidence, observed)) {
                             result.status = 'failed'; result.failure = 'assertion'; result.error = `Recorded check evidence is no longer visible: ${claim}`;
@@ -544,14 +555,14 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
                 result.source = 'ai';
                 const reference = step.reference ? await step.reference(runContext(index)) : undefined;
                 const priorActions = steps.filter(entry => entry.kind === 'act' && entry.status === 'passed' && entry.actions?.some(action => action.ok)).slice(-3).map(entry => ({ step: entry.label, history: entry.actions!.filter(action => action.ok).slice(-12).map(action => ({ action: action.tool, ...(action.element ? { element: action.element } : {}), ...(action.destination ? { destination: action.destination } : {}) })) }));
-                let observed = await observe(page!, { redact });
+                let observed = await observeReady();
                 let verdict = await judgeClaim(models, observed, claim, reference, signal, priorActions);
                 const attempts: unknown[] = [verdict];
                 if (!verdict.passed || verdict.uncertain) {
                     // A second look after the page settles; UI updates can trail the data.
                     await page!.waitForTimeout(1500);
                     await settle(page!, monitor);
-                    const next = await observe(page!, { redact });
+                    const next = await observeReady();
                     if (next.signature !== observed.signature) {
                         observed = next;
                         verdict = await judgeClaim(models, observed, claim, reference, signal, priorActions);
@@ -559,7 +570,7 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
                     }
                 }
                 if (verdict.uncertain) {
-                    observed = await observe(page!, { redact });
+                    observed = await observeReady();
                     const tie = await adjudicateClaim(models, observed, claim, reference, signal, priorActions);
                     attempts.push({ adjudicated: tie });
                     verdict = { ...verdict, evidence: undefined, passed: tie.passed, support: tie.support, note: tie.reason, ...(tie.region ? { region: tie.region, pRegion: 1 } : {}) };

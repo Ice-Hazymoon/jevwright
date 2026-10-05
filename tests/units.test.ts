@@ -795,6 +795,16 @@ describe('legacy end-state compatibility', () => {
         expect(endMatches(end, after, before).matched).toBe(true);
         expect(endMatches(end, before, before).matched).toBe(false);
     });
+    it('bounds unnamed scroll-container names while retaining their page text', async () => {
+        const context = await newTestContext(browser, { viewport: { width: 1280, height: 900 }, dialogs: 'accept' });
+        try {
+            const page = await context.newPage(); await page.goto(app.origin + '/compatibility-scroller');
+            const shown = await observe(page);
+            const container = shown.elements.find(element => element.scroll)!;
+            expect(container.name.length).toBeLessThanOrEqual(60);
+            expect(shown.text).toContain('Final visible record');
+        } finally { await context.close(); }
+    });
     it('supplies legacy inherited editor paragraphs only for old end-state matching', async () => {
         const context = await newTestContext(browser, { viewport: { width: 1280, height: 900 }, dialogs: 'accept' });
         try {
@@ -909,6 +919,11 @@ describe('integrity regressions', () => {
         const clipped = { ...observation, text: 'Long content…', notices: ['Long notice…'], headings: ['Long heading…'], elements: [{ i: 0, ref: 'e1', role: 'textbox', name: 'Draft', value: 'Long value…' }] };
         expect(checkEvidenceCandidates(clipped)).toEqual([]);
     });
+    it('keeps absence clauses unverified without treating quoted wording as negation', async () => {
+        const { replayableCheckClaim } = await import('../src/judge.ts');
+        expect(replayableCheckClaim('The page offers "Save draft", not "Delete draft"')).toBe(false);
+        expect(replayableCheckClaim('The warning says "Do not share this value"')).toBe(true);
+    });
     it('binds new check evidence to the same route across generated record ids', async () => {
         const { checkEvidenceCandidates, checkEvidenceMatches } = await import('../src/judge.ts');
         const field = { i: 0, ref: 'e1', role: 'textbox', name: 'Draft', value: 'Original' };
@@ -916,6 +931,17 @@ describe('integrity regressions', () => {
         const evidence = checkEvidenceCandidates(before).filter(entry => entry.source === 'element');
         expect(checkEvidenceMatches(evidence, { ...before, url: '/draft/ef56gh78' })).toBe(true);
         expect(checkEvidenceMatches(evidence, { ...before, url: '/review/ef56gh78' })).toBe(false);
+    });
+    it('omits unrelated page chrome from factual field evidence options', async () => {
+        const context = await newTestContext(browser, { viewport: { width: 1280, height: 900 }, dialogs: 'accept' });
+        try {
+            const page = await context.newPage(); await page.goto(app.origin + '/integrity?bug=evidence-noise');
+            await page.getByRole('textbox', { name: 'Draft', exact: true }).fill('Original');
+            const { checkEvidenceOptions } = await import('../src/judge.ts');
+            const options = checkEvidenceOptions(await observe(page), 'The Draft field shows Original');
+            expect(options.flat().some(entry => entry.value === 'Original')).toBe(true);
+            expect(options.flat().some(entry => entry.text.includes('Other content') || entry.text.includes('Unrelated navigation'))).toBe(false);
+        } finally { await context.close(); }
     });
     it('offers exact page quotes when unrelated page text exceeds the observation budget', async () => {
         const { checkEvidenceOptions, checkEvidenceMatches } = await import('../src/judge.ts');

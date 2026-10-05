@@ -2014,3 +2014,30 @@ it.each(['healthy', 'missing', 'selection-only'])('merge reviews pending control
     if (variant === 'missing') { expect(result.cause).toBe('product'); }
     expect(result.attempts[0]?.steps[0]?.actions?.filter(action => action.element === 'button "Confirm reservation"' && action.ok)).toHaveLength(selection ? 0 : 1);
 });
+
+it('waits for visible loading content before judging a factual check', async () => {
+    const spec: TestSpec<void> = { id: 'slow-visible-record', title: 'Read the delivery record', risk: 'Loading content is mistaken for a missing product result', start: '/attribution-regions?region=loading&resolve=slow', steps: () => [check('The delivery records show Record ZX-71')] };
+    const policy = (view: View) => view.text.includes('Record ZX-71') ? { holds: 0.99, support: 'supports' as const, region: 'open' as const } : { holds: 0.01, support: 'not_shown' as const, region: 'open' as const };
+    const result = (await suite([spec], { policy }).run).results[0]!;
+    expect(result.status, result.summary).toBe('passed');
+});
+
+it('keeps field proof in the recording without duplicating values in evidence choices', async () => {
+    const spec = profileTest();
+    const execution = suite([spec], { recordingsDir: join(root, 'compact-proof') });
+    const result = (await execution.run).results[0]!;
+    expect(result.status, result.summary).toBe('passed');
+    const call = execution.calls.find(call => call.questions.includes('evidence'))!;
+    expect(call.view.instructions).not.toContain('Grace Hopper');
+    const stored = JSON.parse(await readFile(join(root, 'compact-proof/profile-save.json'), 'utf8'));
+    expect(stored.steps.find((entry: { checkEvidence?: unknown[] }) => entry.checkEvidence)?.checkEvidence[0].value).toBe('Grace Hopper');
+});
+
+it('does not replay positive fragments as proof of a negative clause', async () => {
+    const directory = join(root, 'negative-proof');
+    const spec = (reveal: boolean): TestSpec<void> => ({ id: 'negative-control', title: 'Check the available actions', risk: 'A newly visible forbidden action escapes replay', start: '/integrity?bug=negative-control', ready: async ({ page }) => { if (reveal) await page.locator('#forbidden').evaluate(element => (element as HTMLElement).hidden = false); }, steps: () => [check('The page offers "Save draft", not "Delete draft"')] });
+    const seeded = (await suite([spec(false)], { recordingsDir: directory, policy: () => ({ holds: 0.99, support: 'supports', region: 'open' }) }).run).results[0]!;
+    expect(seeded.status, seeded.summary).toBe('passed');
+    const replayed = (await suite([spec(true)], { recordingsDir: directory, mode: 'replay' }).run).results[0]!;
+    expect(replayed.status, replayed.summary).toBe('unverified');
+});

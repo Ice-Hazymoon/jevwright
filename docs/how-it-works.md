@@ -163,12 +163,14 @@ A `check` asks Jev three independent questions: does the claim hold, how does th
 - The last three completed action steps supply successful actions to identify the subject and opened view. Those actions do not prove the asserted resulting content. Product-looking failures still undergo the existing target audit.
 - The report keeps the observation the final verdict was judged against.
 
-With a `reference`, the judge compares the page with your trusted data.
+With a `reference`, the judge compares the page with your trusted data. Before judging or replaying evidence,
+each check observation waits up to 15 additional seconds while visible content is loading. Persistent loading is a timeout,
+so an unsettled page cannot supply a product-missing verdict.
 
 In auto/AI mode, a separate evidence choice records the exact quoted page text and its visible region
-when one evidence option directly supports the whole claim. Options can combine up to six named fields or
-several exact page quotes and controls. The model must cover every clause; positive quotes cannot prove absence.
-Evidence options keep target descriptors in the recording rather than duplicating them in the model request. This choice does not change the existing verdict.
+when one evidence option directly supports the whole claim. Options omit unrelated navigation and long whole-page duplicates. Options can combine up to six named fields or
+several exact page quotes and controls. The model must cover every clause. Recognized absence or negative clauses cannot record positive-fragment proof and remain unverified in replay; quoted literal wording is excluded from this conservative language guard.
+Evidence choices reference the element numbers already in the page state. Full target descriptors and field values remain in the recording. This choice does not change the existing verdict.
 Replay deterministically checks every selected quote, its recorded container/nearby context and any field value/state/content.
 New evidence marks its region normalization: generated route ids and unstable container ids do not bind it
 to a previous fixture. Unmarked evidence keeps its original literal region comparison. Exact quote excerpts

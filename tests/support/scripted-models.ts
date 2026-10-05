@@ -185,7 +185,13 @@ function answer(id: string, question: EvaluationQuestion, belief: Belief, view: 
     if (id === 'support') { chosen = belief.support ?? 'not_shown'; }
     if (id === 'evidence') {
         const quoted = (option: string) => {
-            try { const entry = JSON.parse(String(question.criteria[option])); return (Array.isArray(entry) ? entry : [entry]) as Array<{ text?: string; value?: string; source?: string }>; } catch { return []; }
+            try {
+                const entry = JSON.parse(String(question.criteria[option]));
+                return (Array.isArray(entry) ? entry : [entry]).map(entry => {
+                    const element = typeof entry.element === 'number' ? view.elements.find(element => element.i === entry.element) : undefined;
+                    return element ? { source: 'element', text: element.name, value: element.value } : entry;
+                }) as Array<{ text?: string; value?: string; source?: string }>;
+            } catch { return []; }
         };
         const fields = (option: string) => quoted(option).filter(entry => entry.source === 'element' && entry.value !== undefined && view.claim?.includes(entry.text ?? '') && view.claim?.includes(entry.value));
         const field = options.toSorted((a, b) => fields(b).length - fields(a).length).find(option => fields(option).length);
