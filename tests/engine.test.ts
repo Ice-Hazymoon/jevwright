@@ -73,7 +73,7 @@ it.each([false, true])('fresh respects exact field edits without losing a reques
 });
 
 it.each([0.29, 0.89])('fresh rejects an unrequested commit when a finished stage still proposes activation (%s)', async (done) => {
-    const spec: TestSpec<void> = { id: 'fresh-competing-commit', title: 'Edit a draft', risk: 'An activation overrides a completed edit stage', start: '/fresh-edit', data: { alias: 'Pending alias', notes: 'Opening passage\n\nFinal passage' }, steps: () => [act('Change Alias to {alias} and Notes to {notes}'), verify('draft remains uncommitted', ({ page }) => page.locator('#commits').textContent().then(text => text === '0'), { timeoutMs: 1 })] };
+    const spec: TestSpec<void> = { id: `fresh-competing-commit-${Math.round(done * 100)}`, title: 'Edit a draft', risk: 'An activation overrides a completed edit stage', start: '/fresh-edit', data: { alias: 'Pending alias', notes: 'Opening passage\n\nFinal passage' }, steps: () => [act('Change Alias to {alias} and Notes to {notes}'), verify('draft remains uncommitted', ({ page }) => page.locator('#commits').textContent().then(text => text === '0'), { timeoutMs: 1 })] };
     const policy = (view: View) => view.history.some(entry => entry.value === 'notes') ? { done, achieved: done < 0.5 ? 0.2 : 0.79, remaining: 0.51, needed: 0.59, tool: 'click', target: (element: ViewElement) => element.name === 'Commit entry', delivered: 0.99 } : freshEditPolicy(view);
     const result = (await suite([spec], { policy }).run).results[0]!;
     expect(result.status, result.summary).toBe('passed');
@@ -96,18 +96,36 @@ it('fresh stops exact field editing before an unrequested trailing Enter', async
     expect(result.attempts[0]?.steps[0]?.actions).toHaveLength(2);
 });
 
-it('fresh reviews separators when several supplied values compose one field', async () => {
-    const spec: TestSpec<void> = { id: 'fresh-composed-separator', title: 'Compose two paragraphs', risk: 'A missing separator is mistaken for complete editing', start: '/fresh-edit', data: { first: 'Opening passage', second: 'Final passage' }, steps: () => [act('Replace Notes with {first}, then one blank paragraph, then {second}'), verify('exact separator and uncommitted draft', async ({ page }) => await page.getByRole('textbox', { name: 'Notes' }).inputValue() === 'Opening passage\n\nFinal passage' && await page.locator('#commits').textContent() === '0')] };
+it.each([[false, false], [true, false], [false, true]])('fresh reviews separators when several supplied values compose one field (%s, %s)', async (damaged, mirror) => {
+    const spec: TestSpec<void> = { id: `fresh-composed-separator-${damaged}-${mirror}`, title: 'Compose two paragraphs', risk: 'A missing separator is mistaken for complete editing', start: `/fresh-edit${mirror ? '?mirror=1' : ''}`, data: { first: 'Opening passage', second: 'Final passage' }, steps: () => [act('Replace Notes with {first}, then one blank paragraph, then {second}'), verify('exact separator and uncommitted draft', async ({ page }) => await page.getByRole('textbox', { name: 'Notes' }).inputValue() === 'Opening passage\n\nFinal passage' && await page.locator('#commits').textContent() === '0')] };
     const policy = (view: View) => {
         const target = (element: ViewElement) => element.name === 'Notes';
         if (!view.history.some(entry => entry.value === 'first')) { return { tool: 'type', target, value: 'first' }; }
-        if (!view.history.some(entry => entry.action === 'press_enter')) { return { tool: 'press_enter', target }; }
+        if (!view.history.some(entry => entry.action === (damaged ? 'press' : 'press_enter'))) { return damaged ? { tool: 'press', key: 'Shift+ArrowLeft' } : { tool: 'press_enter', target }; }
         if (!view.history.some(entry => entry.value === 'second')) { return { tool: 'type', target, value: 'second' }; }
         return { done: 0.8, achieved: 0.8, remaining: 0.2, needed: 0, tool: 'none', delivered: view.elements.some(element => element.value === 'Opening passage\n\nFinal passage') ? 0.99 : 0.01 };
     };
-    const result = (await suite([spec], { policy, helper: view => ({ outcome: 'act', tool: 'type', element: view.elements.find(element => element.name === 'Notes')?.i ?? null, value_key: null, text: 'Opening passage\n\nFinal passage', reason: 'The composed field needs the requested blank paragraph' }) }).run).results[0]!;
+    const result = (await suite([spec], { policy, helper: (view) => {
+        const field = view.elements.find(element => element.name === 'Notes');
+        return !view.history.some(entry => entry.action === 'select_text')
+            ? { outcome: 'act', tool: 'select_text', element: field?.i ?? null, value_key: null, text: field?.value ?? null, reason: 'Select the damaged whole field before replacement' }
+            : { outcome: 'act', tool: 'type', element: field?.i ?? null, value_key: null, text: 'Opening passage\n\nFinal passage', reason: 'Replace the selected field with the exact authorized paragraphs' };
+    } }).run).results[0]!;
     expect(result.status, result.summary).toBe('passed');
     expect(result.attempts[0]?.steps[0]?.actions?.at(-1)?.source).toBe('llm');
+});
+
+it('fresh does not force composition after intentional replacements in one field', async () => {
+    const spec: TestSpec<void> = { id: 'fresh-intentional-replacement', title: 'Replace an intermediate draft value', risk: 'Input history incorrectly requires retaining superseded text', start: '/fresh-edit', data: { first: 'Intermediate passage', second: 'Final passage' }, steps: () => [act('Set Notes to {first}, then replace its entire value with {second}'), verify('only final replacement remains', ({ page }) => page.getByRole('textbox', { name: 'Notes' }).inputValue().then(value => value === 'Final passage'))] };
+    const policy = (view: View) => {
+        const target = (element: ViewElement) => element.name === 'Notes';
+        if (!view.history.some(entry => entry.value === 'first')) { return { tool: 'type', target, value: 'first' }; }
+        if (!view.history.some(entry => entry.action === 'press')) { return { tool: 'press', key: 'ControlOrMeta+a' }; }
+        return view.history.some(entry => entry.value === 'second') ? { done: 0.99, needed: 0, tool: 'none' } : { tool: 'type', target, value: 'second' };
+    };
+    const result = (await suite([spec], { policy, helper: () => ({ outcome: 'step_already_done', tool: null, element: null, value_key: null, text: null, reason: 'The requested final replacement supersedes the intermediate value' }) }).run).results[0]!;
+    expect(result.status, result.summary).toBe('passed');
+    expect(result.attempts[0]?.steps[0]?.actions).toHaveLength(3);
 });
 
 it.each(['warning', 'new-error'])('fresh reviews declared write delivery without suppressing a new error (%s)', async (bug) => {
