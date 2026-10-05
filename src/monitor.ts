@@ -179,7 +179,7 @@ export function createMonitor(context: BrowserContext, options: MonitorOptions) 
         if (!ofApp(request.url())) { return; }
         const status = response.status();
         if (record && status >= 400 && status < 500 && !expected(request.method(), record.path, status, record.step)) {
-            const evidence = response.text().then(body => {
+            const evidence = response.text().then((body) => {
                 if (/validation|invalid|required|unprocessable/i.test(body)) { record.validationError = safe(body).slice(0, 600); }
             }).catch(() => undefined);
             responseEvidence.add(evidence);

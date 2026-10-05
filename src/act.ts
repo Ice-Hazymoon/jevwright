@@ -216,7 +216,7 @@ async function awaitEnd(input: ActInput, end: import('./recording.ts').StepEnd, 
         input.signal.throwIfAborted();
         if (end.strict && !input.expectError) {
             const errors = await newReplayErrors(input.page, end, start, priorErrors);
-            if (errors.length) { return { checked: true, matched: false, failure: 'error-shown', missing: ['new error during replay: ' + (input.redact?.text(errors.join(' | ')) ?? errors.join(' | '))] }; }
+            if (errors.length) { return { checked: true, matched: false, failure: 'error-shown', missing: [`new error during replay: ${input.redact?.text(errors.join(' | ')) ?? errors.join(' | ')}`] }; }
         }
         const result = endMatches(end, await observeEnd(input, !end.strict), start, input.values, input.baseURL);
         if (result.matched || performance.now() >= deadline) { return result; }
@@ -229,6 +229,7 @@ async function observeEnd(input: ActInput, legacyEnd = false): Promise<Observati
     const observation = await observe(input.page, { redact: input.redact, instruction: input.instruction, legacyEnd });
     for (const element of observation.elements.filter(element => element.ref && ['textbox', 'searchbox', 'spinbutton'].includes(element.role))) {
         const locator = domLocator(input.page, element.ref!);
+        // eslint-disable-next-line unicorn/prefer-dom-node-text-content -- Playwright locator.innerText reads the rendered text of a contenteditable target
         element.value = await locator.inputValue({ timeout: 500 }).catch(() => locator.innerText({ timeout: 500 }).catch(() => element.value));
     }
     return observation;
@@ -302,7 +303,7 @@ async function replaySteps(input: ActInput, recorded: RecordedAction[], actions:
 /** A changed role cannot make unchanged notice text a newly introduced error. */
 async function newReplayErrors(page: Page, end: import('./recording.ts').StepEnd, start?: Observation, priorErrors?: string[]): Promise<string[]> {
     const notices = [...start?.notices ?? [], ...end.notices ?? []].map(text => text.trim().replace(/\s+/g, ' '));
-    return (await replayErrors(page)).filter(error => {
+    return (await replayErrors(page)).filter((error) => {
         if (priorErrors?.includes(error) || end.errors?.includes(error)) { return false; }
         const surface = JSON.parse(error) as { text: string; related: string[] };
         return ![surface.text, ...surface.related].filter(Boolean).some(text => notices.includes(text.trim().replace(/\s+/g, ' ')));
@@ -311,7 +312,7 @@ async function newReplayErrors(page: Page, end: import('./recording.ts').StepEnd
 
 /** Read error surfaces before and after replay, so a stale validation message does not fail a later step. */
 async function replayErrors(page: Page): Promise<string[]> {
-    const errors = await Promise.all(page.frames().map(async frame => {
+    const errors = await Promise.all(page.frames().map(async (frame) => {
         if (frame !== page.mainFrame()) {
             const host = await frame.frameElement().catch(() => undefined);
             if (!host) { return []; }
@@ -327,15 +328,19 @@ async function replayErrors(page: Page): Promise<string[]> {
                     const shadow = element.shadowRoot ?? captured?.get(element);
                     if (shadow) { walk(shadow); }
                     if (!element.matches('[role=alert], [role=alertdialog], [aria-invalid=true], .error, .field-error, .validation-error, [data-error], [data-state=error], [data-status=error], [data-type=error]') || element.closest('[aria-hidden=true], [inert]') || !element.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) { continue; }
+                    // eslint-disable-next-line unicorn/prefer-dom-node-text-content -- innerText is the rendered text a user can see; textContent would include hidden text
                     const text = ((element as HTMLElement).innerText ?? '').trim().replace(/\s+/g, ' ');
                     const semantic = element.matches('[aria-invalid=true], .error, .field-error, .validation-error, [data-error], [data-state=error], [data-status=error], [data-type=error]')
                         || /\b(?:error|failed|failure|rejected|invalid|forbidden|could not)\b/i.test(text);
                     if (!semantic || element.matches('[data-state=warning], [data-type=warning], [data-status=warning], [data-type=info], [data-status=info]')) { continue; }
                     const root = element.getRootNode() as Document | ShadowRoot;
-                    const related = element.getAttribute('aria-invalid') === 'true' ? ['aria-errormessage', 'aria-describedby'].flatMap(attribute => (element.getAttribute(attribute) ?? '').split(/\s+/).filter(Boolean)).flatMap(id => {
-                        const message = root.getElementById(id);
-                        return message && message.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }) ? [(message as HTMLElement).innerText ?? ''] : [];
-                    }) : [];
+                    const related = element.getAttribute('aria-invalid') === 'true'
+                        ? ['aria-errormessage', 'aria-describedby'].flatMap(attribute => (element.getAttribute(attribute) ?? '').split(/\s+/).filter(Boolean)).flatMap((id) => {
+                                const message = root.getElementById(id);
+                                // eslint-disable-next-line unicorn/prefer-dom-node-text-content -- innerText is the rendered text a user can see; textContent would include hidden text
+                                return message && message.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }) ? [(message as HTMLElement).innerText ?? ''] : [];
+                            })
+                        : [];
                     errors.push(JSON.stringify({ role: element.getAttribute('role') ?? element.tagName, name: element.getAttribute('aria-label') ?? '', text, invalid: element.getAttribute('aria-invalid') ?? '', related }));
                 }
             };
@@ -375,7 +380,7 @@ function actionHistory(action: ActionRecord, pageInput = false): Record<string, 
 async function decideLoop(input: ActInput, models: Models, actions: ActionRecord[], rounds: Round[], recording: RecordedAction[], start: StepStart): Promise<Omit<ActResult, 'source' | 'actions' | 'rounds' | 'recording'>> {
     const maxActions = input.maxActions ?? 8;
     // One declared submission has code-owned evidence; compound steps can still have later actions.
-    const compound = /\b(?:and|then|also|afterwards)\b|然后|并且|之后|再|以及|[;；]|(?<!\d)[,，]|[,，](?!\d)/i.test(input.instruction.replace(/"(?:\\.|[^"\\])*"|“[^”]*”|‘[^’]*’/g, ''));
+    const compound = /\b(?:and|then|also|afterwards)\b|然后|并且|之后|[再;；]|以及|(?<!\d)[,，]|[,，](?!\d)/i.test(input.instruction.replace(/"(?:\\.|[^"\\])*"|“[^”]*”|‘[^’]*’/g, ''));
     const history = actions.map((action, index) => actionHistory(action, Boolean(input.recorded?.actions[index]?.pageValue)));
     const seen = new Map<string, number>();
     const actionTargets = new Map<ActionRecord, string>();
@@ -492,7 +497,8 @@ async function decideLoop(input: ActInput, models: Models, actions: ActionRecord
         }
         const activations = controlCandidate?.ref ? actions.filter(action => action.ok && actionTargets.get(action) === controlCandidate.ref && ['click', 'double_click', 'press_enter', 'upload'].includes(action.tool)).map(action => ({ action: action.tool, element: action.element ?? describeElement(controlCandidate), ...(action.fileKeys?.length ? { file_keys: JSON.stringify(action.fileKeys) } : {}) })) : [];
         const auditAction = (proposal: Decision, controlActivations: Array<Record<string, string>> = [], controlReview?: string) => actedOnTarget(models, [{
-            step: input.instruction, next_step: input.next ?? null,
+            step: input.instruction,
+            next_step: input.next ?? null,
             history: history.filter(entry => entry.action && !entry.error),
             proposal: { action: proposal.tool, ...(proposal.target ? { element: describeElement(proposal.target) } : {}) },
             context: { page: pageState(observation), target: proposal.target?.i, ...(input.previous ? { previous_step: input.previous } : {}), control_activations: controlActivations, ...(controlReview ? { control_review: controlReview } : {}) },
@@ -1056,7 +1062,7 @@ function resolveDecision(observation: Observation, answers: Record<string, Answe
     const first = words[Number(choiceOf(answers.scroll_start)?.choice)];
     const last = words[Number(choiceOf(answers.scroll_end)?.choice)];
     let phrase = first && last && last.index! >= first.index! ? input.instruction.slice(first.index, last.index! + last[0].length).replace(/[,;]$/, '') : undefined;
-    if (phrase && /^(["“‘']).*["”’']$/.test(phrase)) { phrase = phrase.slice(1, -1); }
+    if (phrase && /^["“‘'].*["”’']$/.test(phrase)) { phrase = phrase.slice(1, -1); }
     const scrollText = probabilityOf(answers.scroll_search) >= 0.5 && phrase && searchTerms(phrase).length ? phrase : undefined;
     const destination = resolved === 'drag' ? observation.elements[Number(choiceOf(answers.destination)?.choice)] : undefined;
     return { tool: resolved, target: TARGETED.has(resolved as Tool) || (resolved === 'scroll' && chosen?.scroll) ? chosen : undefined, ...(destination ? { destination } : {}), ...(resolved === 'upload' && choiceOf(answers.file_group)?.choice === 'all' ? { fileKeys: Object.keys(input.files ?? {}) } : {}), ...(resolved === 'scroll' && scrollText ? { scrollText } : {}), ...(resolved === 'scroll' ? { scrollDirection: choiceOf(answers.scroll_direction)?.choice === 'up' ? 'up' as const : 'down' as const } : {}), ...(resolved === 'type' || resolved === 'select' || resolved === 'upload' ? { valueKey } : {}), source: 'jev' };
@@ -1226,7 +1232,8 @@ async function escalateToLlm(input: ActInput, models: Models, observation: Obser
     if (answer.tool === 'press') {
         const text = answer.key ? keyboardText(answer.key) : undefined;
         if (text !== undefined && !Object.keys(helperText({ ...answer, text: text.repeat(answer.times ?? 1) }, input, observation)).length) { return { outcome: 'impossible', reason: 'Keyboard text requires an authorized literal' }; }
-        return answer.key ? { outcome: 'act', decision: { tool: 'press', target, key: answer.key, times: answer.times ?? 1, source: 'llm' }, reason: answer.reason } : { outcome: 'impossible', reason: 'Helper press needs a key' }; }
+        return answer.key ? { outcome: 'act', decision: { tool: 'press', target, key: answer.key, times: answer.times ?? 1, source: 'llm' }, reason: answer.reason } : { outcome: 'impossible', reason: 'Helper press needs a key' };
+    }
     if (answer.tool === 'select_text') { return answer.text && target?.value?.includes(answer.text) ? { outcome: 'act', decision: { tool: 'select_text', target, literal: answer.text, source: 'llm' }, reason: answer.reason } : { outcome: 'impossible', reason: 'Selection text must occur in the editable field' }; }
     const fileKeys = answer.file_keys?.map(key => originalValueKey(input, key));
     if (fileKeys?.some(key => !key || !Object.hasOwn(input.files ?? {}, key))) { return { outcome: 'impossible', reason: 'helper chose an undeclared file' }; }
@@ -1307,7 +1314,7 @@ function modelEnteredValues(input: ActInput, observation: Observation): Record<s
 
 function uploadPaths(input: ActInput, keys?: readonly string[]): string[] | undefined {
     if (!keys?.length) { return undefined; }
-    return keys.map(key => { const file = input.files?.[key]; if (!file) { throw new Error('Upload requires a declared file key'); } return file.path; });
+    return keys.map((key) => { const file = input.files?.[key]; if (!file) { throw new Error('Upload requires a declared file key'); } return file.path; });
 }
 
 /** Keep connected refs; only a stale target requires semantic relocation. */
@@ -1351,7 +1358,7 @@ function keyChoices(instruction: string): string[] {
 }
 
 function selectionChoices(observation: Observation): string[] {
-    return [...new Set(observation.elements.filter(element => FIELD_ROLES.has(element.role) && element.value && element.inputType !== 'password').flatMap(element => [element.value!, ...element.value!.match(/[^\s]+/g) ?? []]))].slice(0, 80);
+    return [...new Set(observation.elements.filter(element => FIELD_ROLES.has(element.role) && element.value && element.inputType !== 'password').flatMap(element => [element.value!, ...element.value!.match(/\S+/g) ?? []]))].slice(0, 80);
 }
 
 /** Search terms identify instruction entities; they cannot introduce words absent from that instruction. */
@@ -1366,7 +1373,7 @@ function keyboardText(key: string): string | undefined {
     if (/(?:^|\+)(?:ControlOrMeta|Control|Meta|Alt)(?:\+|$)/.test(key)) { return undefined; }
     const final = key.split('+').at(-1)!;
     if (final === 'Space') { return ' '; }
-    const code = /^(?:Key([A-Z])|(?:Digit|Numpad)([0-9]))$/.exec(final);
+    const code = /^(?:Key([A-Z])|(?:Digit|Numpad)(\d))$/.exec(final);
     const text = code ? code[1]?.toLowerCase() ?? code[2]! : [...final].length === 1 ? final : undefined;
     return text && key.includes('Shift+') ? text.toUpperCase() : text;
 }

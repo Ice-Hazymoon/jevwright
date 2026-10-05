@@ -69,10 +69,12 @@ export async function readSurface(page: Page | Frame, scope?: ElementHandle<Elem
         };
         walk(document);
         const slots = new Map<Element, Node[]>(); const slotParents = new Map<Node, Element>();
-        for (const element of all) { if (element instanceof HTMLSlotElement) {
-            const assigned = element.assignedNodes(); slots.set(element, assigned);
-            for (const node of assigned) { slotParents.set(node, element); }
-        } }
+        for (const element of all) {
+            if (element instanceof HTMLSlotElement) {
+                const assigned = element.assignedNodes(); slots.set(element, assigned);
+                for (const node of assigned) { slotParents.set(node, element); }
+            }
+        }
         // Assigned nodes use their rendered slot ancestry, including slots in captured closed roots.
         const parentOf = (element: Element): Element | null => slotParents.get(element) ?? element.parentElement ?? ((element.getRootNode() as ShadowRoot).host ?? null);
         const childrenOf = (element: Element): Node[] => slots.get(element)?.length ? slots.get(element)! : [...(shadows.get(element) ?? element).childNodes];
@@ -124,6 +126,7 @@ export async function readSurface(page: Page | Frame, scope?: ElementHandle<Elem
         };
         // Each subtree contributes its visible text once, rather than being walked again for every ancestor.
         for (const element of all.toReversed()) {
+            // eslint-disable-next-line unicorn/prefer-dom-node-text-content -- innerText is the rendered text a user can see; textContent would include hidden text
             texts.set(element, element instanceof HTMLElement && element.isContentEditable && !element.parentElement?.isContentEditable && !hiddenTree(element) ? element.innerText : !hiddenTree(element) ? childrenOf(element).map(node => node.nodeType === Node.TEXT_NODE ? ownText(node, element) : node instanceof Element ? texts.get(node) ?? '' : '').join(' ').replace(/\s+/g, ' ').trim() : '');
         }
         const text = (element: Element): string => texts.get(element) ?? '';
@@ -139,22 +142,24 @@ export async function readSurface(page: Page | Frame, scope?: ElementHandle<Elem
             if (element.matches('html,body,main,header,footer,nav')) { return ''; }
             const heading = [...element.children].find(child => child.matches('h1,h2,h3,h4,h5,h6,[role=heading]'));
             const name = element.matches('section, [role=region], [role=list], [role=group]') || heading
-                ? element.getAttribute('aria-label') || (heading ? text(heading) : '') : '';
+                ? element.getAttribute('aria-label') || (heading ? text(heading) : '')
+                : '';
             groups.set(element, name); return name;
         };
         const actionRoles = new Set(['button', 'link', 'textbox', 'searchbox', 'combobox', 'checkbox', 'radio', 'switch', 'tab', 'menuitem', 'menuitemcheckbox', 'menuitemradio', 'option', 'slider', 'spinbutton', 'treeitem', 'listbox']);
         const hoverSelectors: string[] = [];
-        const rules = (items: CSSRuleList) => { for (const rule of items) {
-            if (rule instanceof CSSStyleRule && ['display', 'visibility', 'opacity'].some(property => rule.style.getPropertyValue(property))) {
-                for (const selector of rule.selectorText.split(',').filter(selector => /:hover\s+|:hover\s*>/.test(selector))) {
-                    try {
-                        const targets = [...document.querySelectorAll(selector.replaceAll(':hover', ''))];
-                        if (targets.some(target => hiddenTree(target) || styleOf(target).visibility !== 'visible')) { hoverSelectors.push(selector.split(':hover')[0]!.trim()); }
-                    } catch { /* Unsupported selectors cannot establish a revealing hover. */ }
-                }
+        const rules = (items: CSSRuleList) => {
+            for (const rule of items) {
+                if (rule instanceof CSSStyleRule && ['display', 'visibility', 'opacity'].some(property => rule.style.getPropertyValue(property))) {
+                    for (const selector of rule.selectorText.split(',').filter(selector => /:hover\s+|:hover\s*>/.test(selector))) {
+                        try {
+                            const targets = [...document.querySelectorAll(selector.replaceAll(':hover', ''))];
+                            if (targets.some(target => hiddenTree(target) || styleOf(target).visibility !== 'visible')) { hoverSelectors.push(selector.split(':hover')[0]!.trim()); }
+                        } catch { /* Unsupported selectors cannot establish a revealing hover. */ }
+                    }
+                } else if ('cssRules' in rule) { rules((rule as CSSGroupingRule).cssRules); }
             }
-            else if ('cssRules' in rule) { rules((rule as CSSGroupingRule).cssRules); }
-        } };
+        };
         for (const sheet of document.styleSheets) { try { rules(sheet.cssRules); } catch { /* Cross-origin stylesheets are unreadable. */ } }
         const registered = Reflect.get(window, '__jevwrightEvents') as WeakMap<EventTarget, Set<string>> | undefined;
         const eventCache = new Map<Element, Set<string>>();
@@ -193,7 +198,7 @@ export async function readSurface(page: Page | Frame, scope?: ElementHandle<Elem
             // Ancestor hints are stable within one observation; share them across sibling leaves.
             const parent = parentOf(element);
             const value = element !== document.body && (['contextmenu', 'mouseenter', 'mouseover', 'dragover', 'drop'].some(type => eventsOf(element).has(type)) || /pointer|grab/.test(styleOf(element).cursor)
-                || hoverSelectors.some(selector => { try { return element.matches(selector); } catch { return false; } }) || Boolean(parent && pointerSignal(parent)));
+                || hoverSelectors.some((selector) => { try { return element.matches(selector); } catch { return false; } }) || Boolean(parent && pointerSignal(parent)));
             pointerSignals.set(element, value); return value;
         };
         const liveSelector = 'output,[aria-live]:not([aria-live=off]),[role=status],[role=log],[role=marquee],[role=timer],[data-slot=toaster],[data-slot=toast],.Toastify,[data-sonner-toaster],[data-sonner-toast],[data-radix-toast-viewport],[data-radix-toast-root],[class*=toaster i],[class*=toast-container i],[id*=toaster i],[id*=toast-container i]';
@@ -235,14 +240,16 @@ export async function readSurface(page: Page | Frame, scope?: ElementHandle<Elem
             const name = label || labelled || labels || group || (field ? element.getAttribute('placeholder') ?? '' : rendered.length <= 160 ? rendered : scrolling ? text(element.firstElementChild ?? element).slice(0, 60) : '');
             const draggable = element instanceof HTMLElement && draggableOf(element);
             const container = !nativeRole && !actionRoles.has(role) && !draggable && !interactiveParent(element) && b.width >= 24 && b.height >= 24 && !element.matches('html,body,main,header,footer,nav');
-            const emptyBox = container && !rendered && !element.children.length && (css.backgroundColor !== 'rgba(0, 0, 0, 0)' || ['borderTopWidth', 'borderRightWidth', 'borderBottomWidth', 'borderLeftWidth', 'outlineWidth'].some(key => parseFloat(Reflect.get(css, key) as string) > 0));
+            const emptyBox = container && !rendered && !element.children.length && (css.backgroundColor !== 'rgba(0, 0, 0, 0)' || ['borderTopWidth', 'borderRightWidth', 'borderBottomWidth', 'borderLeftWidth', 'outlineWidth'].some(key => Number.parseFloat(Reflect.get(css, key) as string) > 0));
             const dropTarget = eventsOf(element).has('dragover') || eventsOf(element).has('drop') || (hasDrag && container && (Boolean(label || element.getAttribute('data-testid')) || emptyBox));
             // Option lists and selected values are content; only a form label or action caption names a control.
             const visibleName = field || select ? labels || near : (nativeRole || actionRoles.has(role)) && !['combobox', 'listbox'].includes(role) && !select && !editable ? rendered : undefined;
             const focused = element === (element.getRootNode() as Document | ShadowRoot).activeElement;
             // Mask password selections before returning DOM data; traces can capture evaluation results.
-            const selected = focused && field && element.selectionStart !== null && element.selectionEnd !== null ? element instanceof HTMLInputElement && element.type === 'password' ? '••••' : element.value.slice(element.selectionStart, element.selectionEnd)
+            const selected = focused && field && element.selectionStart !== null && element.selectionEnd !== null
+                ? element instanceof HTMLInputElement && element.type === 'password' ? '••••' : element.value.slice(element.selectionStart, element.selectionEnd)
                 : focused && editable ? (element.getRootNode() instanceof ShadowRoot ? (element.getRootNode() as ShadowRoot & { getSelection?: () => Selection | null }).getSelection?.() : document.getSelection())?.toString() : undefined;
+            // eslint-disable-next-line unicorn/prefer-dom-node-text-content -- innerText is the rendered text a user can see; textContent would include hidden text
             const value = field ? element instanceof HTMLInputElement && element.type === 'password' ? '••••' : element.value : editable ? (element as HTMLElement).innerText : undefined;
             const formatting: NonNullable<DomSurface['details'][number]['formatting']> = [];
             // Offsets are useful only when text nodes and the rendered field value agree exactly.
@@ -252,7 +259,7 @@ export async function readSurface(page: Page | Frame, scope?: ElementHandle<Elem
                     const node = walker.currentNode; const length = node.textContent?.length ?? 0;
                     if (!length || !node.parentElement) { continue; }
                     const style = styleOf(node.parentElement);
-                    const range = { start: offset, end: offset + length, bold: parseFloat(style.fontWeight) >= 600, italic: /italic|oblique/.test(style.fontStyle), underline: style.textDecorationLine.includes('underline') };
+                    const range = { start: offset, end: offset + length, bold: Number.parseFloat(style.fontWeight) >= 600, italic: /italic|oblique/.test(style.fontStyle), underline: style.textDecorationLine.includes('underline') };
                     const previous = formatting.at(-1);
                     if (previous && previous.bold === range.bold && previous.italic === range.italic && previous.underline === range.underline) { previous.end = range.end; } else { formatting.push(range); }
                     offset += length;
@@ -263,6 +270,7 @@ export async function readSurface(page: Page | Frame, scope?: ElementHandle<Elem
                 const name = groupName(parent);
                 if (name) { context = `group "${name}"`; break; }
             }
+            // eslint-disable-next-line unicorn/prefer-dom-node-text-content -- innerText is the rendered text a user can see; textContent would include hidden text
             const blockText = label && rendered && !field && !select && element instanceof HTMLElement ? element.innerText.trim() : rendered;
             // Preserve rendered paragraph boundaries only when the visible-text filter confirms the same content.
             const content = blockText.replace(/\s+/g, ' ') === rendered ? blockText : rendered;
@@ -301,6 +309,7 @@ export async function readSurface(page: Page | Frame, scope?: ElementHandle<Elem
             if (!textVisible(element) || !inScope(element) || !inside(element)) { continue; }
             const destination = inMain(element) ? mainText : otherText;
             if (element instanceof HTMLElement && element.isContentEditable) {
+                // eslint-disable-next-line unicorn/prefer-dom-node-text-content -- innerText is the rendered text a user can see; textContent would include hidden text
                 if (!element.parentElement?.isContentEditable) { destination.push(element.innerText); }
                 continue;
             }
@@ -355,8 +364,8 @@ export async function secretSurface(page: Page): Promise<string> {
             for (const element of root.querySelectorAll<HTMLElement>('*')) {
                 const box = element.getBoundingClientRect();
                 if (box.width && box.height && getComputedStyle(element).visibility !== 'hidden') {
-                    if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) { texts.push(element.value); }
-                    else { texts.push(element.innerText ?? ''); }
+                    // eslint-disable-next-line unicorn/prefer-dom-node-text-content -- innerText is the rendered text a user can see; textContent would include hidden text
+                    if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) { texts.push(element.value); } else { texts.push(element.innerText ?? ''); }
                 }
                 const shadow = element.shadowRoot ?? roots?.get(element);
                 if (shadow) { walk(shadow); }

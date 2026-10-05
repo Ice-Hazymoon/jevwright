@@ -1,3 +1,4 @@
+/* eslint-disable no-console -- a measurement script whose output is its report */
 import assert from 'node:assert/strict';
 import { resolve } from 'node:path';
 import { chromium } from 'playwright';

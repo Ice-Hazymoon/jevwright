@@ -100,24 +100,42 @@ export function fixtureTests(app: App): Array<CalibrationTest> {
         steps: () => [check('The page shows a total')],
     });
     tests.push({
-        id: 'page-value-entry', expected: 'passed', module: 'fixture',
-        title: 'Read and enter the current access token', risk: 'The page value is replaced by invented data',
+        id: 'page-value-entry',
+        expected: 'passed',
+        module: 'fixture',
+        title: 'Read and enter the current access token',
+        risk: 'The page value is replaced by invented data',
         start: '/page-entry?token=DM-4827',
         steps: () => [act('Enter the access token shown on the page and apply it'), verify('access accepted', async ({ page }) => (await page.getByRole('status').textContent()) === 'Access accepted')],
     });
     tests.push({
-        id: 'choice-finalize', expected: 'passed', module: 'fixture', title: 'Finalize a prepared choice', risk: 'Selection is mistaken for submission', start: '/effects?single=1&confirm=1',
+        id: 'choice-finalize',
+        expected: 'passed',
+        module: 'fixture',
+        title: 'Finalize a prepared choice',
+        risk: 'Selection is mistaken for submission',
+        start: '/effects?single=1&confirm=1',
         steps: () => [act('Finalize the choice of the entry dated 2026-01-01'), verify('choice committed', async ({ page }) => page.getByRole('heading', { name: 'Alpha chosen and confirmed', exact: true }).isVisible())],
     });
     tests.push({
-        id: 'credential-entry', expected: 'passed', requiredApis: ['secret'], module: 'fixture', title: 'Use public and secret credentials', risk: 'The wrong value is entered in a field', start: '/credential-form',
-        data: { account: 'marble@example.test' }, secrets: { password: secret('Private-Key-7312') },
+        id: 'credential-entry',
+        expected: 'passed',
+        requiredApis: ['secret'],
+        module: 'fixture',
+        title: 'Use public and secret credentials',
+        risk: 'The wrong value is entered in a field',
+        start: '/credential-form',
+        data: { account: 'marble@example.test' },
+        secrets: { password: secret('Private-Key-7312') },
         steps: () => [act('Sign in using account {account} with password {password}'), verify('account opened', async ({ page }) => page.getByRole('heading', { name: 'Signed in as marble@example.test', exact: true }).isVisible())],
     });
     for (const empty of [false, true]) {
         tests.push({
-            id: `reading-list${empty ? '-empty' : ''}`, expected: empty ? 'product' : 'passed', module: 'fixture',
-            title: 'Save an essay and inspect its reading list', risk: 'A summary hides missing saved content',
+            id: `reading-list${empty ? '-empty' : ''}`,
+            expected: empty ? 'product' : 'passed',
+            module: 'fixture',
+            title: 'Save an essay and inspect its reading list',
+            risk: 'A summary hides missing saved content',
             start: `/collection${empty ? '?bug=empty' : ''}`,
             steps: () => [
                 act('Save the essay, then open the reading list'),
@@ -134,8 +152,8 @@ export function fixtureTests(app: App): Array<CalibrationTest> {
         { id: 'archive-entity-search', expected: 'passed', module: 'fixture', title: 'Find a windowed entity', risk: 'A hint or punctuation falsely ends search', start: '/surface-search', steps: () => [act('Scroll the archive until Special entry (record 812) is rendered, then Open entry'), verify('opened', ({ page }) => page.locator('#status').textContent().then(text => text === 'Entry opened'))] },
     );
     for (const broken of [false, true]) {
-        tests.push({ id: `reservation-completion${broken ? '-missing' : ''}`, expected: broken ? 'product' : 'passed', module: 'fixture', title: 'Reserve a requested date', risk: 'Date selection does not commit the reservation', start: '/completion-calendar' + (broken ? '?bug=missing' : ''), steps: () => [act('Reserve August 4, 2027'), verify('reservation committed', ({ page }) => page.locator('#receipt').textContent().then(text => text === 'Reservation confirmed'))] });
-        tests.push({ id: `saved-view-completion${broken ? '-empty' : ''}`, expected: broken ? 'product' : 'passed', module: 'fixture', title: 'Save and open a requested view', risk: 'A summary hides an unopened view', start: '/completion-list' + (broken ? '?bug=empty' : ''), steps: () => [act('Save the entry, then open the Saved entries view'), verify('view opened', ({ page }) => page.locator('#tab').getAttribute('aria-pressed').then(pressed => pressed === 'true')), verify('saved view contains the exact entry', ({ page }) => page.locator('#panel').textContent().then(text => text === 'Saved entriesField notes'))] });
+        tests.push({ id: `reservation-completion${broken ? '-missing' : ''}`, expected: broken ? 'product' : 'passed', module: 'fixture', title: 'Reserve a requested date', risk: 'Date selection does not commit the reservation', start: `/completion-calendar${broken ? '?bug=missing' : ''}`, steps: () => [act('Reserve August 4, 2027'), verify('reservation committed', ({ page }) => page.locator('#receipt').textContent().then(text => text === 'Reservation confirmed'))] });
+        tests.push({ id: `saved-view-completion${broken ? '-empty' : ''}`, expected: broken ? 'product' : 'passed', module: 'fixture', title: 'Save and open a requested view', risk: 'A summary hides an unopened view', start: `/completion-list${broken ? '?bug=empty' : ''}`, steps: () => [act('Save the entry, then open the Saved entries view'), verify('view opened', ({ page }) => page.locator('#tab').getAttribute('aria-pressed').then(pressed => pressed === 'true')), verify('saved view contains the exact entry', ({ page }) => page.locator('#panel').textContent().then(text => text === 'Saved entriesField notes'))] });
     }
     return tests;
 }

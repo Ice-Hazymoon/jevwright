@@ -21,7 +21,7 @@ export function normalizedRoute(url: string, origin?: string): string {
 
 /** Dates, durations, live counters and generated ids are unstable; ordinary result numbers remain evidence. */
 export function volatileAnchor(text: string): boolean {
-    return stable(text) !== text || /\b\d+\s*(?:ms|seconds?|minutes?|hours?)\b|\b(?:countdown|elapsed|remaining)\s*:?\s*\d+|\b\d+\s+of\s+\d+\b|\(\d+\)|\b(?:count|counter)\s*:?\s*\d+|\b(?:moments? ago|a moment ago)\b/i.test(text);
+    return stable(text) !== text || /\b\d+\s*(?:ms|seconds?|minutes?|hours?)\b|\b(?:countdown|elapsed|remaining)\s*(?::\s*)?\d+|\b\d+\s+of\s+\d+\b|\(\d+\)|\b(?:count|counter)\s*(?::\s*)?\d+|\b(?:moments? ago|a moment ago)\b/i.test(text);
 }
 const anchorName = (name: string) => normalize(name) !== '' && !volatileAnchor(name);
 
@@ -49,7 +49,7 @@ export function recordEnd(start: Observation, end: Observation, actions: Recorde
     const disappearing = start.elements.filter(element => !element.transient && anchorName(element.name)).map(element => describeTarget(element, start)).filter(target => !redact.contains(JSON.stringify(target)) && targetCount(target, end) < targetCount(target, start));
     const gone = disappearing.filter(target => targetCount(target, start) === 1 && targetCount(target, end) === 0).slice(0, 2);
     const reduced = disappearing.filter(target => targetCount(target, start) > 1).filter((target, index, all) => all.findIndex(other => other.role === target.role && other.name === target.name && stable(other.near) === stable(target.near) && stable(other.context) === stable(target.context)) === index).slice(0, 2).map(target => ({ target, before: targetCount(target, start), after: targetCount(target, end) }));
-    const values: ValueAnchor[] = end.elements.filter(element => !element.transient && anchorName(element.name)).flatMap(element => {
+    const values: ValueAnchor[] = end.elements.filter(element => !element.transient && anchorName(element.name)).flatMap((element) => {
         const target = describeTarget(element, end);
         const before = resolveTarget(target, start, true);
         const states = durableStates(element.states);
@@ -57,7 +57,7 @@ export function recordEnd(start: Observation, end: Observation, actions: Recorde
         const stateChanged = JSON.stringify(states ?? []) !== JSON.stringify(durableStates(before?.states) ?? []);
         const formattingChanged = element.formatting !== undefined && JSON.stringify(element.formatting) !== JSON.stringify(before?.formatting);
         if (!valueChanged && !stateChanged && !formattingChanged) { return []; }
-        const typed = actions.findLast(action => {
+        const typed = actions.findLast((action) => {
             if (!action.target || !['type', 'select'].includes(action.tool)) { return false; }
             if (resolveTarget(action.target, end, true)?.i === element.i) { return true; }
             const pageValue = action.pageValue ? readPageValue(start, action.pageValue, redact) : undefined;
@@ -84,7 +84,8 @@ export function endMatches(end: StepEnd, observation: Observation, start?: Obser
     if (end.path && normalizedPath(observation.url) !== end.path) { missing.push(`path ${end.path}`); }
     if (end.route) {
         // Unmarked recordings retain the legacy path-only contract; marked routes bind to a run or literal origin.
-        const matched = end.base === undefined ? normalizedPath(observation.url) === normalizedPath(end.route)
+        const matched = end.base === undefined
+            ? normalizedPath(observation.url) === normalizedPath(end.route)
             : normalizedRoute(observation.url, observation.origin) === normalizedRoute(end.route, end.base ? baseURL : undefined);
         if (!matched) { missing.push(`route ${end.route}`); }
     }

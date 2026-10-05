@@ -31,8 +31,7 @@ export async function lastFailedIds(outputDir: string): Promise<Set<string>> {
         for (const key of run.carriedFailures ?? []) { ids.add(key); }
         for (const test of run.results) {
             const key = test.selectionKey ?? test.id;
-            if (test.status === 'failed' || test.status === 'flaky' || test.status === 'unverified') { ids.add(key); }
-            else if (test.status === 'passed' || test.status === 'known') { ids.delete(key); ids.delete(test.id); }
+            if (test.status === 'failed' || test.status === 'flaky' || test.status === 'unverified') { ids.add(key); } else if (test.status === 'passed' || test.status === 'known') { ids.delete(key); ids.delete(test.id); }
         }
     }
     return ids;

@@ -5,8 +5,8 @@ import type { Browser, BrowserContext, ElementHandle, Locator, Page } from 'play
 import { createRequire } from 'node:module';
 import { chromium } from 'playwright';
 import { RequestError, Server } from 'proxy-chain';
-import { JevwrightError } from './errors.ts';
 import { canGoBack, domLocator, readBusy, readSurface, registerDomSelector, trackRoots } from './dom.ts';
+import { JevwrightError } from './errors.ts';
 
 export function allowedUrl(raw: string, origins: readonly string[]): boolean {
     try {
@@ -293,15 +293,15 @@ export async function perform(page: Page, call: ToolCall): Promise<void> {
                 element.focus();
                 if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) {
                     const at = element.value.indexOf(wanted);
-                    if (at < 0 || element.value.indexOf(wanted, at + 1) >= 0) { throw new Error('Selection text is missing or ambiguous'); }
+                    if (at < 0 || element.value.includes(wanted, at + 1)) { throw new Error('Selection text is missing or ambiguous'); }
                     element.setSelectionRange(at, at + wanted.length); return;
                 }
                 const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
-                const nodes: Text[] = []; let node;
-                while ((node = walker.nextNode())) { nodes.push(node as Text); }
+                const nodes: Text[] = [];
+                for (let node = walker.nextNode(); node; node = walker.nextNode()) { nodes.push(node as Text); }
                 const text = nodes.map(node => node.data).join('');
                 const at = text.indexOf(wanted);
-                if (at < 0 || text.indexOf(wanted, at + 1) >= 0) { throw new Error('Selection text is missing or ambiguous'); }
+                if (at < 0 || text.includes(wanted, at + 1)) { throw new Error('Selection text is missing or ambiguous'); }
                 const range = document.createRange(); let offset = 0;
                 for (const node of nodes) {
                     if (at >= offset && at < offset + node.length) { range.setStart(node, at - offset); }
@@ -407,7 +407,7 @@ export function actionError(error: unknown, redact?: Redactor): string {
 async function deliveredClick(locator: Locator, click: () => Promise<void>): Promise<void> {
     const element = await locator.elementHandle({ timeout: 5000 });
     if (!element) { throw new Error('Click target is not rendered'); }
-    const receipt = await element.evaluateHandle(element => {
+    const receipt = await element.evaluateHandle((element) => {
         const state = { delivered: false, remove: () => {} };
         // An engine receipt must not add an application-event hint to the target element.
         const root = element.getRootNode();
@@ -436,6 +436,7 @@ async function pointerDrag(page: Page, source: Locator, destination: Locator, ti
         await source.hover({ timeout });
         await destination.evaluate(element => element.scrollIntoView({ block: 'nearest', inline: 'nearest' }), undefined, { timeout });
         const beforeUrl = page.url();
+        // eslint-disable-next-line unicorn/prefer-dom-node-text-content -- a drag counts as delivered when the rendered page text changes
         const before = await handle.evaluateHandle(element => ({ parent: element.parentElement, x: element.getBoundingClientRect().x, y: element.getBoundingClientRect().y, text: document.body.innerText }));
         const start = await source.boundingBox(); const end = await destination.boundingBox(); const viewport = page.viewportSize();
         if (!start || !end || !viewport) { throw new Error('Drag endpoints have no visible box'); }
@@ -449,6 +450,7 @@ async function pointerDrag(page: Page, source: Locator, destination: Locator, ti
             await page.waitForTimeout(50); await page.mouse.move(b.x, b.y);
         } finally { await page.mouse.up(); }
         await page.waitForTimeout(150);
+        // eslint-disable-next-line unicorn/prefer-dom-node-text-content -- a drag counts as delivered when the rendered page text changes
         const changed = await handle.evaluate((element, before) => !element.isConnected || element.parentElement !== before.parent || element.getBoundingClientRect().x !== before.x || element.getBoundingClientRect().y !== before.y || document.body.innerText !== before.text, before).catch(() => page.url() !== beforeUrl);
         await before.dispose();
         if (!changed) { throw new Error('Drag delivered no observed effect'); }
@@ -464,10 +466,12 @@ export function searchTerms(text: string): string[] {
 
 /** Probe mounted text only between pages; full observation runs after a match. */
 async function scrollPage(page: Page, call: ToolCall): Promise<void> {
-    const area = (call.ref ? await domLocator(page, call.ref).elementHandle({ timeout: 5000 }) : await page.evaluateHandle(() => {
-        const candidates = [...document.querySelectorAll('*')].filter(element => /auto|scroll/.test(getComputedStyle(element).overflowY) && element.scrollHeight > element.clientHeight + 1 && element.checkVisibility());
-        return document.scrollingElement && document.scrollingElement.scrollHeight > document.scrollingElement.clientHeight + 1 ? document.scrollingElement : candidates.length === 1 ? candidates[0]! : document.scrollingElement;
-    })) as ElementHandle<Element> | null;
+    const area = (call.ref
+        ? await domLocator(page, call.ref).elementHandle({ timeout: 5000 })
+        : await page.evaluateHandle(() => {
+                const candidates = [...document.querySelectorAll('*')].filter(element => /auto|scroll/.test(getComputedStyle(element).overflowY) && element.scrollHeight > element.clientHeight + 1 && element.checkVisibility());
+                return document.scrollingElement && document.scrollingElement.scrollHeight > document.scrollingElement.clientHeight + 1 ? document.scrollingElement : candidates.length === 1 ? candidates[0]! : document.scrollingElement;
+            })) as ElementHandle<Element> | null;
     if (!area) { throw new Error('No scrolling area is rendered'); }
     const geometry = () => area.evaluate(element => ({ height: element?.scrollHeight ?? 0, viewport: element?.clientHeight ?? 0 }));
     const initial = await geometry();
@@ -492,6 +496,7 @@ async function scrollPage(page: Page, call: ToolCall): Promise<void> {
                         if (!element.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }) || element.closest('[hidden],[inert]')) { continue; }
                         const box = element.getBoundingClientRect();
                         if (box.bottom <= Math.max(0, boundary.top) || box.top >= Math.min(innerHeight, boundary.bottom)) { continue; }
+                        // eslint-disable-next-line unicorn/prefer-dom-node-text-content -- innerText is the rendered text a user can see; textContent would include hidden text
                         const texts = [normalize(element.innerText ?? ''), ...[...element.childNodes].filter(node => node.nodeType === Node.TEXT_NODE).map(node => normalize(node.textContent ?? ''))];
                         if (texts.some(text => terms.some(term => text.length <= Math.max(term.length * 3, term.length + 24) && (` ${text} `).includes(` ${term} `)))) {
                             element.scrollIntoView({ block: 'nearest', inline: 'nearest' }); return true;

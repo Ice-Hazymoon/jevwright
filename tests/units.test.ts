@@ -816,7 +816,7 @@ describe('legacy end-state compatibility', () => {
     it('bounds unnamed scroll-container names while retaining their page text', async () => {
         const context = await newTestContext(browser, { viewport: { width: 1280, height: 900 }, dialogs: 'accept' });
         try {
-            const page = await context.newPage(); await page.goto(app.origin + '/compatibility-scroller');
+            const page = await context.newPage(); await page.goto(`${app.origin}/compatibility-scroller`);
             const shown = await observe(page);
             const container = shown.elements.find(element => element.scroll)!;
             expect(container.name.length).toBeLessThanOrEqual(60);
@@ -826,7 +826,7 @@ describe('legacy end-state compatibility', () => {
     it('supplies legacy inherited editor paragraphs only for old end-state matching', async () => {
         const context = await newTestContext(browser, { viewport: { width: 1280, height: 900 }, dialogs: 'accept' });
         try {
-            const page = await context.newPage(); await page.goto(app.origin + '/compatibility-editor');
+            const page = await context.newPage(); await page.goto(`${app.origin}/compatibility-editor`);
             expect((await observe(page)).elements.filter(element => element.role === 'textbox').map(element => element.name)).toEqual(['Document']);
             const legacy = await observe(page, { legacyEnd: true });
             expect(legacy.elements.filter(element => element.role === 'textbox').map(element => element.name)).toContain('First passage');
@@ -837,7 +837,7 @@ describe('legacy end-state compatibility', () => {
     it('excludes changing counter controls from value and state anchors', async () => {
         const context = await newTestContext(browser, { viewport: { width: 1280, height: 900 }, dialogs: 'accept' });
         try {
-            const page = await context.newPage(); await page.goto(app.origin + '/integrity?bug=counter');
+            const page = await context.newPage(); await page.goto(`${app.origin}/integrity?bug=counter`);
             const before = await observe(page); await page.getByRole('button', { name: 'Save draft' }).click();
             const after = await observe(page); const { recordEnd } = await import('../src/end-state.ts');
             expect(JSON.stringify(recordEnd(before, after, [{ tool: 'click' }]))).not.toMatch(/Count [12]/);
@@ -846,7 +846,7 @@ describe('legacy end-state compatibility', () => {
     it('excludes live-region headings and controls from required anchors', async () => {
         const context = await newTestContext(browser, { viewport: { width: 1280, height: 900 }, dialogs: 'accept' });
         try {
-            const page = await context.newPage(); await page.goto(app.origin + '/integrity?bug=status');
+            const page = await context.newPage(); await page.goto(`${app.origin}/integrity?bug=status`);
             const before = await observe(page); await page.getByRole('button', { name: 'Save draft' }).click();
             const after = await observe(page); const { recordEnd } = await import('../src/end-state.ts');
             const end = recordEnd(before, after, [{ tool: 'click' }]);
@@ -913,7 +913,7 @@ describe('integrity regressions', () => {
         const context = await newTestContext(browser, { viewport: { width: 1280, height: 900 }, dialogs: 'accept' });
         try {
             const page = await context.newPage();
-            await page.goto(app.origin + '/integrity');
+            await page.goto(`${app.origin}/integrity`);
             await page.locator('label').evaluate((label, raw) => { label.firstChild!.textContent = 'x'.repeat(70) + raw; }, raw);
             const shown = createRedactor([secret(raw)]).value(await observe(page, { redact: createRedactor([secret(raw)]) }));
             expect(JSON.stringify(shown)).not.toContain('private-se');
@@ -953,7 +953,7 @@ describe('integrity regressions', () => {
     it('omits unrelated page chrome from factual field evidence options', async () => {
         const context = await newTestContext(browser, { viewport: { width: 1280, height: 900 }, dialogs: 'accept' });
         try {
-            const page = await context.newPage(); await page.goto(app.origin + '/integrity?bug=evidence-noise');
+            const page = await context.newPage(); await page.goto(`${app.origin}/integrity?bug=evidence-noise`);
             await page.getByRole('textbox', { name: 'Draft', exact: true }).fill('Original');
             const { checkEvidenceOptions } = await import('../src/judge.ts');
             const options = checkEvidenceOptions(await observe(page), 'The Draft field shows Original');
@@ -963,15 +963,15 @@ describe('integrity regressions', () => {
     });
     it('offers exact page quotes when unrelated page text exceeds the observation budget', async () => {
         const { checkEvidenceOptions, checkEvidenceMatches } = await import('../src/judge.ts');
-        const shown = { ...observation, text: 'Draft area Private revision B ' + 'Other content '.repeat(400) + '…' };
+        const shown = { ...observation, text: `Draft area Private revision B ${'Other content '.repeat(400)}…` };
         const options = checkEvidenceOptions(shown, 'The text card shows "Private revision B"');
         const quote = options.find(option => option.some(entry => entry.match === 'contains'))!;
         expect(quote).toBeDefined();
         expect(checkEvidenceMatches(quote, shown)).toBe(true);
         expect(checkEvidenceMatches(quote, { ...shown, text: shown.text.replace('Private revision B', 'Different revision') })).toBe(false);
     });
-    it.each(['body', 'entity', 'receipt'])('keeps local proof without unrelated timestamps: %s', async kind => {
-        await open('/proof-panel', async page => {
+    it.each(['body', 'entity', 'receipt'])('keeps local proof without unrelated timestamps: %s', async (kind) => {
+        await open('/proof-panel', async (page) => {
             const { checkEvidenceOptions } = await import('../src/judge.ts');
             const shown = await observe(page);
             const claim = kind === 'body' ? 'The body shows "First passage" and "Final passage" with a blank line between them' : kind === 'entity' ? 'The delivery list shows "Amber package"' : 'The receipt shows a key and a Copy button';
@@ -982,32 +982,32 @@ describe('integrity regressions', () => {
         });
     });
     it('keeps rendered paragraph boundaries in a named read-only card', async () => {
-        await open('/paragraph-card', async page => {
+        await open('/paragraph-card', async (page) => {
             const shown = await observe(page);
             expect(shown.elements.find(element => element.role === 'button')?.content).toBe('Opening passage\n\nFinal passage');
         });
     });
     it('rejects paragraph proof when a read-only card collapses to one line', async () => {
-        await open('/paragraph-card', async page => {
+        await open('/paragraph-card', async (page) => {
             const { checkEvidenceCandidates, checkEvidenceMatches } = await import('../src/judge.ts');
             const before = await observe(page);
             const evidence = checkEvidenceCandidates(before).filter(entry => entry.source === 'element' && entry.target?.role === 'button');
-            await page.goto(app.origin + '/paragraph-card?bug=inline');
+            await page.goto(`${app.origin}/paragraph-card?bug=inline`);
             await page.evaluate(() => history.replaceState({}, '', '/paragraph-card'));
             expect(checkEvidenceMatches(evidence, await observe(page))).toBe(false);
         });
     });
     it('offers card content proof through its original accessible label', async () => {
-        await open('/paragraph-card', async page => {
+        await open('/paragraph-card', async (page) => {
             const { checkEvidenceOptions } = await import('../src/judge.ts');
             const options = checkEvidenceOptions(await observe(page), 'The Message card shows both paragraphs');
             expect(options.flat().some(entry => entry.target?.ariaName === 'Message')).toBe(true);
         });
     });
     it('keeps disabled action captions on their own elements', async () => {
-        await open('/disabled-captions', async page => {
+        await open('/disabled-captions', async (page) => {
             const snapshot = page.ariaSnapshotJSON.bind(page);
-            page.ariaSnapshotJSON = async options => {
+            page.ariaSnapshotJSON = async (options) => {
                 const tree = await snapshot(options);
                 const strip = (nodes: typeof tree) => { for (const node of nodes) { if (node.disabled) { delete node.ref; } if (node.children) { strip(node.children); } } };
                 strip(tree);
@@ -1017,26 +1017,26 @@ describe('integrity regressions', () => {
         });
     });
     it('omits proof targets containing generated IDs or dates', async () => {
-        await open('/volatile-proof-row', async page => {
+        await open('/volatile-proof-row', async (page) => {
             const { checkEvidenceOptions } = await import('../src/judge.ts');
             const options = checkEvidenceOptions(await observe(page), 'The deliveries show "Amber package"');
             expect(options.flat().some(entry => entry.source === 'element')).toBe(false);
         });
     });
     it('offers stable local text proof for an unquoted status label', async () => {
-        await open('/contextual-proof', async page => {
+        await open('/contextual-proof', async (page) => {
             const { checkEvidenceOptions, checkEvidenceMatches } = await import('../src/judge.ts');
             const shown = await observe(page);
             const proof = checkEvidenceOptions(shown, 'The Amber parcel shows a Ready status').find(option => option.some(entry => entry.source === 'text' && entry.text.includes('Amber parcel') && entry.text.includes('Status: Ready')));
             expect(proof).toBeDefined();
             expect(checkEvidenceMatches(proof!, shown)).toBe(true);
-            await page.goto(app.origin + '/contextual-proof?bug=moved');
+            await page.goto(`${app.origin}/contextual-proof?bug=moved`);
             await page.evaluate(() => history.replaceState({}, '', '/contextual-proof'));
             expect(checkEvidenceMatches(proof!, await observe(page))).toBe(false);
         });
     });
     it('keeps a shorter action name out of proof for a different whole label', async () => {
-        await open('/proof-label-overlap', async page => {
+        await open('/proof-label-overlap', async (page) => {
             const { checkEvidenceOptions } = await import('../src/judge.ts');
             const proof = checkEvidenceOptions(await observe(page), 'The Unpublish button is visible').flat();
             expect(proof.some(entry => entry.target?.name === 'Unpublish')).toBe(true);
@@ -1044,37 +1044,37 @@ describe('integrity regressions', () => {
         });
     });
     it('binds quoted subjects to their nearby visible relationship', async () => {
-        await open('/contextual-proof', async page => {
+        await open('/contextual-proof', async (page) => {
             const { checkEvidenceOptions, checkEvidenceMatches } = await import('../src/judge.ts');
             const shown = await observe(page);
             const proof = checkEvidenceOptions(shown, 'The delivery overview lists "Amber parcel" with "Inspector" as its owner').find(option => option.some(entry => entry.source === 'text' && entry.text.includes('Amber parcel') && entry.text.includes('Owner: Inspector')));
             expect(proof).toBeDefined();
             expect(checkEvidenceMatches(proof!, shown)).toBe(true);
-            await page.goto(app.origin + '/contextual-proof?bug=owner-moved');
+            await page.goto(`${app.origin}/contextual-proof?bug=owner-moved`);
             await page.evaluate(() => history.replaceState({}, '', '/contextual-proof'));
             expect(checkEvidenceMatches(proof!, await observe(page))).toBe(false);
         });
     });
     it('omits local text proof containing a clipped identifier', async () => {
-        await open('/contextual-proof?bug=clipped-id', async page => {
+        await open('/contextual-proof?bug=clipped-id', async (page) => {
             const { checkEvidenceOptions } = await import('../src/judge.ts');
             const proof = checkEvidenceOptions(await observe(page), 'The Amber parcel shows a Ready status').flat();
             expect(proof.some(entry => entry.source === 'text' && entry.text.includes('…'))).toBe(false);
         });
     });
     it('keeps quoted relationship proof independent of a neighboring timestamp', async () => {
-        await open('/contextual-proof?bug=nearby-time', async page => {
+        await open('/contextual-proof?bug=nearby-time', async (page) => {
             const { checkEvidenceOptions, checkEvidenceMatches } = await import('../src/judge.ts');
             const shown = await observe(page);
             const proof = checkEvidenceOptions(shown, 'The delivery overview lists "Amber parcel" with "Inspector" as its owner').find(option => option.some(entry => entry.source === 'text' && entry.text.includes('Amber parcel') && entry.text.includes('Owner: Inspector')));
             expect(proof).toBeDefined();
             expect(checkEvidenceMatches(proof!, shown)).toBe(true);
-            await page.locator('[data-time]').evaluate(element => { element.textContent = 'Reviewed 2028-08-05 10:41'; });
+            await page.locator('[data-time]').evaluate((element) => { element.textContent = 'Reviewed 2028-08-05 10:41'; });
             expect(checkEvidenceMatches(proof!, await observe(page))).toBe(true);
         });
     });
     it('keeps stored clipped text proof unverified even when its suffix is still present', async () => {
-        await open('/contextual-proof?bug=clipped-id', async page => {
+        await open('/contextual-proof?bug=clipped-id', async (page) => {
             const { checkEvidenceMatches } = await import('../src/judge.ts');
             const shown = await observe(page);
             await page.evaluate(() => history.replaceState({}, '', '/contextual-proof'));
@@ -1083,7 +1083,7 @@ describe('integrity regressions', () => {
         });
     });
     it('keeps all verdicts and field facts within a bounded check instruction payload', async () => {
-        await open('/integrity', async page => {
+        await open('/integrity', async (page) => {
             const { judgeClaim } = await import('../src/judge.ts');
             let overhead = 0;
             const models = { judge: async (state: { page: { elements: Array<{ name: string; value?: string }> } }, questions: Record<string, unknown>) => {
@@ -1216,7 +1216,7 @@ it('calibration removes a registered baseline after a failing checkout hook', as
 
 describe('reach observation', () => {
     it('reaches nested closed roots while preserving the application boundary', async () => {
-        const { observation } = await open('/reach-observe', async page => { expect(await page.evaluate(() => Reflect.get(window, 'rootStillClosed'))).toBe(true); });
+        const { observation } = await open('/reach-observe', async (page) => { expect(await page.evaluate(() => Reflect.get(window, 'rootStillClosed'))).toBe(true); });
         expect(named(observation, 'textbox', 'Member')).toHaveLength(1);
         expect(named(observation, 'button', 'Grant')).toHaveLength(1);
     });
@@ -1248,7 +1248,7 @@ describe('reach observation', () => {
         expect(named(observation, 'textbox', 'Memo')[0]?.near).toBe('Budget');
     });
     it('rejects an ungrounded back gesture without leaving the app page', async () => {
-        const { observation } = await open('/reach-actions', async page => {
+        const { observation } = await open('/reach-actions', async (page) => {
             await expect(perform(page, { tool: 'back' })).rejects.toThrow('No earlier app page');
             expect(page.url()).toContain('/reach-actions');
         });
@@ -1268,7 +1268,6 @@ it('scopes closed-root dialogs and excludes inert shadow descendants', async () 
     const inert = await open('/reach-observe', page => page.locator('#closed').evaluate(element => element.setAttribute('inert', '')));
     expect(inert.observation.elements.some(element => element.name === 'Member')).toBe(false);
 });
-
 
 describe('integration observation and timing', () => {
     it('does not wait for static processing text, decorative spinners or determinate progress', async () => {
@@ -1331,7 +1330,6 @@ describe('integration observation and timing', () => {
     });
 });
 
-
 it('integration offers named static text and waits for newly appearing loading markers', async () => {
     const context = await newTestContext(browser, { viewport: { width: 1280, height: 900 }, dialogs: 'accept' });
     try {
@@ -1345,18 +1343,16 @@ it('integration offers named static text and waits for newly appearing loading m
     } finally { await context.close(); }
 });
 
-
 it('integration keeps noninteractive ARIA table cells out of the DOM supplement', async () => {
     const { observation } = await open('/integration-static?aria=1');
     expect(observation.elements.length).toBeLessThanOrEqual(6);
     expect(observation.omitted).toBe(0);
 });
 
-
 describe('hardening surfaces', () => {
     it('excludes native folded detail contents from text and control content', async () => {
-        const { observation } = await open('/attribution-regions?region=collapsed', async page => {
-            await page.locator('details').evaluate(element => { element.setAttribute('open', ''); element.querySelector('section')!.getBoundingClientRect(); element.removeAttribute('open'); });
+        const { observation } = await open('/attribution-regions?region=collapsed', async (page) => {
+            await page.locator('details').evaluate((element) => { element.setAttribute('open', ''); element.querySelector('section')!.getBoundingClientRect(); element.removeAttribute('open'); });
         });
         expect(observation.text).not.toContain('Record ZX-71');
         expect(observation.elements.some(element => element.content?.includes('Record ZX-71'))).toBe(false);
@@ -1466,7 +1462,7 @@ describe('hardening surfaces', () => {
             const page = await context.newPage(); await page.goto(new URL('/hardening-scroll', app.origin).toString());
             await perform(page, { tool: 'scroll' });
             expect(await page.locator('#app').evaluate(element => element.scrollTop)).toBeGreaterThan(0);
-            await page.locator('#app').evaluate(element => { element.scrollTop = element.scrollHeight; });
+            await page.locator('#app').evaluate((element) => { element.scrollTop = element.scrollHeight; });
             await expect(perform(page, { tool: 'scroll' })).rejects.toThrow(/did not move/i);
         } finally { await context.close(); }
     });
@@ -1491,7 +1487,7 @@ it('reach2 exposes delegated context handlers inside named sections and generic 
 
 it('protects complete drop target names before applying the observation budget', async () => {
     const { createRedactor, secret } = await import('../src/secrets.ts');
-    await open('/surface-events?long-drop', async page => {
+    await open('/surface-events?long-drop', async (page) => {
         const redact = createRedactor([secret('private-sequence-829173')]);
         const observation = redact.value(await observe(page, { redact }));
         expect(observation.elements.some(element => element.dropTarget && element.name.includes('{secret}'))).toBe(true);
@@ -1507,7 +1503,7 @@ it('reach2 uses visible conflicting labels as primary names and retains replaced
 });
 
 it('reach2 reports input and editable selections and changes the observation signature when only selection changes', async () => {
-    await open('/surface-editor', async page => {
+    await open('/surface-editor', async (page) => {
         const before = await observe(page);
         await page.locator('#message').focus();
         await page.locator('#message').evaluate(element => (element as HTMLTextAreaElement).setSelectionRange(5, 14));
@@ -1522,7 +1518,7 @@ it('reach2 reports input and editable selections and changes the observation sig
 });
 
 it('reach2 searches normalized parenthesized entities within the scrolling scope, not the page hint', async () => {
-    await open('/surface-search', async page => {
+    await open('/surface-search', async (page) => {
         const archive = (await observe(page)).elements.find(element => element.scroll)!;
         await perform(page, { tool: 'scroll', ref: archive.ref, scrollText: 'Special entry (record 812)' });
         expect(await page.getByRole('button', { name: 'Open entry' }).isVisible()).toBe(true);
@@ -1531,13 +1527,13 @@ it('reach2 searches normalized parenthesized entities within the scrolling scope
 }, 40000);
 
 it('reach2 accepts a delivered click when its handler replaces the control, without clicking twice', async () => {
-    await open('/surface-replacement', async page => {
+    await open('/surface-replacement', async (page) => {
         const element = named(await observe(page), 'button', 'Add entry')[0]!;
         const original = page.locator.bind(page);
         page.locator = ((...args: Parameters<Page['locator']>) => {
             const locator = original(...args);
             const click = locator.click.bind(locator);
-            locator.click = async options => { await click(options); throw new Error('Element is detached after click'); };
+            locator.click = async (options) => { await click(options); throw new Error('Element is detached after click'); };
             return locator;
         }) as Page['locator'];
         await perform(page, { tool: 'click', ref: element.ref });
@@ -1546,7 +1542,7 @@ it('reach2 accepts a delivered click when its handler replaces the control, with
 });
 
 it('reach2 repeats selection keys on the focused field and maps Control shortcuts to the browser platform', async () => {
-    await open('/surface-editor', async page => {
+    await open('/surface-editor', async (page) => {
         await page.locator('#message').focus();
         await page.keyboard.press('End');
         await perform(page, { tool: 'press', key: 'Shift+ArrowLeft', times: 9 });
@@ -1554,7 +1550,7 @@ it('reach2 repeats selection keys on the focused field and maps Control shortcut
         await expect(perform(page, { tool: 'press', key: 'ArrowLeft', times: 21 })).rejects.toThrow(/1–20/);
         await page.evaluate(() => {
             Object.defineProperty(navigator, 'platform', { get: () => 'MacIntel' });
-            document.getElementById('message')!.addEventListener('keydown', e => { if ((e as KeyboardEvent).key === 'b') { document.getElementById('status')!.textContent = String((e as KeyboardEvent).metaKey) + ':' + String((e as KeyboardEvent).ctrlKey); } });
+            document.getElementById('message')!.addEventListener('keydown', (e) => { if ((e as KeyboardEvent).key === 'b') { document.getElementById('status')!.textContent = `${String((e as KeyboardEvent).metaKey)}:${String((e as KeyboardEvent).ctrlKey)}`; } });
         });
         await perform(page, { tool: 'press', key: 'Control+b' });
         expect(await page.locator('#status').textContent()).toBe('true:false');
@@ -1562,8 +1558,8 @@ it('reach2 repeats selection keys on the focused field and maps Control shortcut
 });
 
 it('reach2 refuses to record a delivered native drag with no observable effect', async () => {
-    await open('/surface-events?bug=no-drop', async page => {
-        await page.locator('#drop').evaluate(element => { element.setAttribute('aria-label', 'Receiving bay'); element.setAttribute('role', 'group'); });
+    await open('/surface-events?bug=no-drop', async (page) => {
+        await page.locator('#drop').evaluate((element) => { element.setAttribute('aria-label', 'Receiving bay'); element.setAttribute('role', 'group'); });
         const observation = await observe(page);
         await expect(perform(page, { tool: 'drag', ref: observation.elements.find(element => element.name === 'Package')?.ref, destinationRef: observation.elements.find(element => element.name === 'Receiving bay')?.ref })).rejects.toThrow(/no observed effect/);
     });
@@ -1588,7 +1584,7 @@ it('reach2 prioritizes rendered labels on custom controls and checkbox fields', 
 });
 
 it('reach2 keeps engine click receipts from making a named region absorb its document targets', async () => {
-    await open('/surface-events', async page => {
+    await open('/surface-events', async (page) => {
         const region = (await observe(page)).elements.find(element => element.name === 'Documents')!;
         await perform(page, { tool: 'click', ref: region.ref });
         expect((await observe(page)).elements.find(element => element.name === 'ledger.csv')?.ref).toBeDefined();
@@ -1596,7 +1592,7 @@ it('reach2 keeps engine click receipts from making a named region absorb its doc
 });
 
 it('reach2 masks password selection before DOM data leaves the browser', async () => {
-    await open('/surface-editor?private', async page => {
+    await open('/surface-editor?private', async (page) => {
         await page.locator('#protected').focus();
         await perform(page, { tool: 'press', key: 'ControlOrMeta+a' });
         const { readSurface } = await import('../src/dom.ts');
@@ -1607,14 +1603,13 @@ it('reach2 masks password selection before DOM data leaves the browser', async (
 });
 
 it('reach2 keeps loading waits outside the movement budget of a growing scroll search', async () => {
-    await open('/reach-feed?many', async page => {
+    await open('/reach-feed?many', async (page) => {
         const feed = (await observe(page)).elements.find(element => element.scroll)!;
         await perform(page, { tool: 'scroll', ref: feed.ref, scrollText: 'Update 95' });
         expect(await page.getByRole('button', { name: 'Open update' }).isVisible()).toBe(true);
         expect(await page.locator('#feed').evaluate(element => element.scrollTop)).toBeGreaterThan(5000);
     });
 }, 40000);
-
 
 describe('merge route contracts', () => {
     const page: Observation = { url: '/draft?a=1&z=2', origin: 'http://127.0.0.1:4200', title: '', text: '', notices: [], headings: [], elements: [], omitted: 0, signature: '' };
@@ -1633,14 +1628,13 @@ describe('merge route contracts', () => {
     });
 });
 
-
 it('merge observes editable formatting and binds replay evidence to its exact ranges', async () => {
     const { checkEvidenceCandidates, checkEvidenceMatches } = await import('../src/judge.ts');
     const { recordEnd, endMatches } = await import('../src/end-state.ts');
-    await open('/surface-editor', async page => {
+    await open('/surface-editor', async (page) => {
         await page.locator('#editor').fill('ship confirmed');
         const before = await observe(page);
-        await page.locator('#editor').evaluate(element => { element.innerHTML = 'ship <b>confirmed</b>'; });
+        await page.locator('#editor').evaluate((element) => { element.innerHTML = 'ship <b>confirmed</b>'; });
         const after = await observe(page);
         const field = named(after, 'textbox', 'Document')[0]!;
         expect(field).toHaveProperty('formatting', [
@@ -1670,8 +1664,8 @@ it('merge observes editable formatting and binds replay evidence to its exact ra
 
 it('merge does not split protected editable values into formatted text fragments', async () => {
     const { createRedactor, secret } = await import('../src/secrets.ts');
-    await open('/surface-editor', async page => {
-        await page.locator('#editor').evaluate(element => { element.innerHTML = 'private-<b>sequence-829173</b>'; });
+    await open('/surface-editor', async (page) => {
+        await page.locator('#editor').evaluate((element) => { element.innerHTML = 'private-<b>sequence-829173</b>'; });
         const redact = createRedactor([secret('private-sequence-829173')]);
         const observation = redact.value(await observe(page, { redact }));
         expect(named(observation, 'textbox', 'Document')[0]).not.toHaveProperty('formatting');

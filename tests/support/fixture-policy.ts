@@ -101,7 +101,7 @@ function act(view: View, step: string): Belief {
     }
     if (step === 'Save the essay, then open the reading list') {
         if (view.text.includes('Catalog')) {
-            return Boolean(find(view, is('button', 'Saved')))
+            return find(view, is('button', 'Saved'))
                 ? { done: 0.98, complete: 0.02, remaining: 0.98, tool: 'click', target: is('tab', /^Reading list/) }
                 : { tool: 'click', target: is('button', 'Save essay') };
         }
@@ -183,8 +183,10 @@ function claim(view: View, text: string): Belief {
 
 /** Reproduce the real model's premature no-action answer while deferred controls are still loading. */
 export function deferredPolicy(view: View): Belief {
-    return view.notices.includes('Workspace ready') ? { done: 0.95 }
-        : view.elements.some(is('button', 'Open workspace')) ? { tool: 'click', target: is('button', 'Open workspace') }
+    return view.notices.includes('Workspace ready')
+        ? { done: 0.95 }
+        : view.elements.some(is('button', 'Open workspace'))
+            ? { tool: 'click', target: is('button', 'Open workspace') }
             : view.history.some(entry => entry.action === 'wait') ? { tool: 'none' } : { tool: 'wait' };
 }
 
@@ -196,9 +198,11 @@ export function pendingActionPolicy(view: View): Belief {
     return { done: 0.89, achieved: 0.96, remaining: 0.12, tool: added ? 'none' : 'click', target: is('button', 'Add entry'), needed: added ? 0.02 : 0.95 };
 }
 /** Reproduce a completion claim after delivery, even when the fixture withholds its receipt. */
-export const integrityPolicy = (view: View): Belief => view.history.some(entry => entry.action === 'click')
-    ? { done: 0.99 }
-    : { tool: 'click', target: is('button', 'Save draft') };
+export function integrityPolicy(view: View): Belief {
+    return view.history.some(entry => entry.action === 'click')
+        ? { done: 0.99 }
+        : { tool: 'click', target: is('button', 'Save draft') };
+}
 
 /** Reproduce done/none after selection while the required final control remains unactivated. */
 export function reservationPolicy(view: View): Belief {
@@ -211,7 +215,8 @@ export function reservationPolicy(view: View): Belief {
         return { done: 0.95, achieved: 0.98, remaining: 0.03, tool: 'none', target: is('button', 'Confirm reservation') };
     }
     return view.history.some(entry => entry.element?.includes('Open calendar'))
-        ? { tool: 'click', target: is('button', '4') } : { tool: 'click', target: is('button', 'Open calendar') };
+        ? { tool: 'click', target: is('button', '4') }
+        : { tool: 'click', target: is('button', 'Open calendar') };
 }
 
 /** Reproduce a strong completion guess when the completion question omits the shared action scope. */

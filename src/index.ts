@@ -8,7 +8,7 @@ export type { FileRef } from './files.ts';
 export { gatewayFromEnv } from './models.ts';
 export type { ModelCall, ModelProvider, ModelSettings, ModelUsage } from './models.ts';
 export type { Issue, IssueKind } from './monitor.ts';
-export type { Anchor, CheckEvidence, ValueAnchor, StepEnd, StepRecording, TargetDescriptor, TestRecording } from './recording.ts';
+export type { Anchor, CheckEvidence, StepEnd, StepRecording, TargetDescriptor, TestRecording, ValueAnchor } from './recording.ts';
 export { reveal, secret } from './secrets.ts';
 export type { Secret, SecretPurpose } from './secrets.ts';
 export { selectTests } from './select.ts';

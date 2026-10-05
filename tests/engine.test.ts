@@ -1,10 +1,10 @@
 import type { TestSpec } from '../src/index.ts';
 import type { RunSummary, SuiteOptions } from '../src/suite.ts';
 import type { View, ViewElement } from './support/scripted-models.ts';
+import { AssertionError } from 'node:assert';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { AssertionError } from 'node:assert';
 import { expect as playwrightExpect } from 'playwright/test';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runFailureExitCode } from '../src/cli.ts';
@@ -81,11 +81,11 @@ describe('integrity regression paths', () => {
         expect((await execution.run).totals.passed).toBe(1);
         expect(execution.calls.filter(call => call.questions.includes('holds')).every(call => !call.questions.includes('evidence'))).toBe(true);
     });
-    it.each(['missing', 'half', 'query', 'alert', 'invalid', '500', 'shadow-alert', 'frame-alert'])('fails replay when the recorded effect drifts: %s', async bug => {
-        const recordingsDir = join(root, 'integrity-drift-' + bug);
+    it.each(['missing', 'half', 'query', 'alert', 'invalid', '500', 'shadow-alert', 'frame-alert'])('fails replay when the recorded effect drifts: %s', async (bug) => {
+        const recordingsDir = join(root, `integrity-drift-${bug}`);
         const spec = { ...base, steps: () => [act('Save draft')] };
         expect((await suite([spec], { policy, recordingsDir }).run).totals.passed).toBe(1);
-        const result = await suite([{ ...spec, start: '/integrity?bug=' + bug }], { mode: 'replay', recordingsDir }).run;
+        const result = await suite([{ ...spec, start: `/integrity?bug=${bug}` }], { mode: 'replay', recordingsDir }).run;
         expect(result.results[0]?.status).toBe('failed');
         expect(runFailureExitCode(result)).toBe(1);
     });
@@ -116,7 +116,7 @@ describe('integrity regression paths', () => {
         const recordingsDir = join(root, 'integrity-partial');
         const spec = { ...base, steps: () => [act('Save draft'), verify('receipt', () => true), verify('later failure', () => false, { timeoutMs: 1 })] };
         expect((await suite([spec], { policy, recordingsDir }).run).results[0]?.status).toBe('failed');
-        const recording = JSON.parse(await readFile(join(recordingsDir, base.id + '.json'), 'utf8'));
+        const recording = JSON.parse(await readFile(join(recordingsDir, `${base.id}.json`), 'utf8'));
         expect(recording.partial).toBe(true);
         expect(recording.steps).toHaveLength(1);
         const next = await suite([spec], { policy, recordingsDir }).run;
@@ -128,7 +128,7 @@ describe('integrity regression paths', () => {
         const policy = (view: View) => view.claim ? { holds: 0.99, support: 'supports' as const, region: 'open' as const } : view.step === 'Open Details' && !view.history.length ? { tool: 'click' as const, target: (element: ViewElement) => element.name === 'Details' } : integrityPolicy(view);
         const spec = { ...base, steps: () => steps(true) };
         expect((await suite([spec], { policy, recordingsDir }).run).totals.passed).toBe(1);
-        const file = join(recordingsDir, base.id + '.json');
+        const file = join(recordingsDir, `${base.id}.json`);
         const legacy = JSON.parse(await readFile(file, 'utf8'));
         delete legacy.steps.find((step: { checkEvidence?: unknown }) => step.checkEvidence)?.checkEvidence;
         await writeFile(file, JSON.stringify(legacy));
@@ -170,11 +170,11 @@ describe('integrity regression paths', () => {
     });
     it('records every field in a compound factual check', async () => {
         const recordingsDir = join(root, 'compound-check-evidence');
-        const spec = { ...base, id: 'compound-check', ready: async ({ page }: { page: import('playwright').Page }) => { await page.goto(app.origin + '/profile'); }, steps: () => [check('The Nickname field shows "Ada" and the Bio field shows "Notes"')] };
+        const spec = { ...base, id: 'compound-check', ready: async ({ page }: { page: import('playwright').Page }) => { await page.goto(`${app.origin}/profile`); }, steps: () => [check('The Nickname field shows "Ada" and the Bio field shows "Notes"')] };
         const prepared = { ...spec, ready: async ({ page }: { page: import('playwright').Page }) => { await spec.ready({ page }); await page.getByLabel('Nickname').fill('Ada'); await page.getByLabel('Bio').fill('Notes'); } };
         const policy = () => ({ holds: 0.99, support: 'supports' as const, region: 'open' as const });
         expect((await suite([prepared], { recordingsDir, policy }).run).totals.passed).toBe(1);
-        const recording = JSON.parse(await readFile(join(recordingsDir, spec.id + '.json'), 'utf8'));
+        const recording = JSON.parse(await readFile(join(recordingsDir, `${spec.id}.json`), 'utf8'));
         expect(recording.steps[0].checkEvidence.map((entry: { target?: { name: string } }) => entry.target?.name)).toEqual(['Nickname', 'Bio']);
         const drift = { ...prepared, ready: async ({ page }: { page: import('playwright').Page }) => { await prepared.ready({ page }); await page.getByLabel('Bio').fill('Wrong'); } };
         expect((await suite([drift], { recordingsDir, mode: 'replay' }).run).results[0]?.status).toBe('failed');
@@ -202,21 +202,21 @@ describe('integrity regression paths', () => {
         const recordingsDir = join(root, 'local-clipped-evidence');
         const spec = { ...base, id: 'local-clipped-check', start: '/contextual-proof?bug=clipped-id', ready: async ({ page }: { page: import('playwright').Page }) => { await page.evaluate(() => history.replaceState({}, '', '/contextual-proof')); }, steps: () => [check('The page shows "Amber parcel"')] };
         expect((await suite([spec], { recordingsDir, policy: () => ({ holds: 0.99, support: 'supports', region: 'open' }) }).run).totals.passed).toBe(1);
-        const path = join(recordingsDir, spec.id + '.json');
+        const path = join(recordingsDir, `${spec.id}.json`);
         const recording = JSON.parse(await readFile(path, 'utf8'));
         recording.steps[0].checkEvidence = [{ regionVersion: 1, source: 'text', text: 'Reference …X7K9', region: 'page /contextual-proof', match: 'contains' }];
         await writeFile(path, JSON.stringify(recording));
         expect((await suite([spec], { recordingsDir, mode: 'replay' }).run).results[0]?.status).toBe('unverified');
     });
-    it.each([true, false])('keeps only independently selected proof after positive adjudication: %s', async selected => {
-        const recordingsDir = join(root, 'adjudicated-proof-' + selected);
-        const spec = { ...base, id: 'adjudicated-proof-' + selected, steps: () => [check('The Draft field shows "Original"')] };
-        const execution = suite([spec], { recordingsDir, policy: () => ({ holds: 0.52, support: 'supports', pSupport: 0.75, region: 'open', proof: selected }), helper: view => {
+    it.each([true, false])('keeps only independently selected proof after positive adjudication: %s', async (selected) => {
+        const recordingsDir = join(root, `adjudicated-proof-${selected}`);
+        const spec = { ...base, id: `adjudicated-proof-${selected}`, steps: () => [check('The Draft field shows "Original"')] };
+        const execution = suite([spec], { recordingsDir, policy: () => ({ holds: 0.52, support: 'supports', pSupport: 0.75, region: 'open', proof: selected }), helper: (view) => {
             expect(view.elements.find(element => element.name === 'Draft')?.value).toBe('Original');
             return { verdict: 'true', region: 'open', reason: 'The Draft field visibly contains Original' };
         } });
         expect((await execution.run).totals.passed).toBe(1);
-        const recording = JSON.parse(await readFile(join(recordingsDir, spec.id + '.json'), 'utf8'));
+        const recording = JSON.parse(await readFile(join(recordingsDir, `${spec.id}.json`), 'utf8'));
         expect(Boolean(recording.steps[0].checkEvidence?.length)).toBe(selected);
         expect((await suite([spec], { recordingsDir, mode: 'replay' }).run).results[0]?.status).toBe(selected ? 'passed' : 'unverified');
         if (selected) {
@@ -228,7 +228,7 @@ describe('integrity regression paths', () => {
         const recordingsDir = join(root, 'negative-adjudicated-proof');
         const spec = { ...base, id: 'negative-adjudicated-proof', steps: () => [check('The Draft field shows "Original"')] };
         expect((await suite([spec], { recordingsDir, policy: () => ({ holds: 0.45, support: 'supports', region: 'open', proof: true }), helper: () => ({ verdict: 'true', region: 'open', reason: 'The field contains Original' }) }).run).totals.passed).toBe(1);
-        const recording = JSON.parse(await readFile(join(recordingsDir, spec.id + '.json'), 'utf8'));
+        const recording = JSON.parse(await readFile(join(recordingsDir, `${spec.id}.json`), 'utf8'));
         expect(recording.steps[0].checkEvidence).toBeUndefined();
         expect((await suite([spec], { recordingsDir, mode: 'replay' }).run).results[0]?.status).toBe('unverified');
     });
@@ -245,7 +245,7 @@ describe('integrity regression paths', () => {
         const recordingsDir = join(root, 'legacy-request-precedence');
         const spec = { ...base, steps: () => [act('Save draft', { expect: { write: { method: 'POST', path: '/api/integrity', status: 500 } }, expectError: true })], start: '/integrity?bug=500' };
         expect((await suite([spec], { recordingsDir, policy }).run).totals.passed).toBe(1);
-        const path = join(recordingsDir, base.id + '.json');
+        const path = join(recordingsDir, `${base.id}.json`);
         const recording = JSON.parse(await readFile(path, 'utf8'));
         recording.steps[0].end = { appeared: [{ kind: 'heading', text: 'Old cached heading' }] };
         await writeFile(path, JSON.stringify(recording));
@@ -255,7 +255,7 @@ describe('integrity regression paths', () => {
         const recordingsDir = join(root, 'legacy-replay-drift');
         const spec = { ...base, steps: () => [act('Save draft'), verify('receipt visible', ({ page }) => page.getByRole('heading', { name: 'Draft stored', exact: true }).isVisible())] };
         expect((await suite([spec], { recordingsDir, policy }).run).totals.passed).toBe(1);
-        const path = join(recordingsDir, base.id + '.json');
+        const path = join(recordingsDir, `${base.id}.json`);
         const recording = JSON.parse(await readFile(path, 'utf8'));
         recording.steps[0].end = { appeared: [{ kind: 'heading', text: 'Old cached heading' }] };
         await writeFile(path, JSON.stringify(recording));
@@ -267,17 +267,17 @@ describe('integrity regression paths', () => {
         const recordingsDir = join(root, 'legacy-occurrences');
         const spec = { ...base, id: 'legacy-repeated', steps: () => [act('Save draft'), reload(), act('Save draft')] };
         expect((await suite([spec], { recordingsDir, policy }).run).totals.passed).toBe(1);
-        const path = join(recordingsDir, spec.id + '.json');
+        const path = join(recordingsDir, `${spec.id}.json`);
         const recording = JSON.parse(await readFile(path, 'utf8'));
         for (const entry of recording.steps) { entry.key = recording.steps[0].key; delete entry.occurrence; delete entry.end.strict; }
         await writeFile(path, JSON.stringify(recording));
         expect((await suite([spec], { recordingsDir, mode: 'replay' }).run).totals.passed).toBe(1);
     });
-    it.each(['info', 'warning', 'status'])('ignores informational or transient replay notices: %s', async bug => {
-        const recordingsDir = join(root, 'notice-' + bug);
+    it.each(['info', 'warning', 'status'])('ignores informational or transient replay notices: %s', async (bug) => {
+        const recordingsDir = join(root, `notice-${bug}`);
         const spec = { ...base, steps: () => [act('Save draft')] };
         expect((await suite([spec], { recordingsDir, policy }).run).totals.passed).toBe(1);
-        expect((await suite([{ ...spec, start: '/integrity?bug=' + bug }], { recordingsDir, mode: 'replay' }).run).totals.passed).toBe(1);
+        expect((await suite([{ ...spec, start: `/integrity?bug=${bug}` }], { recordingsDir, mode: 'replay' }).run).totals.passed).toBe(1);
     });
     it('does not call an existing notice new when its error role changes', async () => {
         const recordingsDir = join(root, 'existing-notice');
@@ -295,7 +295,7 @@ describe('integrity regression paths', () => {
         const recordingsDir = join(root, 'legacy-errors');
         const spec = { ...base, steps: () => [act('Save draft')] };
         expect((await suite([spec], { recordingsDir, policy }).run).totals.passed).toBe(1);
-        const path = join(recordingsDir, base.id + '.json');
+        const path = join(recordingsDir, `${base.id}.json`);
         const recording = JSON.parse(await readFile(path, 'utf8'));
         delete recording.steps[0].end.strict;
         await writeFile(path, JSON.stringify(recording));
@@ -313,7 +313,7 @@ describe('integrity regression paths', () => {
         const recordingsDir = join(root, 'integrity-route-attribution');
         const spec = { ...base, steps: () => [act('Save draft', { maxActions: 1 })] };
         expect((await suite([spec], { recordingsDir, policy }).run).totals.passed).toBe(1);
-        const path = join(recordingsDir, base.id + '.json');
+        const path = join(recordingsDir, `${base.id}.json`);
         const recording = JSON.parse(await readFile(path, 'utf8'));
         recording.steps[0].end.route = 'http://127.0.0.1:1/integrity';
         recording.steps[0].end.base = false;
@@ -328,7 +328,7 @@ describe('integrity regression paths', () => {
         const recordingsDir = join(root, 'integrity-route-history');
         const spec = { ...base, steps: () => [act('Save draft'), verify('receipt', ({ page }) => page.getByRole('heading', { name: 'Draft stored', exact: true }).isVisible())] };
         expect((await suite([spec], { recordingsDir, policy }).run).totals.passed).toBe(1);
-        const path = join(recordingsDir, base.id + '.json');
+        const path = join(recordingsDir, `${base.id}.json`);
         const recording = JSON.parse(await readFile(path, 'utf8'));
         recording.steps[0].end.route = 'http://127.0.0.1:1/integrity';
         recording.steps[0].end.base = false;
@@ -339,7 +339,7 @@ describe('integrity regression paths', () => {
         expect(auto.results[0]?.attempts[0]?.steps[0]?.endMismatch).toBe(true);
         expect(await readFile(path, 'utf8')).toBe(JSON.stringify(recording));
     });
-    it.each(['replay', 'auto'] as const)('retains replay validation as agent with a validation body in %s', async mode => {
+    it.each(['replay', 'auto'] as const)('retains replay validation as agent with a validation body in %s', async (mode) => {
         const recordingsDir = join(root, 'integrity-replay-validation');
         const spec = { ...base, steps: () => [act('Save draft')] };
         expect((await suite([spec], { recordingsDir, policy }).run).totals.passed).toBe(1);
@@ -357,14 +357,14 @@ describe('integrity regression paths', () => {
     });
     it.each([{ wrong: true, status: '422' }, { wrong: false, status: '422' }, { wrong: true, status: '500' }, { wrong: false, status: '500' }])('audits rejected writes without blaming product for the wrong field: $wrong/$status', async ({ wrong, status }) => {
         const driver = (view: View) => ({ onTarget: wrong ? 0.02 : 0.98, ...(view.history.some(entry => entry.action === 'click') ? { done: 0.01, tool: 'none' } : view.history.some(entry => entry.action === 'type') ? { tool: 'click', target: (element: { name?: string }) => element.name === 'Store draft' } : { tool: 'type', value: 'draft', target: (element: { name?: string }) => element.name === (wrong ? 'Reference' : 'Draft') }) });
-        const spec = { ...base, id: 'request-audit-' + wrong + status, start: '/integrity-audit?bug=' + status, ready: undefined, data: { draft: 'Stored content' }, steps: () => [act('Enter {draft} in Draft and store the draft', { maxActions: 2 })] };
+        const spec = { ...base, id: `request-audit-${wrong}${status}`, start: `/integrity-audit?bug=${status}`, ready: undefined, data: { draft: 'Stored content' }, steps: () => [act('Enter {draft} in Draft and store the draft', { maxActions: 2 })] };
         const result = (await suite([spec], { policy: driver, failOnIssues: false }).run).results[0]!;
         expect(result.cause).toBe(wrong ? 'agent' : 'product');
         if (wrong) { expect(result.attempts[0]?.steps[0]?.misstep).toContain('Reference'); }
     });
-    it.each(['500', '422', 'validation'])('audits agent failures against request evidence: %s', async bug => {
+    it.each(['500', '422', 'validation'])('audits agent failures against request evidence: %s', async (bug) => {
         const unfinished = (view: View) => view.history.some(entry => entry.action === 'click') ? { done: 0.01, tool: 'none', ...(bug === 'validation' ? { error: 0.99 } : {}) } : { tool: 'click', target: (element: { name?: string }) => element.name === 'Save draft' };
-        const result = await suite([{ ...base, start: '/integrity?bug=' + bug, steps: () => [act('Save draft')] }], { policy: unfinished, failOnIssues: false }).run;
+        const result = await suite([{ ...base, start: `/integrity?bug=${bug}`, steps: () => [act('Save draft')] }], { policy: unfinished, failOnIssues: false }).run;
         expect(result.results[0]?.cause).toBe(bug === 'validation' ? 'agent' : 'product');
         if (bug !== 'validation') { expect(result.results[0]?.summary).toContain('Request evidence:'); }
     });
@@ -1322,7 +1322,10 @@ it('waits for deferred controls before accepting a no-action plan', async () => 
 
 describe('page values and complete intentions', () => {
     const tokenTest = (id: string, token: string): TestSpec<void> => ({
-        id, title: 'Apply a live page value', risk: 'A stale token is entered', start: `/page-entry?token=${token}`,
+        id,
+        title: 'Apply a live page value',
+        risk: 'A stale token is entered',
+        start: `/page-entry?token=${token}`,
         steps: () => [act('Enter the access token shown on the page and apply it'), verify('accepted', async ({ page }) => page.getByRole('status').textContent().then(text => text === 'Access accepted'))],
     });
 
@@ -1377,7 +1380,7 @@ describe('page values and complete intentions', () => {
         expect(result.summary).toContain('Page value needs model grounding');
     });
 
-    it.each(['invented-9231', 'ar-7285', 'hidden-3179'])('rejects helper text absent from the current observation: %s', async value => {
+    it.each(['invented-9231', 'ar-7285', 'hidden-3179'])('rejects helper text absent from the current observation: %s', async (value) => {
         const spec = tokenTest(`reject-page-${value.toLowerCase()}`, 'AR-7285');
         if (value === 'hidden-3179') { spec.secrets = { credential: secret(value) }; spec.start = `/page-entry?token=${value}`; }
         const result = (await suite([spec], {
@@ -1391,7 +1394,11 @@ describe('page values and complete intentions', () => {
 
     it.each([0.2, 0.5])('keeps an explicit next-step boundary when remaining work is %s', async (remaining) => {
         const spec: TestSpec<void> = {
-            id: 'explicit-next-boundary', title: 'Open, then confirm', risk: 'The first step performs the next step', start: '/items', fixture: async () => { app.reset(); },
+            id: 'explicit-next-boundary',
+            title: 'Open, then confirm',
+            risk: 'The first step performs the next step',
+            start: '/items',
+            fixture: async () => { app.reset(); },
             steps: () => [act('Start archiving the Beta plan'), act('Confirm archiving in the dialog', { expect: { write: { path: /\/api\/items\/\w+\/archive/ } } }), verify('archived', () => app.state.items.find(item => item.id === 'b')?.archived === true)],
         };
         const result = (await suite([spec], { mode: 'ai', policy: view => view.step?.startsWith('Start archiving') && view.dialog ? { done: 0.85, remaining, complete: remaining === 0.5 ? 0.9 : 0.26 } : fixturePolicy(view) }).run).results[0]!;
@@ -1416,7 +1423,10 @@ describe('page values and complete intentions', () => {
 
     it.each(['Save the essay, then open the reading list', 'Save the essay and open the reading list', 'Save the essay; open the reading list', 'Save the essay, open the reading list', '收藏文章，然后打开阅读列表'].map((instruction, index) => ({ instruction, index })))('does not let the first declared write end a compound instruction: $instruction', async ({ instruction, index }) => {
         const spec: TestSpec<void> = {
-            id: `compound-submit-evidence-${index}`, title: 'Save and open', risk: 'A successful request hides a missing action', start: '/collection',
+            id: `compound-submit-evidence-${index}`,
+            title: 'Save and open',
+            risk: 'A successful request hides a missing action',
+            start: '/collection',
             steps: () => [act(instruction, { expect: { write: { path: '/api/profile' } } }), verify('list opened', async ({ page }) => (await page.getByRole('heading', { name: 'Reading list', exact: true }).count()) === 2)],
         };
         const result = (await suite([spec], { policy: view => fixturePolicy({ ...view, step: 'Save the essay, then open the reading list' }) }).run).results[0]!;
@@ -1426,8 +1436,12 @@ describe('page values and complete intentions', () => {
 
     it('grounds mixed public and secret values against the selected field', async () => {
         const spec: TestSpec<void> = {
-            id: 'mixed-credentials', title: 'Enter an account', risk: 'A secret is entered in the public member field', start: '/credential-form',
-            data: { account: 'marble@example.test' }, secrets: { password: secret('Private-Key-7312') },
+            id: 'mixed-credentials',
+            title: 'Enter an account',
+            risk: 'A secret is entered in the public member field',
+            start: '/credential-form',
+            data: { account: 'marble@example.test' },
+            secrets: { password: secret('Private-Key-7312') },
             steps: () => [act('Sign in using account {account} with password {password}'), verify('account opened', async ({ page }) => page.getByRole('heading', { name: 'Signed in as marble@example.test', exact: true }).isVisible())],
         };
         const result = (await suite([spec]).run).results[0]!;
@@ -1437,7 +1451,7 @@ describe('page values and complete intentions', () => {
 
     it.each([{ name: 'transaction', start: '/effects?single=1&confirm=1', step: 'Finalize the choice of the entry dated 2026-01-01', target: 'Confirm choice', result: 'Alpha chosen and confirmed' }, { name: 'destination', start: '/collection', step: 'Save the essay, then open the reading list', target: 'Reading list (1)', result: 'Reading list' }].flatMap(test => ['none', 'click'].map(tool => ({ ...test, tool }))))('reviews the selected control when all completion judgments agree incorrectly: $name / $tool', async ({ name, start, step, target, result: heading, tool }) => {
         const spec: TestSpec<void> = { id: `specific-control-${name}-${tool}`, title: 'Finish the whole step', risk: 'Global completion hides an unactivated control', start, steps: () => [act(step), verify('final action performed', async ({ page }) => name === 'transaction' ? page.getByRole('heading', { name: heading, exact: true }).isVisible() : (await page.getByRole('heading', { name: heading, exact: true }).count()) === 2)] };
-        const result = (await suite([spec], { policy: view => {
+        const result = (await suite([spec], { policy: (view) => {
             if (view.control) { return { needed: view.text || view.history.some(entry => entry.element?.includes(target)) ? 0.02 : 0.99 }; }
             const ready = view.text.includes('Alpha chosen') || view.elements.some(element => element.name === 'Saved');
             if (ready) { return { done: 0.99, achieved: 0.99, remaining: 0.02, tool, target: element => element.name === target }; }
@@ -1463,7 +1477,7 @@ describe('page values and complete intentions', () => {
 
     it('asks the helper to resolve an uncertain control activation before accepting done', async () => {
         const spec: TestSpec<void> = { id: 'uncertain-control', title: 'Finalize a choice', risk: 'An uncertain activation is mistaken for completion', start: '/effects?single=1&confirm=1', steps: () => [act('Finalize the choice of the entry dated 2026-01-01'), verify('confirmed', async ({ page }) => page.getByRole('heading', { name: 'Alpha chosen and confirmed', exact: true }).isVisible())] };
-        const result = (await suite([spec], { policy: view => {
+        const result = (await suite([spec], { policy: (view) => {
             if (view.control) { return { needed: 0.32 }; }
             if (view.text.includes('Alpha chosen and confirmed')) { return { done: 0.99, achieved: 0.99 }; }
             if (view.text.includes('Alpha chosen')) { return { done: 0.93, achieved: 0.64, remaining: 0.45, tool: 'none', target: element => element.name === 'Confirm choice' }; }
@@ -1485,10 +1499,13 @@ describe('page values and complete intentions', () => {
 
     it('rejects a stage-review action on an unrelated navigation link', async () => {
         const spec: TestSpec<void> = {
-            id: 'unrelated-stage-action', title: 'Commit a choice', risk: 'An unrelated route is mistaken for the requested final action', start: '/effects?single=1&confirm=1',
+            id: 'unrelated-stage-action',
+            title: 'Commit a choice',
+            risk: 'An unrelated route is mistaken for the requested final action',
+            start: '/effects?single=1&confirm=1',
             steps: () => [act('Finalize the choice of the entry dated 2026-01-01'), verify('confirmed', async ({ page }) => page.getByRole('heading', { name: 'Alpha chosen and confirmed', exact: true }).isVisible())],
         };
-        const result = (await suite([spec], { policy: view => {
+        const result = (await suite([spec], { policy: (view) => {
             if (view.proposal?.element === 'link "Profile"' || view.history.some(entry => entry.element === 'link "Profile"')) { return { done: 0.99, achieved: 0.99, onTarget: 0.02 }; }
             if (view.text.includes('Alpha chosen')) { return view.review ? { achieved: 0.02, tool: 'click', target: element => element.role === 'link' && element.name === 'Profile' } : { done: 0.98, remaining: 0.98 }; }
             return { tool: 'click', target: element => element.name === 'Choose' };
@@ -1499,7 +1516,10 @@ describe('page values and complete intentions', () => {
 
     it('distinguishes a prepared value from the committed result even when both done judgments agree', async () => {
         const spec: TestSpec<void> = {
-            id: 'prepare-then-commit', title: 'Finalize a choice', risk: 'Selecting a value is mistaken for committing it', start: '/effects?single=1&confirm=1',
+            id: 'prepare-then-commit',
+            title: 'Finalize a choice',
+            risk: 'Selecting a value is mistaken for committing it',
+            start: '/effects?single=1&confirm=1',
             steps: () => [act('Finalize the choice of the entry dated 2026-01-01'), verify('confirmed', async ({ page }) => page.getByRole('heading', { name: 'Alpha chosen and confirmed', exact: true }).isVisible())],
         };
         const result = (await suite([spec], {
@@ -1531,7 +1551,6 @@ describe('page values and complete intentions', () => {
         expect(result.attempts[0]!.steps[1]!.evidence).toMatchObject({ verdicts: [{ passed: false, support: 'not_shown', uncertain: true }, { adjudicated: { passed: false, support: 'not_shown' } }] });
     });
 });
-
 
 describe('page value sources', () => {
     const observation = (text = '') => ({ url: '/', title: '', text, notices: [], headings: [], elements: [], omitted: 0, signature: '' });
@@ -1575,7 +1594,6 @@ describe('page value sources', () => {
     });
 });
 
-
 describe('integration secret purposes', () => {
     it('rejects a default password secret in a public field even when both models choose it', async () => {
         const spec: TestSpec<void> = { id: 'password-in-public-field', title: 'Credential guard', risk: 'A password reaches the public field', start: '/integration-secrets', secrets: { password: secret('Protected-5921') }, steps: () => [act('Enter {password} in Email', { maxActions: 2 })] };
@@ -1591,13 +1609,12 @@ describe('integration secret purposes', () => {
         const selected = test.calls.find(call => call.view.field?.includes('Email'))!;
         expect(selected.view.values).toEqual({ email: 'person@example.test' });
     });
-    it.each(['Password', 'API key'])('allows the declared purpose in %s', async name => {
-        const spec: TestSpec<void> = { id: `purpose-${name.toLowerCase().replaceAll(' ', '-')}`, title: 'Valid secret purpose', risk: 'An authorized credential is blocked', start: '/integration-secrets', secrets: { credential: secret('Protected-5921', { purpose: name === 'API key' ? 'any' : 'password' }) }, steps: () => [act('Enter {credential} in ' + name), verify('entered', async ({ page }) => name === 'API key' ? (await page.getByRole('textbox', { name, exact: true }).textContent()) === 'Protected-5921' : (await page.getByRole('textbox', { name, exact: true }).inputValue()) === 'Protected-5921')] };
+    it.each(['Password', 'API key'])('allows the declared purpose in %s', async (name) => {
+        const spec: TestSpec<void> = { id: `purpose-${name.toLowerCase().replaceAll(' ', '-')}`, title: 'Valid secret purpose', risk: 'An authorized credential is blocked', start: '/integration-secrets', secrets: { credential: secret('Protected-5921', { purpose: name === 'API key' ? 'any' : 'password' }) }, steps: () => [act(`Enter {credential} in ${name}`), verify('entered', async ({ page }) => name === 'API key' ? (await page.getByRole('textbox', { name, exact: true }).textContent()) === 'Protected-5921' : (await page.getByRole('textbox', { name, exact: true }).inputValue()) === 'Protected-5921')] };
         const result = (await suite([spec], { mode: 'ai', policy: view => view.history.some(entry => entry.action === 'type' && !entry.error) ? { done: 0.99 } : { tool: 'type', target: element => element.name === name, value: 'credential' } }).run).results[0]!;
         expect(result.status, result.summary).toBe('passed');
     });
 });
-
 
 it('integration preserves the explicit next-step boundary at observed confidence 0.64', async () => {
     const spec: TestSpec<void> = { id: 'borderline-next-stage', title: 'Prepare and confirm separately', risk: 'A prepared dialog is rejected before the defect check', start: '/items?bug=wrong-row', fixture: async () => { app.reset(); }, invariants: [{ name: 'Other entries stay active', check: () => app.state.items.filter(item => item.id !== 'b').every(item => !item.archived) }], steps: () => [act('Start archiving the Beta plan'), act('Confirm archiving in the dialog', { expect: { write: { path: /\/archive$/ } } })] };
@@ -1607,10 +1624,9 @@ it('integration preserves the explicit next-step boundary at observed confidence
     expect(result.attempts[0]!.steps[1]!.failure).toBe('invariant');
 });
 
-
 it('integration reaches direct content checks after button-based navigation to an empty destination', async () => {
     const spec: TestSpec<void> = { id: 'button-destination-empty', title: 'Save and inspect a destination', risk: 'Empty content is hidden by an agent failure', start: '/collection?bug=empty&buttons=1', steps: () => [act('Save the essay, then open the reading list'), check('The reading list view displays the saved essay')] };
-    const result = (await suite([spec], { mode: 'ai', policy: view => {
+    const result = (await suite([spec], { mode: 'ai', policy: (view) => {
         if (view.claim) { return { holds: 0.03, support: 'contradicts' }; }
         if (!view.text.includes('Catalog')) { return { done: 0.15, achieved: 0.84, remaining: 0.53, navigation: 0.25, tool: 'none' }; }
         return view.elements.some(element => element.name === 'Saved') ? { done: 0.76, remaining: 0.8, navigation: 0.57, tool: 'click', target: element => element.name === 'Reading list (1)' } : { tool: 'click', target: element => element.name === 'Save essay' };
@@ -1621,10 +1637,9 @@ it('integration reaches direct content checks after button-based navigation to a
     expect(result.attempts[0]!.steps[1]!.failure).toBe('assertion');
 });
 
-
 it('reviews a submitted form with the same code-observed transition as the action decision', async () => {
     const spec: TestSpec<void> = { id: 'submitted-form-transition', title: 'Sign in and leave the form', risk: 'Disappearing inputs obscure a completed submission', start: '/credential-form', data: { account: 'marble@example.test' }, secrets: { password: secret('Private-Key-7312') }, steps: () => [act('Sign in using account {account} with password {password}'), verify('account opened', async ({ page }) => page.getByRole('heading', { name: 'Signed in as marble@example.test', exact: true }).isVisible())] };
-    const result = (await suite([spec], { mode: 'ai', policy: view => {
+    const result = (await suite([spec], { mode: 'ai', policy: (view) => {
         if (!view.text.includes('Signed in as')) { return fixturePolicy(view); }
         const changed = String(view.change?.new_text ?? '').includes('Signed') && (view.change?.removed as string[] | undefined)?.some(element => element.includes('Password'));
         return { done: 0.53, remaining: 0.75, achieved: changed ? 0.99 : 0.37, navigation: 0.03, tool: 'none' };
@@ -1633,10 +1648,9 @@ it('reviews a submitted form with the same code-observed transition as the actio
     expect(result.attempts[0]!.steps[0]!.actions?.map(action => action.tool)).toEqual(['type', 'type', 'click']);
 });
 
-
 it('retains successful supplied-value evidence after submission removes credential fields', async () => {
     const spec: TestSpec<void> = { id: 'submitted-secret-evidence', title: 'Submit supplied credentials', risk: 'Masked input evidence is lost when fields disappear', start: '/credential-form', data: { account: 'marble@example.test' }, secrets: { password: secret('Private-Key-7312') }, steps: () => [act('Sign in using account {account} with password {password}'), verify('account opened', async ({ page }) => page.getByRole('heading', { name: 'Signed in as marble@example.test', exact: true }).isVisible())] };
-    const result = (await suite([spec], { mode: 'ai', policy: view => {
+    const result = (await suite([spec], { mode: 'ai', policy: (view) => {
         if (!view.text.includes('Signed in as')) { return fixturePolicy(view); }
         const supplied = view.supplied.account?.includes('Account email') && view.supplied.password?.includes('Password');
         return { done: 0.52, remaining: 0.72, achieved: supplied ? 0.99 : 0.46, navigation: 0.05, tool: 'none' };
@@ -1645,10 +1659,9 @@ it('retains successful supplied-value evidence after submission removes credenti
     expect(result.attempts[0]!.steps[0]!.actions?.map(action => action.tool)).toEqual(['type', 'type', 'click']);
 });
 
-
 it('uses stable control identity when its nearby count changes between required activations', async () => {
     const spec: TestSpec<void> = { id: 'changing-count-control', title: 'Increase a batch count', risk: 'A changing nearby count makes a completed increment look unperformed', start: '/integration-counter?bug=total', steps: () => [act('Increase the first batch count by two'), verify('total reflects the new count', async ({ page }) => (await page.locator('output').textContent()) === '21')] };
-    const result = (await suite([spec], { mode: 'ai', policy: view => {
+    const result = (await suite([spec], { mode: 'ai', policy: (view) => {
         const clicks = view.history.filter(entry => entry.action === 'click' && !entry.error).length;
         if (view.control) { return { needed: 0.31 }; }
         return clicks < 2 ? { done: 0.03, remaining: 0.99, tool: 'click', target: element => element.name === '+' } : { done: 0.67, remaining: 0.11, achieved: 0.93, navigation: 0, tool: 'none', target: element => element.name === '+' };
@@ -1657,7 +1670,6 @@ it('uses stable control identity when its nearby count changes between required 
     expect(result.attempts[0]!.steps[0]!.actions?.filter(action => action.ok)).toHaveLength(2);
     expect(result.attempts[0]!.steps[1]!.failure).toBe('assertion');
 });
-
 
 describe('hardening instruction and evidence boundaries', () => {
     it('describes page key input that can advance across segmented fields', async () => {
@@ -1677,14 +1689,14 @@ describe('hardening instruction and evidence boundaries', () => {
         expect(result.status, result.summary).toBe('passed');
         expect(result.attempts[0]!.steps[0]!.evidence).toMatchObject({ verdicts: expect.arrayContaining([expect.objectContaining({ passed: false }), expect.objectContaining({ passed: true })]) });
     });
-    it.each(['closed', 'unknown'])('keeps uncertain location evidence away from product attribution (%s)', async region => {
-        const spec: TestSpec<void> = { id: 'uncertain-region-' + region, title: 'Locate delivery records', risk: 'A guessed region becomes product evidence', start: '/attribution-regions?region=unselected', steps: () => [check('The delivery records show Record ZX-71')] };
+    it.each(['closed', 'unknown'])('keeps uncertain location evidence away from product attribution (%s)', async (region) => {
+        const spec: TestSpec<void> = { id: `uncertain-region-${region}`, title: 'Locate delivery records', risk: 'A guessed region becomes product evidence', start: '/attribution-regions?region=unselected', steps: () => [check('The delivery records show Record ZX-71')] };
         const result = (await suite([spec], { mode: 'ai', policy: () => ({ holds: 0.02, support: 'not_shown', region: 'unknown' }), helper: () => ({ verdict: 'not_shown', region, reason: 'The content location is not established' }) }).run).results[0]!;
         expect(result.cause, result.summary).toBe('agent');
     });
-    it.each(['loading', 'empty', 'collapsed', 'unselected'])('attributes absent content from its relevant region (%s)', async region => {
+    it.each(['loading', 'empty', 'collapsed', 'unselected'])('attributes absent content from its relevant region (%s)', async (region) => {
         const open = region === 'loading' || region === 'empty';
-        const spec: TestSpec<void> = { id: 'region-' + region, title: 'Inspect delivery records', risk: 'Absent content is charged to the wrong actor', start: '/attribution-regions?region=' + region, steps: () => [check('The delivery records show Record ZX-71')] };
+        const spec: TestSpec<void> = { id: `region-${region}`, title: 'Inspect delivery records', risk: 'Absent content is charged to the wrong actor', start: `/attribution-regions?region=${region}`, steps: () => [check('The delivery records show Record ZX-71')] };
         const result = (await suite([spec], { mode: 'ai', policy: () => ({ holds: 0.02, support: 'not_shown', region: open ? 'open' : 'closed' }), helper: () => ({ verdict: 'not_shown', region: open ? 'open' : 'closed', reason: 'The requested record is absent' }) }).run).results[0]!;
         expect(result.cause, result.summary).toBe(open ? 'product' : 'agent');
         expect(result.attempts[0]!.steps[0]!.evidence).toMatchObject({ verdicts: expect.arrayContaining([expect.objectContaining({ region: open ? 'open' : 'closed' })]) });
@@ -1692,7 +1704,7 @@ describe('hardening instruction and evidence boundaries', () => {
     });
     it('grounds a requested page sequence before spending helpers on individual segments', async () => {
         const spec: TestSpec<void> = { id: 'segmented-page-sequence', title: 'Enter an observed sequence', risk: 'Per-character helper calls exhaust the step budget', start: '/attribution-segments', steps: () => [act('Enter the six-digit access sequence displayed on the page across the segmented inputs and verify access'), verify('challenge accepted', async ({ page }) => (await page.locator('output').textContent()) === 'Access granted')] };
-        const test = suite([spec], { mode: 'ai', helper: view => ({ outcome: 'act', tool: 'type', element: view.elements.find(element => element.name === 'Segment ' + (view.history.filter(entry => entry.action === 'type').length + 1))!.i, text: '681942'[view.history.filter(entry => entry.action === 'type').length], value_key: null, reason: 'Enter the next displayed character' }) });
+        const test = suite([spec], { mode: 'ai', helper: view => ({ outcome: 'act', tool: 'type', element: view.elements.find(element => element.name === `Segment ${view.history.filter(entry => entry.action === 'type').length + 1}`)!.i, text: '681942'[view.history.filter(entry => entry.action === 'type').length], value_key: null, reason: 'Enter the next displayed character' }) });
         const result = (await test.run).results[0]!;
         expect(result.status, result.summary).toBe('passed');
         expect(result.models.llmCalls).toBe(0);
@@ -1711,8 +1723,8 @@ describe('hardening instruction and evidence boundaries', () => {
         expect(result.cause, result.summary).toBe('product');
     });
     it.each(['jev', 'helper'])('separates actual page input from its human provenance label (%s)', async (source) => {
-        const spec: TestSpec<void> = { id: 'page-history-' + source, title: 'Enter observed token', risk: 'A provenance prefix is mistaken for actual field input', start: '/hardening-page-history?token=HS-4127', steps: () => [act('Read the token from the page and enter it in Code'), verify('exact token', async ({ page }) => (await page.getByRole('textbox', { name: 'Code', exact: true }).inputValue()) === 'HS-4127')] };
-        const test = suite([spec], { mode: 'ai', policy: view => {
+        const spec: TestSpec<void> = { id: `page-history-${source}`, title: 'Enter observed token', risk: 'A provenance prefix is mistaken for actual field input', start: '/hardening-page-history?token=HS-4127', steps: () => [act('Read the token from the page and enter it in Code'), verify('exact token', async ({ page }) => (await page.getByRole('textbox', { name: 'Code', exact: true }).inputValue()) === 'HS-4127')] };
+        const test = suite([spec], { mode: 'ai', policy: (view) => {
             // Reproduce a real helper mistaking the log prefix for malformed input despite a correct field value.
             if (view.history.some(entry => entry.value?.startsWith('page: '))) { return { tool: 'type', inputSource: 'step', target: element => element.name === 'Code' }; }
             if (view.history.some(entry => entry.action === 'type')) { return { done: 0.98 }; }
@@ -1738,7 +1750,7 @@ describe('hardening instruction and evidence boundaries', () => {
     });
     it('does not finish while requested submission and target reviews remain uncertain', async () => {
         const spec: TestSpec<void> = { id: 'uncertain-required-submit', title: 'Submit a prepared form', risk: 'Conflicting reviews accept preparation as submission', start: '/credential-form', data: { account: 'marble@example.test' }, secrets: { password: secret('Private-Key-7312') }, steps: () => [act('Sign in using account {account} with password {password}'), verify('account opened', async ({ page }) => page.getByRole('heading', { name: 'Signed in as marble@example.test', exact: true }).isVisible())] };
-        const result = (await suite([spec], { mode: 'ai', policy: view => {
+        const result = (await suite([spec], { mode: 'ai', policy: (view) => {
             if (view.control) { return { needed: 0.68 }; }
             if (view.field) { return fixturePolicy(view); }
             if (!view.elements.length) { return { onTarget: 0.68 }; }
@@ -1771,19 +1783,18 @@ describe('hardening instruction and evidence boundaries', () => {
         const result = (await suite([spec], { mode: 'ai', policy: view => view.history.some(entry => entry.action === 'click') ? { done: 0.03, remaining: 0.98 } : { tool: 'click', target: element => element.name === 'Save profile' }, helper: () => ({ outcome: 'impossible', reason: 'No remaining action', tool: null, element: null, value_key: null, text: null }) }).run).results[0]!;
         expect(result.status, result.summary).toBe('passed');
     });
-    it.each(['2', 'ABC123'])('preserves field tokens when recording page input %s', async token => {
-        const spec: TestSpec<void> = { id: 'page-target-' + token.toLowerCase(), title: 'Enter page token', risk: 'A substring corrupts a recorded field name', start: '/hardening-page-input?token=' + token, steps: () => [act('Read the token from the page and enter it in ' + (token === '2' ? 'Address line 2' : 'ABC1234'))] };
+    it.each(['2', 'ABC123'])('preserves field tokens when recording page input %s', async (token) => {
+        const spec: TestSpec<void> = { id: `page-target-${token.toLowerCase()}`, title: 'Enter page token', risk: 'A substring corrupts a recorded field name', start: `/hardening-page-input?token=${token}`, steps: () => [act(`Read the token from the page and enter it in ${token === '2' ? 'Address line 2' : 'ABC1234'}`)] };
         const result = (await suite([spec], { mode: 'ai', policy: view => view.history.some(entry => entry.action === 'type') ? { done: 0.99 } : { tool: 'type', target: element => element.name === (token === '2' ? 'Address line 2' : 'ABC1234'), pageValue: token } }).run).results[0]!;
         expect(result.status, result.summary).toBe('passed');
-        const stored = JSON.parse(await readFile(join(root, 'recordings', spec.id + '.json'), 'utf8'));
+        const stored = JSON.parse(await readFile(join(root, 'recordings', `${spec.id}.json`), 'utf8'));
         expect(stored.steps[0].actions[0].target.name).toBe(token === '2' ? 'Address line 2' : 'ABC1234');
     });
 });
 
-
 it('hardening waits before completion review instead of reviewing each idle polling round', async () => {
     const spec: TestSpec<void> = { id: 'review-after-wait', title: 'Deferred action', risk: 'Each wait duplicates review calls', start: '/reach-actions', steps: () => [act('Wait for the control, then double-click Open twice'), verify('double-clicked', ({ page }) => page.locator('#events').textContent().then(text => text?.includes('twice') === true))] };
-    const test = suite([spec], { mode: 'ai', policy: view => {
+    const test = suite([spec], { mode: 'ai', policy: (view) => {
         if (view.history.filter(entry => entry.action === 'wait').length < 3) { return { done: 0.4, tool: 'wait' }; }
         return view.text.includes('twice|') ? { done: 0.99 } : { tool: 'double_click', target: element => element.name === 'Open twice' };
     } });
@@ -1826,7 +1837,7 @@ it('reach2 preserves helper text selection when Jev proposes typing into the sam
 
 it('reach2 audits a pending activation independently from corrected earlier input', async () => {
     const spec: TestSpec<void> = { id: 'corrected-input-commit', title: 'Correct and store a cost', risk: 'An earlier input mistake suppresses the required commit', start: '/surface-labels', data: { cost: '17.25', mistake: '9.00' }, steps: () => [act('Correct Cost to {cost}, then Store entry'), verify('stored', ({ page }) => page.locator('#status').textContent().then(text => text === 'Entry stored'), { timeoutMs: 500 })] };
-    const result = (await suite([spec], { mode: 'ai', policy: view => {
+    const result = (await suite([spec], { mode: 'ai', policy: (view) => {
         if (!view.url && !view.control && (view.proposal || view.history.length)) { return { onTarget: (view.proposal ? [view.proposal] : view.history).some(entry => entry.action === 'type') ? 0.01 : 0.99 }; }
         if (view.notices.includes('Entry stored')) { return { done: 0.99 }; }
         const types = view.history.filter(entry => entry.action === 'type').length;
@@ -1851,24 +1862,23 @@ it('reach2 keeps unobserved clipboard contents outside keyboard input authorizat
     expect(JSON.stringify(result)).toContain('Clipboard input requires the type tool and an authorized value');
 });
 
-
 describe('merge completion regressions', () => {
-    it.each(['healthy', 'missing'])('executes the necessary reservation confirmation before verifying: %s', async bug => {
-        const spec: TestSpec<void> = { id: 'reservation-flow', title: 'Reserve a date', risk: 'Selection is mistaken for a reservation', start: '/completion-calendar?bug=' + bug, steps: () => [act('Reserve the date requested on the page'), verify('reservation committed', ({ page }) => page.locator('#receipt').textContent().then(text => text === 'Reservation confirmed'), { timeoutMs: 1 })] };
+    it.each(['healthy', 'missing'])('executes the necessary reservation confirmation before verifying: %s', async (bug) => {
+        const spec: TestSpec<void> = { id: 'reservation-flow', title: 'Reserve a date', risk: 'Selection is mistaken for a reservation', start: `/completion-calendar?bug=${bug}`, steps: () => [act('Reserve the date requested on the page'), verify('reservation committed', ({ page }) => page.locator('#receipt').textContent().then(text => text === 'Reservation confirmed'), { timeoutMs: 1 })] };
         const result = (await suite([spec], { mode: 'ai', policy: reservationPolicy, helper: () => ({ activation: 'activate', reason: 'The reservation requires its final confirmation' }) }).run).results[0]!;
         expect(result.status, result.summary).toBe(bug === 'healthy' ? 'passed' : 'failed');
         if (bug === 'missing') { expect(result.cause).toBe('product'); }
         expect(result.attempts[0]?.steps[0]?.actions?.map(action => action.element)).toEqual(['button "Open calendar"', 'button "4" near "August 2027"', 'button "Confirm reservation"']);
     });
-    it.each(['healthy', 'missing'])('uses shared authorization before accepting a strong selection-only completion: %s', async bug => {
-        const spec: TestSpec<void> = { id: 'reservation-scope', title: 'Commit the requested reservation', risk: 'Completion and control reviews disagree about necessary final actions', start: '/completion-calendar?bug=' + bug, steps: () => [act('Reserve the date requested on the page'), verify('reservation committed', ({ page }) => page.locator('#receipt').textContent().then(text => text === 'Reservation confirmed'), { timeoutMs: 1 })] };
+    it.each(['healthy', 'missing'])('uses shared authorization before accepting a strong selection-only completion: %s', async (bug) => {
+        const spec: TestSpec<void> = { id: 'reservation-scope', title: 'Commit the requested reservation', risk: 'Completion and control reviews disagree about necessary final actions', start: `/completion-calendar?bug=${bug}`, steps: () => [act('Reserve the date requested on the page'), verify('reservation committed', ({ page }) => page.locator('#receipt').textContent().then(text => text === 'Reservation confirmed'), { timeoutMs: 1 })] };
         const result = (await suite([spec], { mode: 'ai', policy: reservationScopePolicy }).run).results[0]!;
         expect(result.status, result.summary).toBe(bug === 'healthy' ? 'passed' : 'failed');
         if (bug === 'missing') { expect(result.cause).toBe('product'); }
         expect(result.attempts[0]?.steps[0]?.actions?.map(action => action.element)).toEqual(['button "Open calendar"', 'button "4" near "August 2027"', 'button "Confirm reservation"']);
     });
-    it.each(['healthy', 'missing'])('reviews an unactivated confident candidate despite a low necessity guess: %s', async bug => {
-        const spec: TestSpec<void> = { id: 'reservation-low-necessity', title: 'Commit a reservation', risk: 'A confident target conflicts with selection-only completion', start: '/completion-calendar?bug=' + bug, steps: () => [act('Reserve the date requested on the page'), verify('reservation committed', ({ page }) => page.locator('#receipt').textContent().then(text => text === 'Reservation confirmed'), { timeoutMs: 1 })] };
+    it.each(['healthy', 'missing'])('reviews an unactivated confident candidate despite a low necessity guess: %s', async (bug) => {
+        const spec: TestSpec<void> = { id: 'reservation-low-necessity', title: 'Commit a reservation', risk: 'A confident target conflicts with selection-only completion', start: `/completion-calendar?bug=${bug}`, steps: () => [act('Reserve the date requested on the page'), verify('reservation committed', ({ page }) => page.locator('#receipt').textContent().then(text => text === 'Reservation confirmed'), { timeoutMs: 1 })] };
         const policy = (view: Parameters<typeof reservationPolicy>[0]) => view.control ? { needed: 0.06 } : { ...reservationPolicy(view), pTarget: 0.69 };
         const result = (await suite([spec], { mode: 'ai', policy, helper: () => ({ activation: 'activate', reason: 'The requested reservation requires its unperformed final confirmation' }) }).run).results[0]!;
         expect(result.status, result.summary).toBe(bug === 'healthy' ? 'passed' : 'failed');
@@ -1881,8 +1891,8 @@ describe('merge completion regressions', () => {
         expect(result.status, result.summary).toBe('passed');
         expect(result.attempts[0]?.steps[0]?.actions?.map(action => action.element)).toEqual(['button "Open calendar"', 'button "4" near "August 2027"', 'button "Confirm reservation"']);
     });
-    it.each(['healthy', 'missing'])('states that no later action step reserves the necessary confirmation: %s', async bug => {
-        const spec: TestSpec<void> = { id: 'reservation-no-next', title: 'Reserve without a later action', risk: 'An invented later step forbids the necessary confirmation', start: '/completion-calendar?bug=' + bug, steps: () => [act('Reserve the date requested on the page'), verify('reservation committed', ({ page }) => page.locator('#receipt').textContent().then(text => text === 'Reservation confirmed'), { timeoutMs: 1 })] };
+    it.each(['healthy', 'missing'])('states that no later action step reserves the necessary confirmation: %s', async (bug) => {
+        const spec: TestSpec<void> = { id: 'reservation-no-next', title: 'Reserve without a later action', risk: 'An invented later step forbids the necessary confirmation', start: `/completion-calendar?bug=${bug}`, steps: () => [act('Reserve the date requested on the page'), verify('reservation committed', ({ page }) => page.locator('#receipt').textContent().then(text => text === 'Reservation confirmed'), { timeoutMs: 1 })] };
         const policy = (view: Parameters<typeof reservationPolicy>[0]) => {
             if (view.next !== null && !view.history.some(entry => entry.element?.includes('Confirm reservation'))) {
                 if (view.control) { return { needed: 0.02 }; }
@@ -1895,43 +1905,43 @@ describe('merge completion regressions', () => {
         if (bug === 'missing') { expect(result.cause).toBe('product'); }
         expect(result.attempts[0]?.steps[0]?.actions?.map(action => action.element)).toEqual(['button "Open calendar"', 'button "4" near "August 2027"', 'button "Confirm reservation"']);
     });
-    it.each(['healthy', 'missing'])('audits necessary unnamed final controls as authorized actions: %s', async bug => {
-        const spec: TestSpec<void> = { id: 'reservation-authorized-audit', title: 'Authorize final reservation control', risk: 'Literal target naming conflicts with the authorized requested outcome', start: '/completion-calendar?bug=' + bug, steps: () => [act('Reserve the date requested on the page'), verify('reservation committed', ({ page }) => page.locator('#receipt').textContent().then(text => text === 'Reservation confirmed'), { timeoutMs: 1 })] };
+    it.each(['healthy', 'missing'])('audits necessary unnamed final controls as authorized actions: %s', async (bug) => {
+        const spec: TestSpec<void> = { id: 'reservation-authorized-audit', title: 'Authorize final reservation control', risk: 'Literal target naming conflicts with the authorized requested outcome', start: `/completion-calendar?bug=${bug}`, steps: () => [act('Reserve the date requested on the page'), verify('reservation committed', ({ page }) => page.locator('#receipt').textContent().then(text => text === 'Reservation confirmed'), { timeoutMs: 1 })] };
         const policy = (view: View) => !view.url && !view.control ? { onTarget: /"authorized":/.test(view.instructions ?? '') ? 0.98 : 0.68 } : reservationPolicy(view);
         const result = (await suite([spec], { mode: 'ai', policy, helper: () => ({ reason: 'The final confirmation is required by the requested result', activation: 'activate' }) }).run).results[0]!;
         expect(result.status, result.summary).toBe(bug === 'healthy' ? 'passed' : 'failed');
         if (bug === 'missing') { expect(result.cause).toBe('product'); }
         expect(result.attempts[0]?.steps[0]?.actions?.map(action => action.element)).toEqual(['button "Open calendar"', 'button "4" near "August 2027"', 'button "Confirm reservation"']);
     });
-    it.each(['healthy', 'missing'])('keeps a proposed confirmation separate from delivered history: %s', async bug => {
-        const spec: TestSpec<void> = { id: 'reservation-pending-proposal', title: 'Review a pending confirmation', risk: 'The audit treats its own proposed click as already delivered', start: '/completion-calendar?bug=' + bug, steps: () => [act('Reserve the date requested on the page'), verify('reservation committed', ({ page }) => page.locator('#receipt').textContent().then(text => text === 'Reservation confirmed'), { timeoutMs: 1 })] };
+    it.each(['healthy', 'missing'])('keeps a proposed confirmation separate from delivered history: %s', async (bug) => {
+        const spec: TestSpec<void> = { id: 'reservation-pending-proposal', title: 'Review a pending confirmation', risk: 'The audit treats its own proposed click as already delivered', start: `/completion-calendar?bug=${bug}`, steps: () => [act('Reserve the date requested on the page'), verify('reservation committed', ({ page }) => page.locator('#receipt').textContent().then(text => text === 'Reservation confirmed'), { timeoutMs: 1 })] };
         const policy = (view: View) => !view.url && !view.control ? { onTarget: view.proposal ? /Otherwise audit/.test(view.instructions ?? '') ? 0.48 : 0.98 : !view.history.some(entry => entry.element?.includes('Confirm reservation')) ? 0.98 : 0.25 } : reservationPolicy(view);
         const result = (await suite([spec], { mode: 'ai', policy, helper: () => ({ reason: 'The final confirmation is pending', activation: 'activate' }) }).run).results[0]!;
         expect(result.status, result.summary).toBe(bug === 'healthy' ? 'passed' : 'failed');
         if (bug === 'missing') { expect(result.cause).toBe('product'); }
         expect(result.attempts[0]?.steps[0]?.actions?.map(action => action.element)).toEqual(['button "Open calendar"', 'button "4" near "August 2027"', 'button "Confirm reservation"']);
     });
-    it.each(['healthy', 'missing'])('does not require a destination view after delivered compound gestures: %s', async bug => {
-        const spec: TestSpec<void> = { id: 'gesture-navigation', title: 'Hold and inspect an item', risk: 'Navigation review blocks a completed action without a requested view', start: '/completion-gestures?bug=' + bug, steps: () => [act('Long-press Hold item, then double-click Inspect item'), verify('gestures applied', async ({ page }) => await page.locator('#held').textContent() === 'Held' && await page.locator('#inspected').textContent() === 'Inspected', { timeoutMs: 1 })] };
+    it.each(['healthy', 'missing'])('does not require a destination view after delivered compound gestures: %s', async (bug) => {
+        const spec: TestSpec<void> = { id: 'gesture-navigation', title: 'Hold and inspect an item', risk: 'Navigation review blocks a completed action without a requested view', start: `/completion-gestures?bug=${bug}`, steps: () => [act('Long-press Hold item, then double-click Inspect item'), verify('gestures applied', async ({ page }) => await page.locator('#held').textContent() === 'Held' && await page.locator('#inspected').textContent() === 'Inspected', { timeoutMs: 1 })] };
         const result = (await suite([spec], { mode: 'ai', policy: gestureNavigationPolicy }).run).results[0]!;
         expect(result.status, result.summary).toBe(bug === 'healthy' ? 'passed' : 'failed');
         if (bug === 'missing') { expect(result.cause).toBe('product'); }
         expect(result.attempts[0]?.steps[0]?.actions?.map(action => action.tool)).toEqual(['long_press', 'double_click']);
     });
-    it.each(['healthy', 'empty'])('opens the requested list after saving before checking content: %s', async bug => {
-        const spec: TestSpec<void> = { id: 'saved-view-flow', title: 'Save and open a list', risk: 'A badge hides unopened content', start: '/completion-list?bug=' + bug, steps: () => [act('Save the entry, then open the Saved entries view'), verify('list contains the entry', ({ page }) => page.locator('#panel').textContent().then(text => text === 'Saved entriesField notes'), { timeoutMs: 1 })] };
+    it.each(['healthy', 'empty'])('opens the requested list after saving before checking content: %s', async (bug) => {
+        const spec: TestSpec<void> = { id: 'saved-view-flow', title: 'Save and open a list', risk: 'A badge hides unopened content', start: `/completion-list?bug=${bug}`, steps: () => [act('Save the entry, then open the Saved entries view'), verify('list contains the entry', ({ page }) => page.locator('#panel').textContent().then(text => text === 'Saved entriesField notes'), { timeoutMs: 1 })] };
         const result = (await suite([spec], { mode: 'ai', policy: savedViewPolicy }).run).results[0]!;
         expect(result.status, result.summary).toBe(bug === 'healthy' ? 'passed' : 'failed');
         if (bug === 'empty') { expect(result.cause).toBe('product'); }
         expect(result.attempts[0]?.steps[0]?.actions?.map(action => action.element)).toEqual(['button "Save entry"', 'button "Saved entries (1)"']);
     });
-    it.each(['scroll', 'scroll_to'])('switches from two single-page scrolls to an instruction entity search despite %s', async tool => {
+    it.each(['scroll', 'scroll_to'])('switches from two single-page scrolls to an instruction entity search despite %s', async (tool) => {
         const spec: TestSpec<void> = { id: 'search-after-scrolls', title: 'Find an archive entity', risk: 'Single pages exhaust the action budget', start: '/surface-search', steps: () => [act('Find Special entry (record 812), then open the entry', { maxActions: 5 }), verify('entry opened', ({ page }) => page.getByRole('status').textContent().then(text => text === 'Entry opened'), { timeoutMs: 1 })] };
-        const recordingsDir = join(root, 'search-after-scrolls-' + tool);
+        const recordingsDir = join(root, `search-after-scrolls-${tool}`);
         const policy = (view: Parameters<typeof singlePageSearchPolicy>[0]) => { const decision = singlePageSearchPolicy(view); return tool === 'scroll_to' && decision.tool === 'scroll' && view.history.filter(entry => entry.action === 'scroll').length >= 2 ? { ...decision, tool: 'scroll_to' as const } : decision; };
         const result = (await suite([spec], { policy, recordingsDir }).run).results[0]!;
         expect(result.status, result.summary).toBe('passed');
-        const stored = JSON.parse(await readFile(join(recordingsDir, spec.id + '.json'), 'utf8'));
+        const stored = JSON.parse(await readFile(join(recordingsDir, `${spec.id}.json`), 'utf8'));
         expect(stored.steps[0].actions[2]).toMatchObject({ tool: 'scroll', scrollText: 'record 812' });
         expect((await suite([spec], { mode: 'replay', recordingsDir }).run).totals.passed).toBe(1);
     }, 90_000);
@@ -1944,28 +1954,28 @@ describe('merge origin binding', () => {
             const spec: TestSpec<void> = { id: 'base-port-route', title: 'Save at the configured app', risk: 'An absolute cached port hides effects', start: '/integrity', steps: () => [act('Save draft')] };
             const recordingsDir = join(root, 'base-port-route');
             expect((await suite([spec], { policy: integrityPolicy, recordingsDir }).run).totals.passed).toBe(1);
-            const stored = JSON.parse(await readFile(join(recordingsDir, spec.id + '.json'), 'utf8'));
+            const stored = JSON.parse(await readFile(join(recordingsDir, `${spec.id}.json`), 'utf8'));
             expect(stored.steps[0].end).toMatchObject({ base: true, route: '/integrity' });
             expect((await suite([spec], { baseURL: other.origin, mode: 'replay', recordingsDir }).run).totals.passed).toBe(1);
-            const drift = await suite([{ ...spec, ready: async ({ page }) => { await page.goto(other.origin + '/integrity'); } }], { allowedOrigins: [other.origin], mode: 'replay', recordingsDir }).run;
+            const drift = await suite([{ ...spec, ready: async ({ page }) => { await page.goto(`${other.origin}/integrity`); } }], { allowedOrigins: [other.origin], mode: 'replay', recordingsDir }).run;
             expect(drift.results[0]?.status).toBe('failed');
             expect(drift.results[0]?.summary).toContain('route');
             delete stored.steps[0].end.base;
-            stored.steps[0].end.route = app.origin + '/integrity?legacy=1';
-            await writeFile(join(recordingsDir, spec.id + '.json'), JSON.stringify(stored));
+            stored.steps[0].end.route = `${app.origin}/integrity?legacy=1`;
+            await writeFile(join(recordingsDir, `${spec.id}.json`), JSON.stringify(stored));
             expect((await suite([spec], { baseURL: other.origin, mode: 'replay', recordingsDir }).run).totals.passed).toBe(1);
         } finally { await other.close(); }
     });
 });
 
-
 it('merge audits contradictory repeat proposals with prior activations before proceeding to the defect check', async () => {
     const spec: TestSpec<void> = { id: 'repeat-proposal-context', title: 'Increase a count', risk: 'An extra increment hides a broken total', start: '/integration-counter?bug=total', steps: () => [act('Increase the first batch count by two'), verify('total reflects the new count', ({ page }) => page.locator('output').textContent().then(text => text === '21'), { timeoutMs: 1 })] };
-    const result = (await suite([spec], { mode: 'ai', policy: view => {
+    const result = (await suite([spec], { mode: 'ai', policy: (view) => {
         const count = view.history.filter(entry => entry.action === 'click').length;
         if (!view.url && !view.control) { return { onTarget: (view.auditContext?.control_activations?.length ?? 0) >= 2 || view.history.length >= 3 ? 0.01 : 0.99 }; }
         if (view.control) { return { needed: count >= 2 ? 0.28 : 0.98 }; }
-        return count >= 2 ? { done: 0.72, achieved: 0.85, remaining: 0.08, tool: 'none', target: element => element.name === '+' }
+        return count >= 2
+            ? { done: 0.72, achieved: 0.85, remaining: 0.08, tool: 'none', target: element => element.name === '+' }
             : { tool: 'click', target: element => element.name === '+' };
     }, helper: view => view.control ? { activation: 'activate', reason: 'The two increments were performed; do not increment again' } : { outcome: 'step_already_done', tool: null, element: null, value_key: null, text: null, reason: 'Both requested increments were performed' } }).run).results[0]!;
     expect(result.cause, result.summary).toBe('product');
@@ -1973,11 +1983,10 @@ it('merge audits contradictory repeat proposals with prior activations before pr
     expect(result.attempts[0]?.steps[1]?.failure).toBe('assertion');
 });
 
-
 describe('merge delivery boundary regressions', () => {
     it('names the reserved next action before auditing a premature confirmation', async () => {
         const spec: TestSpec<void> = { id: 'reserved-confirmation', title: 'Prepare before confirming', risk: 'A permissive candidate audit crosses a next-step boundary', start: '/items?bug=wrong-row', fixture: async () => { app.reset(); }, invariants: [{ name: 'Other entries stay active', check: () => app.state.items.filter(item => item.id !== 'b').every(item => !item.archived) }], steps: () => [act('Start archiving the Beta plan'), act('Confirm archiving in the dialog', { expect: { write: { path: /\/archive$/ } } })] };
-        const result = (await suite([spec], { mode: 'ai', policy: view => {
+        const result = (await suite([spec], { mode: 'ai', policy: (view) => {
             if (!view.url && !view.control) { return { onTarget: 0.85 }; }
             if (view.step === 'Start archiving the Beta plan' && (view.dialog || view.control)) {
                 const boundary = view.instructions?.includes('Confirm archiving in the dialog');
@@ -1989,9 +1998,9 @@ describe('merge delivery boundary regressions', () => {
         expect(result.attempts[0]?.steps[0]?.actions?.map(action => action.element)).toEqual(['button "Archive"']);
         expect(result.attempts[0]?.steps[1]?.failure).toBe('invariant');
     });
-    it.each(['healthy', 'missing'])('reviews successful delivery separately from missing reservation effects: %s', async bug => {
-        const spec: TestSpec<void> = { id: 'delivered-reservation', title: 'Commit a reservation once', risk: 'Missing content prevents checking a delivered confirmation', start: '/completion-calendar?bug=' + bug, steps: () => [act('Reserve the date requested on the page'), verify('reservation committed', ({ page }) => page.locator('#receipt').textContent().then(text => text === 'Reservation confirmed'), { timeoutMs: 1 })] };
-        const result = (await suite([spec], { mode: 'ai', policy: view => {
+    it.each(['healthy', 'missing'])('reviews successful delivery separately from missing reservation effects: %s', async (bug) => {
+        const spec: TestSpec<void> = { id: 'delivered-reservation', title: 'Commit a reservation once', risk: 'Missing content prevents checking a delivered confirmation', start: `/completion-calendar?bug=${bug}`, steps: () => [act('Reserve the date requested on the page'), verify('reservation committed', ({ page }) => page.locator('#receipt').textContent().then(text => text === 'Reservation confirmed'), { timeoutMs: 1 })] };
+        const result = (await suite([spec], { mode: 'ai', policy: (view) => {
             if (view.url && !view.control && view.history.some(entry => entry.element?.includes('Confirm reservation'))) {
                 const instructions = JSON.parse(view.instructions ?? '{}').complete?.instructions ?? '';
                 return { done: 0.45, remaining: 0.5, achieved: instructions.includes('Absent product effects') ? 0.99 : 0.61, tool: 'none', target: element => element.name === 'Confirm reservation' };
@@ -2004,10 +2013,9 @@ describe('merge delivery boundary regressions', () => {
     });
 });
 
-
 it('merge accepts corrected failed attempts when all formatting actions were later delivered', async () => {
     const spec: TestSpec<void> = { id: 'corrected-formatting-delivery', title: 'Recover then format a word', risk: 'A corrected selection failure prevents checking delivered formatting', start: '/surface-editor', data: { text: 'ship confirmed' }, steps: () => [act('Type {text} in Document and make exactly confirmed bold'), verify('exact formatting', ({ page }) => page.locator('#editor').innerHTML().then(html => html === 'ship <b>confirmed</b>'), { timeoutMs: 1 })] };
-    const result = (await suite([spec], { mode: 'ai', policy: view => {
+    const result = (await suite([spec], { mode: 'ai', policy: (view) => {
         const typed = view.history.some(entry => entry.action === 'type' && !entry.error);
         const selected = view.history.some(entry => entry.action === 'select_text' && !entry.error);
         const formatted = view.history.some(entry => entry.action === 'click' && entry.element === 'button "Bold"');
@@ -2019,19 +2027,17 @@ it('merge accepts corrected failed attempts when all formatting actions were lat
     expect(result.attempts[0]?.steps[0]?.actions?.map(action => [action.tool, action.ok])).toEqual([['select_text', false], ['type', true], ['select_text', true], ['click', true]]);
 });
 
-
-it.each(['healthy', 'missing'])('merge recognizes a requested date through its editor and visible month context: %s', async bug => {
-    const spec: TestSpec<void> = { id: 'value-target-context', title: 'Reserve a named value', risk: 'Literal button-label matching rejects the named date', start: '/completion-calendar?bug=' + bug, steps: () => [act('Reserve August 4, 2027'), verify('reservation committed', ({ page }) => page.locator('#receipt').textContent().then(text => text === 'Reservation confirmed'), { timeoutMs: 1 })] };
+it.each(['healthy', 'missing'])('merge recognizes a requested date through its editor and visible month context: %s', async (bug) => {
+    const spec: TestSpec<void> = { id: 'value-target-context', title: 'Reserve a named value', risk: 'Literal button-label matching rejects the named date', start: `/completion-calendar?bug=${bug}`, steps: () => [act('Reserve August 4, 2027'), verify('reservation committed', ({ page }) => page.locator('#receipt').textContent().then(text => text === 'Reservation confirmed'), { timeoutMs: 1 })] };
     const result = (await suite([spec], { mode: 'ai', policy: view => !view.url && !view.control ? { onTarget: view.instructions?.includes('Resolve requested entities or values') ? 0.98 : 0.11 } : reservationPolicy(view), helper: () => ({ reason: 'The named date requires its pending confirmation', activation: 'activate' }) }).run).results[0]!;
     expect(result.status, result.summary).toBe(bug === 'healthy' ? 'passed' : 'failed');
     if (bug === 'missing') { expect(result.cause).toBe('product'); }
     expect(result.attempts[0]?.steps[0]?.actions?.map(action => action.element)).toEqual(['button "Open calendar"', 'button "4" near "August 2027"', 'button "Confirm reservation"']);
 });
 
-
 it('merge audits delivered targets without requiring the product effect to have succeeded', async () => {
     const spec: TestSpec<void> = { id: 'historical-target-scope', title: 'Check a delivered reservation', risk: 'An absent receipt retroactively makes the correct controls unrelated', start: '/completion-calendar?bug=missing', steps: () => [act('Reserve August 4, 2027'), verify('reservation committed', ({ page }) => page.locator('#receipt').textContent().then(text => text === 'Reservation confirmed'), { timeoutMs: 1 })] };
-    const result = (await suite([spec], { mode: 'ai', policy: view => {
+    const result = (await suite([spec], { mode: 'ai', policy: (view) => {
         if (!view.url && !view.control && !view.proposal) { const question = JSON.parse(view.instructions ?? '{}').on_target_0; return { onTarget: question?.criteria?.authorized?.includes('Actual product success is irrelevant') ? 0.95 : 0.11 }; }
         return reservationPolicy(view);
     }, helper: () => ({ reason: 'The required confirmation is pending', activation: 'activate' }) }).run).results[0]!;
@@ -2040,10 +2046,9 @@ it('merge audits delivered targets without requiring the product effect to have 
     expect(result.attempts[0]?.steps[0]?.actions?.map(action => action.element)).toEqual(['button "Open calendar"', 'button "4" near "August 2027"', 'button "Confirm reservation"']);
 });
 
-
-it.each(['healthy', 'missing-format'])('merge requires requested formatting actions rather than all permitted editor actions: %s', async bug => {
-    const spec: TestSpec<void> = { id: 'required-editor-actions', title: 'Format without extra editor work', risk: 'Permitted editor actions become mandatory completion work', start: '/surface-editor?bug=' + bug, data: { text: 'ship confirmed' }, steps: () => [act('Type {text} in Document and make exactly confirmed bold'), verify('exact formatting', ({ page }) => page.locator('#editor').innerHTML().then(html => html === 'ship <b>confirmed</b>'), { timeoutMs: 1 })] };
-    const result = (await suite([spec], { mode: 'ai', policy: view => {
+it.each(['healthy', 'missing-format'])('merge requires requested formatting actions rather than all permitted editor actions: %s', async (bug) => {
+    const spec: TestSpec<void> = { id: 'required-editor-actions', title: 'Format without extra editor work', risk: 'Permitted editor actions become mandatory completion work', start: `/surface-editor?bug=${bug}`, data: { text: 'ship confirmed' }, steps: () => [act('Type {text} in Document and make exactly confirmed bold'), verify('exact formatting', ({ page }) => page.locator('#editor').innerHTML().then(html => html === 'ship <b>confirmed</b>'), { timeoutMs: 1 })] };
+    const result = (await suite([spec], { mode: 'ai', policy: (view) => {
         if (!view.url && !view.control) { return { onTarget: view.proposal?.element === 'button "Inspect document"' ? 0.01 : 0.98 }; }
         if (view.control) { return { needed: 0.02 }; }
         if (view.history.some(entry => entry.action === 'click' && entry.element === 'button "Bold"')) {
@@ -2059,10 +2064,9 @@ it.each(['healthy', 'missing-format'])('merge requires requested formatting acti
     expect(result.attempts[0]?.steps[0]?.actions?.some(action => action.element === 'button "Inspect document"')).toBe(false);
 });
 
-
-it.each(['healthy', 'missing'])('merge permits the date editor prerequisite before its final control becomes visible: %s', async bug => {
-    const spec: TestSpec<void> = { id: 'editor-prerequisite', title: 'Select before committing', risk: 'A primitive selection is rejected because it does not complete the whole reservation', start: '/completion-calendar?bug=' + bug, steps: () => [act('Reserve August 4, 2027'), verify('reservation committed', ({ page }) => page.locator('#receipt').textContent().then(text => text === 'Reservation confirmed'), { timeoutMs: 1 })] };
-    const result = (await suite([spec], { mode: 'ai', policy: view => {
+it.each(['healthy', 'missing'])('merge permits the date editor prerequisite before its final control becomes visible: %s', async (bug) => {
+    const spec: TestSpec<void> = { id: 'editor-prerequisite', title: 'Select before committing', risk: 'A primitive selection is rejected because it does not complete the whole reservation', start: `/completion-calendar?bug=${bug}`, steps: () => [act('Reserve August 4, 2027'), verify('reservation committed', ({ page }) => page.locator('#receipt').textContent().then(text => text === 'Reservation confirmed'), { timeoutMs: 1 })] };
+    const result = (await suite([spec], { mode: 'ai', policy: (view) => {
         if (!view.url && !view.control && view.proposal?.element?.includes('button "4"')) { return { onTarget: view.instructions?.includes('need not complete the whole step') ? 0.98 : 0.66 }; }
         if (view.control?.includes('button "4"')) { return { needed: 0.1 }; }
         if (view.dialog?.includes('August 2027')) { return { done: 0.11, achieved: 0.2, remaining: 0.88, tool: view.instructions?.includes('need not complete the whole step') ? 'click' : 'none', target: element => element.name === '4' }; }
@@ -2073,10 +2077,10 @@ it.each(['healthy', 'missing'])('merge permits the date editor prerequisite befo
     expect(result.attempts[0]?.steps[0]?.actions?.map(action => action.element)).toEqual(['button "Open calendar"', 'button "4" near "August 2027"', 'button "Confirm reservation"']);
 });
 
-it.each(['healthy', 'missing', 'selection-only'])('merge reviews pending controls independently of a completed field target: %s', async variant => {
+it.each(['healthy', 'missing', 'selection-only'])('merge reviews pending controls independently of a completed field target: %s', async (variant) => {
     const selection = variant === 'selection-only';
-    const spec: TestSpec<void> = { id: 'completed-field-target', title: 'Review a pending activation after selection', risk: 'A completed textbox hides the pending confirmation from control review', start: '/completion-picker?bug=' + variant, steps: () => [act(selection ? 'Select the date requested on this page using its calendar' : 'Follow the current page instructions to reserve its requested date'), verify('requested result', async ({ page }) => await page.locator('#date').inputValue() === '2027-08-04' && (selection ? await page.locator('#activations').textContent() === '0' : await page.locator('#receipt').textContent() === 'Reservation confirmed'), { timeoutMs: 1 })] };
-    const result = (await suite([spec], { mode: 'ai', policy: view => {
+    const spec: TestSpec<void> = { id: 'completed-field-target', title: 'Review a pending activation after selection', risk: 'A completed textbox hides the pending confirmation from control review', start: `/completion-picker?bug=${variant}`, steps: () => [act(selection ? 'Select the date requested on this page using its calendar' : 'Follow the current page instructions to reserve its requested date'), verify('requested result', async ({ page }) => await page.locator('#date').inputValue() === '2027-08-04' && (selection ? await page.locator('#activations').textContent() === '0' : await page.locator('#receipt').textContent() === 'Reservation confirmed'), { timeoutMs: 1 })] };
+    const result = (await suite([spec], { mode: 'ai', policy: (view) => {
         if (!view.url && !view.control) { return { onTarget: selection && view.proposal?.element?.includes('Confirm reservation') ? 0.01 : 0.98 }; }
         if (view.control) { return { needed: 0.04 }; }
         if (view.history.some(entry => entry.element?.includes('Confirm reservation'))) { return { done: 0.97, achieved: 0.99, remaining: 0.02, tool: 'none' }; }
@@ -2121,7 +2125,9 @@ it('keeps field proof in the recording without duplicating values in evidence ch
 
 it('does not replay positive fragments as proof of a negative clause', async () => {
     const directory = join(root, 'negative-proof');
-    const spec = (reveal: boolean): TestSpec<void> => ({ id: 'negative-control', title: 'Check the available actions', risk: 'A newly visible forbidden action escapes replay', start: '/integrity?bug=negative-control', ready: async ({ page }) => { if (reveal) await page.locator('#forbidden').evaluate(element => (element as HTMLElement).hidden = false); }, steps: () => [check('The page offers "Save draft", not "Delete draft"')] });
+    const spec = (reveal: boolean): TestSpec<void> => ({ id: 'negative-control', title: 'Check the available actions', risk: 'A newly visible forbidden action escapes replay', start: '/integrity?bug=negative-control', ready: async ({ page }) => {
+        if (reveal) { await page.locator('#forbidden').evaluate(element => (element as HTMLElement).hidden = false); }
+    }, steps: () => [check('The page offers "Save draft", not "Delete draft"')] });
     const seeded = (await suite([spec(false)], { recordingsDir: directory, policy: () => ({ holds: 0.99, support: 'supports', region: 'open' }) }).run).results[0]!;
     expect(seeded.status, seeded.summary).toBe('passed');
     const replayed = (await suite([spec(true)], { recordingsDir: directory, mode: 'replay' }).run).results[0]!;

@@ -99,6 +99,8 @@ const TEXT_ROLES = new Set(['paragraph', 'heading', 'generic', 'cell', 'gridcell
 const GENERIC_NAME = /^(?:toggle(?: setting)?|setting|more|open|close|menu|actions?|options?|button|edit|delete|remove|select|switch|[x×…]|\.\.\.)$/i;
 const SECRET = /password|passcode|secret|token|api[\s_-]?key|otp|verification code/i;
 
+const sameBox = (a: Box, b: Box) => Math.abs(a.x - b.x) <= 0.5 && Math.abs(a.y - b.y) <= 0.5 && Math.abs(a.width - b.width) <= 0.5 && Math.abs(a.height - b.height) <= 0.5;
+
 export const LIMITS = { elements: 220, text: 4000, notice: 300, near: 80 };
 
 export interface ObserveOptions {
@@ -119,11 +121,11 @@ export async function observe(page: Page, options: ObserveOptions = {}): Promise
     const surface = await readSurface(page, undefined, options.instruction, options.legacyEnd);
     const roots = normalize(tree);
     const boxes: Box[] = [];
-    collect(roots, node => { if (node.box && isElement(node)) { boxes.push(node.box); } return false; }, []);
+    collect(roots, (node) => { if (node.box && isElement(node)) { boxes.push(node.box); } return false; }, []);
     const added = surface.nodes.filter(node => !node.box || !boxes.some(box => sameBox(box, node.box!)));
     const values = await fieldValues(page, tree);
     const labelled: AriaNode[] = []; collect(roots, node => Boolean(node.name), labelled);
-    const masked = [...labelled, ...surface.nodes].flatMap(node => {
+    const masked = [...labelled, ...surface.nodes].flatMap((node) => {
         const content = node.box ? surface.details.find(detail => sameBox(detail.box, node.box!))?.content : undefined;
         return node.name && content && content.length > 1 ? [{ name: node.name, text: content }] : [];
     });
@@ -199,8 +201,6 @@ async function inertBoxes(page: Page): Promise<Box[]> {
             .map(({ x, y, width, height }) => ({ x, y, width, height }));
     }).catch(() => []);
 }
-
-const sameBox = (a: Box, b: Box) => Math.abs(a.x - b.x) <= 0.5 && Math.abs(a.y - b.y) <= 0.5 && Math.abs(a.width - b.width) <= 0.5 && Math.abs(a.height - b.height) <= 0.5;
 
 /** A snapshot node is the same element as a control inside an inert subtree when their boxes coincide. */
 function withinInert(box: Box | undefined, inert: readonly Box[] | undefined): boolean {

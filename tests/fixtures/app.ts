@@ -85,11 +85,11 @@ document.getElementById('tab').onclick = () => { document.getElementById('browse
         case '/integrity-audit':
             return layout('Draft editor', '<label>Draft<input id="draft"></label><label>Reference<input id="reference"></label><button id="store">Store draft</button>', `document.getElementById('store').onclick = () => send('/api/draft-validation', { draft: document.getElementById('draft').value });`);
         case '/compatibility-scroller':
-            return layout('Scrollable workspace', '<div style="height:80px;overflow-y:auto"><p>' + 'Reference content '.repeat(150) + 'Final visible record</p></div>');
+            return layout('Scrollable workspace', `<div style="height:80px;overflow-y:auto"><p>${'Reference content '.repeat(150)}Final visible record</p></div>`);
         case '/proof-panel':
             return layout('Message workspace', '<label>Message body<textarea>First passage\n\nFinal passage</textarea></label><button>Open delivery Amber package</button><p>Receipt issued 2027-08-04 09:32</p><button>Copy receipt value</button>');
         case '/paragraph-card':
-            return layout('Read-only message', '<button aria-label="Message">' + (bug === 'inline' ? '<span>Opening passage</span> <span>Final passage</span>' : '<p>Opening passage</p><p>Final passage</p>') + '</button>');
+            return layout('Read-only message', `<button aria-label="Message">${bug === 'inline' ? '<span>Opening passage</span> <span>Final passage</span>' : '<p>Opening passage</p><p>Final passage</p>'}</button>`);
         case '/disabled-captions':
             return layout('Pending actions', '<button disabled>Store settings</button><button disabled>Send invitation</button>');
         case '/proof-dialog-exit':
@@ -97,13 +97,13 @@ document.getElementById('tab').onclick = () => { document.getElementById('browse
         case '/volatile-proof-row':
             return layout('Deliveries', '<div role="button">REF-8AZ34JXY Amber package 2027-08-04</div>');
         case '/contextual-proof':
-            return layout('Delivery overview', '<article><h2>Amber parcel</h2>' + (bug === 'clipped-id' ? '<p>Reference …X7K9</p>' : '') + '<p>Status: ' + (bug === 'moved' ? 'Waiting' : 'Ready') + '</p><p>Owner: ' + (bug === 'owner-moved' ? 'Editor' : 'Inspector') + '</p></article>' + (bug === 'nearby-time' ? '<p data-time>Reviewed 2027-08-04 09:32</p>' : '') + '<article><h2>Sage parcel</h2><p>Status: ' + (bug === 'moved' ? 'Ready' : 'Waiting') + '</p><p>Owner: ' + (bug === 'owner-moved' ? 'Inspector' : 'Editor') + '</p></article><p>' + 'Unrelated information '.repeat(100) + '</p><p>Checked 2027-08-04 09:32</p>');
+            return layout('Delivery overview', `<article><h2>Amber parcel</h2>${bug === 'clipped-id' ? '<p>Reference …X7K9</p>' : ''}<p>Status: ${bug === 'moved' ? 'Waiting' : 'Ready'}</p><p>Owner: ${bug === 'owner-moved' ? 'Editor' : 'Inspector'}</p></article>${bug === 'nearby-time' ? '<p data-time>Reviewed 2027-08-04 09:32</p>' : ''}<article><h2>Sage parcel</h2><p>Status: ${bug === 'moved' ? 'Ready' : 'Waiting'}</p><p>Owner: ${bug === 'owner-moved' ? 'Inspector' : 'Editor'}</p></article><p>${'Unrelated information '.repeat(100)}</p><p>Checked 2027-08-04 09:32</p>`);
         case '/proof-label-overlap':
             return layout('Publishing workspace', '<button>Publish</button><button>Unpublish</button>');
         case '/compatibility-editor':
             return layout('Writing workspace', '<section aria-label="Writing area"><div contenteditable="true" role="textbox" aria-label="Document"><p>First passage</p><p><br></p><p>Final passage</p></div></section>');
         case '/integrity-region':
-            return layout('Draft workspace', '<section aria-label="' + (bug === 'moved' ? 'Review area' : 'Draft area') + '"><label>Draft<input value="Original"></label></section>');
+            return layout('Draft workspace', `<section aria-label="${bug === 'moved' ? 'Review area' : 'Draft area'}"><label>Draft<input value="Original"></label></section>`);
         case '/integrity':
             return layout('Request workspace', '<label>Draft<input id="draft" value="Original"></label><button id="save">Save draft</button><button id="toggle" aria-expanded="false">Details</button><div id="receipt"></div><div id="error"></div>', `
                 const bug = ${JSON.stringify(bug)};
@@ -133,11 +133,11 @@ document.getElementById('tab').onclick = () => { document.getElementById('browse
             `);
         case '/attribution-regions': {
             const region = url.searchParams.get('region') ?? 'loading';
-            const content = '<section aria-label="Delivery records"' + (['slow', 'stuck'].includes(url.searchParams.get('resolve') ?? '') ? ' aria-busy="true"' : '') + '><p>' + (region === 'loading' ? 'Fetching records…' : region === 'empty' ? 'Nothing has arrived' : 'Record ZX-71') + '</p></section>';
-            return layout('Dispatch workspace', region === 'collapsed' ? '<details><summary>Delivery records</summary>' + content + '</details>' : region === 'unselected' ? '<div role="tablist"><button role="tab" aria-selected="true">Overview</button><button role="tab" aria-selected="false">Delivery records</button></div><section aria-label="Overview">Welcome</section><div hidden>' + content + '</div>' : content, url.searchParams.has('resolve') && url.searchParams.get('resolve') !== 'stuck' ? `setTimeout(() => { document.querySelector('section p').textContent = 'Record ZX-71'; document.querySelector('section').removeAttribute('aria-busy'); }, ${url.searchParams.get('resolve') === 'slow' ? 21000 : 1200});` : '');
+            const content = `<section aria-label="Delivery records"${['slow', 'stuck'].includes(url.searchParams.get('resolve') ?? '') ? ' aria-busy="true"' : ''}><p>${region === 'loading' ? 'Fetching records…' : region === 'empty' ? 'Nothing has arrived' : 'Record ZX-71'}</p></section>`;
+            return layout('Dispatch workspace', region === 'collapsed' ? `<details><summary>Delivery records</summary>${content}</details>` : region === 'unselected' ? `<div role="tablist"><button role="tab" aria-selected="true">Overview</button><button role="tab" aria-selected="false">Delivery records</button></div><section aria-label="Overview">Welcome</section><div hidden>${content}</div>` : content, url.searchParams.has('resolve') && url.searchParams.get('resolve') !== 'stuck' ? `setTimeout(() => { document.querySelector('section p').textContent = 'Record ZX-71'; document.querySelector('section').removeAttribute('aria-busy'); }, ${url.searchParams.get('resolve') === 'slow' ? 21000 : 1200});` : '');
         }
         case '/attribution-segments':
-            return layout('Access challenge', '<p>Access sequence: 681942</p><div>' + Array.from({ length: 6 }, (_, i) => '<input aria-label="Segment ' + (i + 1) + '" maxlength="1" autocomplete="one-time-code">').join('') + '</div><output id="result"></output>', `const fields = [...document.querySelectorAll('input')]; fields.forEach((field, i) => field.oninput = () => { if (field.value && i < fields.length - 1) fields[i + 1].focus(); if (fields.map(f => f.value).join('') === '681942') { document.getElementById('result').textContent = 'Access granted'; fields.forEach(f => f.remove()); } });`);
+            return layout('Access challenge', `<p>Access sequence: 681942</p><div>${Array.from({ length: 6 }, (_, i) => `<input aria-label="Segment ${i + 1}" maxlength="1" autocomplete="one-time-code">`).join('')}</div><output id="result"></output>`, `const fields = [...document.querySelectorAll('input')]; fields.forEach((field, i) => field.oninput = () => { if (field.value && i < fields.length - 1) fields[i + 1].focus(); if (fields.map(f => f.value).join('') === '681942') { document.getElementById('result').textContent = 'Access granted'; fields.forEach(f => f.remove()); } });`);
         case '/attribution-sort':
             return layout('Entry amounts', '<label>Ordering<select><option>Original</option><option>Amount ascending</option></select></label><section aria-label="Entries"><p>Amber: 40</p><p>Cedar: 10</p><p>Birch: 25</p></section>');
         case '/attribution-retained-entry':
@@ -149,11 +149,11 @@ document.getElementById('tab').onclick = () => { document.getElementById('browse
         case '/hardening-visible-content':
             return layout('Account overview', '<div role="button" tabindex="0" aria-label="Note"><div style="display:contents"><div inert><p>Working draft</p><button>Preview action</button></div></div></div><button aria-label="Note"><span style="display:contents">Revised draft</span></button><p style="display:contents">The subscription renews monthly.</p><p>Unit price: <span>$17.43</span></p><table><tr><th>Revenue</th><td>$69.72</td></tr><tr><th>Average</th><td>$17.43</td></tr></table><div role="alert"><p>This account is still in use.</p></div><div style="height:0;overflow:hidden" inert><p>Hidden price $999.99</p></div><p hidden>Hidden paragraph</p><span style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)">Screen reader text</span>', url.searchParams.has('chrome') ? `document.querySelector('nav').append(document.createTextNode('Section description '.repeat(300)));` : '');
         case '/hardening-cards':
-            return layout('Catalog cards', Array.from({ length: Number(url.searchParams.get('count') ?? 60) }, (_, i) => '<div class="card" style="cursor:pointer;padding:6px;margin:2px;border:1px solid"><span>Product ' + i + '</span></div>').join(''), `document.querySelectorAll('.card').forEach((card, i) => card.onclick = () => toast('Opened ' + i));`);
+            return layout('Catalog cards', Array.from({ length: Number(url.searchParams.get('count') ?? 60) }, (_, i) => `<div class="card" style="cursor:pointer;padding:6px;margin:2px;border:1px solid"><span>Product ${i}</span></div>`).join(''), `document.querySelectorAll('.card').forEach((card, i) => card.onclick = () => toast('Opened ' + i));`);
         case '/hardening-hover':
             return layout('Hover surfaces', '<style>.row:hover span{opacity:.8}.menu:hover .submenu{visibility:visible}.submenu{visibility:hidden}</style><div class="row"><span>Decorated row</span></div><div class="menu"><span>Workspace tools</span><div class="submenu"><button>Invite</button></div></div>');
         case '/hardening-table':
-            return layout('Profile ledger', '<style>tr:hover{background:#eee}.hover\\:bg:hover{color:blue}</style><label>Name<input id="name"></label><button id="save"><span>Save</span></button><a href="#help">Help</a><img width="24" height="24" alt="Brand" src="data:image/gif;base64,R0lGODlhAQABAAAAACw="><div id="decoration"></div><table>' + Array.from({ length: Number(url.searchParams.get('rows') ?? 120) }, (_, i) => '<tr class="hover:bg">' + Array.from({ length: Number(url.searchParams.get('cols') ?? 5) }, (_, c) => '<td>Entry ' + i + ' column ' + c + '</td>').join('') + '</tr>').join('') + '</table>', `document.getElementById('save').onclick = () => { toast('Profile stored'); document.getElementById('decoration').innerHTML = '<div class="avatar skeleton" style="width:20px;height:20px"></div>'; };`);
+            return layout('Profile ledger', `<style>tr:hover{background:#eee}.hover\\:bg:hover{color:blue}</style><label>Name<input id="name"></label><button id="save"><span>Save</span></button><a href="#help">Help</a><img width="24" height="24" alt="Brand" src="data:image/gif;base64,R0lGODlhAQABAAAAACw="><div id="decoration"></div><table>${Array.from({ length: Number(url.searchParams.get('rows') ?? 120) }, (_, i) => `<tr class="hover:bg">${Array.from({ length: Number(url.searchParams.get('cols') ?? 5) }, (_, c) => `<td>Entry ${i} column ${c}</td>`).join('')}</tr>`).join('')}</table>`, `document.getElementById('save').onclick = () => { toast('Profile stored'); document.getElementById('decoration').innerHTML = '<div class="avatar skeleton" style="width:20px;height:20px"></div>'; };`);
         case '/hardening-commit':
             return layout('Public deployment', '<label>Visibility<select id="visibility"><option>Private</option><option>Public</option></select></label><button id="apply">Apply changes</button><output id="result">Deployment private</output>', `document.getElementById('apply').onclick = () => document.getElementById('result').textContent = 'Deployment ' + document.getElementById('visibility').value.toLowerCase();`);
         case '/hardening-literal':
@@ -163,11 +163,11 @@ document.getElementById('tab').onclick = () => { document.getElementById('browse
         case '/hardening-cart':
             return layout('Basket summary', '<span>Cart (1)</span><div role="status">Added to cart</div>');
         case '/hardening-scroll':
-            return layout('Shell scroll', '<style>html,body{height:100%;margin:0;overflow:hidden}nav{display:none}main{height:100%}#app{height:100%;overflow:auto}</style><div id="app">' + Array.from({ length: 200 }, (_, i) => '<div style="height:40px">Row ' + i + '</div>').join('') + '</div>');
+            return layout('Shell scroll', `<style>html,body{height:100%;margin:0;overflow:hidden}nav{display:none}main{height:100%}#app{height:100%;overflow:auto}</style><div id="app">${Array.from({ length: 200 }, (_, i) => `<div style="height:40px">Row ${i}</div>`).join('')}</div>`);
         case '/hardening-page-history':
-            return layout('Observed token', '<p>Access token: ' + escapeHtml(url.searchParams.get('token') ?? 'HS-4127') + '; enter it below.</p><label>Code<input></label>');
+            return layout('Observed token', `<p>Access token: ${escapeHtml(url.searchParams.get('token') ?? 'HS-4127')}; enter it below.</p><label>Code<input></label>`);
         case '/hardening-page-input':
-            return layout('Page entries', '<p>Token: ' + (url.searchParams.get('token') ?? '2') + '; enter the token.</p><label>Address line 2<input></label><label>ABC1234<input></label>');
+            return layout('Page entries', `<p>Token: ${url.searchParams.get('token') ?? '2'}; enter the token.</p><label>Address line 2<input></label><label>ABC1234<input></label>`);
         case '/integration-counter':
             return layout('Batch totals', '<p>Unit price: 7</p><div><span>Documents</span><button id="minus">-</button><span id="quantity">1</span><button id="plus">+</button></div><output id="total">7</output>', `
 let quantity = 1; document.getElementById('plus').onclick = () => { quantity++; document.getElementById('quantity').textContent = String(quantity); document.getElementById('total').textContent = String(${bug ? '7' : 'quantity * 7'}); };
@@ -175,9 +175,9 @@ let quantity = 1; document.getElementById('plus').onclick = () => { quantity++; 
         case '/integration-secrets':
             return layout('Credential purposes', '<label>Email<input id="email" type="email"></label><label>Password<input id="password" type="password"></label><label>New credential<input id="credential" autocomplete="new-password"></label><div role="textbox" aria-label="API key" contenteditable="true"></div>');
         case '/integration-static':
-            return layout('Stable surface', '<p>Processing fee</p><div class="ui-spinner">Decoration</div><div role="progressbar" aria-valuenow="75">75%</div><button><span>Save</span></button><button>Cancel</button>' + Array.from({ length: 120 }, (_, i) => (url.searchParams.has('aria') ? '<table role="table"><tr role="row"><td role="cell">Entry ' + i + '</td><td role="cell">Amount ' + i + '</td></tr></table>' : '<table><tr><td>Entry ' + i + '</td><td>Amount ' + i + '</td></tr></table>')).join(''));
+            return layout('Stable surface', `<p>Processing fee</p><div class="ui-spinner">Decoration</div><div role="progressbar" aria-valuenow="75">75%</div><button><span>Save</span></button><button>Cancel</button>${Array.from({ length: 120 }, (_, i) => (url.searchParams.has('aria') ? `<table role="table"><tr role="row"><td role="cell">Entry ${i}</td><td role="cell">Amount ${i}</td></tr></table>` : `<table><tr><td>Entry ${i}</td><td>Amount ${i}</td></tr></table>`)).join('')}`);
         case '/integration-pointer':
-            return layout('Pointer targets', Array.from({ length: 60 }, (_, i) => '<span style="cursor:pointer">Pointer ' + i + '</span>').join(' '));
+            return layout('Pointer targets', Array.from({ length: 60 }, (_, i) => `<span style="cursor:pointer">Pointer ${i}</span>`).join(' '));
         case '/integration-groups':
             return layout('Semantic groups', '<div draggable="true">Packet</div><div style="border-top:1px solid"><span>Decoration</span><button>Unrelated</button></div><section aria-label="Ready"><h2>Ready</h2><div style="cursor:grab">Draft packet</div></section>');
         case '/integration-shadow':
@@ -196,7 +196,7 @@ window.fixtureRoot = root;
 window.rootStillClosed = document.getElementById('closed').shadowRoot === null;
 `);
         case '/surface-editor':
-            return layout('Document formatting', '<label>Message<textarea id="message">ship confirmed</textarea></label><div contenteditable="true" aria-label="Document" id="editor" style="min-height:80px;border:1px solid;padding:12px"></div><button id="bold">Bold</button><div role="button" tabindex="0" aria-label="Close tools">Open tools</div><label>Receive alerts<input type="checkbox" aria-label="Cancel alerts"></label><button id="inspect">Inspect document</button>' + (url.searchParams.has('private') ? '<label>Access password<input id="protected" type="password" value="Fixture-hidden-password-9462"></label>' : '') + (url.searchParams.has('uploads') ? '<label>Documents<input id="files" type="file" multiple></label>' : ''), `
+            return layout('Document formatting', `<label>Message<textarea id="message">ship confirmed</textarea></label><div contenteditable="true" aria-label="Document" id="editor" style="min-height:80px;border:1px solid;padding:12px"></div><button id="bold">Bold</button><div role="button" tabindex="0" aria-label="Close tools">Open tools</div><label>Receive alerts<input type="checkbox" aria-label="Cancel alerts"></label><button id="inspect">Inspect document</button>${url.searchParams.has('private') ? '<label>Access password<input id="protected" type="password" value="Fixture-hidden-password-9462"></label>' : ''}${url.searchParams.has('uploads') ? '<label>Documents<input id="files" type="file" multiple></label>' : ''}`, `
 document.getElementById('bold').onmousedown = e => e.preventDefault();
 document.getElementById('bold').onclick = () => { if (${JSON.stringify(bug)} !== 'missing-format') document.execCommand('bold'); };
 document.getElementById('inspect').onclick = () => toast(document.getElementById('editor').innerHTML);
@@ -265,7 +265,7 @@ for (const button of document.querySelectorAll('[data-amount]')) button.onclick 
 document.getElementById('finish').onclick = () => { if(document.getElementById('total').textContent === '5.00') toast('Summary confirmed'); };
 `);
         case '/reach-select':
-            return layout('Choices', (url.searchParams.has('duplicates') ? '<div role="listbox" aria-label="Other category"><div role="option" onclick="toast(&quot;Other category chosen&quot;)">Office supplies</div></div>' : '') + '<label>Category<input role="combobox" aria-controls="choices" id="search"></label><div id="choices" role="listbox" aria-label="Matches"></div><label>Order<select id="order"><option>Recent</option><option>Oldest first</option></select></label>', `
+            return layout('Choices', `${url.searchParams.has('duplicates') ? '<div role="listbox" aria-label="Other category"><div role="option" onclick="toast(&quot;Other category chosen&quot;)">Office supplies</div></div>' : ''}<label>Category<input role="combobox" aria-controls="choices" id="search"></label><div id="choices" role="listbox" aria-label="Matches"></div><label>Order<select id="order"><option>Recent</option><option>Oldest first</option></select></label>`, `
 let timer; document.getElementById('search').oninput = () => { clearTimeout(timer); document.getElementById('choices').textContent = ''; timer = setTimeout(() => { const option = document.createElement('div'); option.setAttribute('role','option'); option.textContent = 'Office supplies'; option.onclick = () => toast('Category chosen'); document.getElementById('choices').append(option); }, 1200); };
 document.getElementById('order').onchange = () => toast('Order chosen');
 `);
@@ -278,7 +278,7 @@ setTimeout(() => { const pending = document.getElementById('pending'); pending.r
 let count = 0; const rebuild = () => { const list = document.getElementById('list'); list.innerHTML = '<button>Increment</button>'; list.firstChild.onclick = () => { count++; toast('Count ' + count); }; }; rebuild(); setInterval(rebuild, 400);
 `);
         case '/reach-scroll':
-            return layout('Windowed results', (url.searchParams.has('hint') ? '<p>Scroll until Record 154 appears in the results.</p>' : '') + '<div id="results" aria-label="Results" style="height:180px;overflow:auto"><div id="spacer" style="height:12000px;position:relative"></div></div>', `
+            return layout('Windowed results', `${url.searchParams.has('hint') ? '<p>Scroll until Record 154 appears in the results.</p>' : ''}<div id="results" aria-label="Results" style="height:180px;overflow:auto"><div id="spacer" style="height:12000px;position:relative"></div></div>`, `
 const results = document.getElementById('results'); const draw = () => { const n = Math.floor(results.scrollTop / 60); const spacer = document.getElementById('spacer'); spacer.innerHTML = Array.from({length:4}, (_,i) => '<div style="position:absolute;top:' + (n+i)*60 + 'px">Record ' + (n+i+1) + (n+i===153 ? '<button onclick="toast(\\'Record opened\\')">Open record</button>' : '') + '</div>').join(''); }; results.onscroll = draw; draw();
 `);
         case '/reach-feed':
@@ -296,7 +296,7 @@ document.getElementById('save').onclick = async () => { await send('/api/profile
 document.getElementById('tab').onclick = () => { document.getElementById('tab').setAttribute('aria-selected', 'true'); document.getElementById('content').innerHTML = ${JSON.stringify(bug === 'empty' ? '<h2>Reading list</h2><p>No essays</p>' : '<h2>Reading list</h2><p>An essay</p>')}; };`);
         case '/required-form':
             return layout('Delivery', '<label>Destination<input id="destination"></label><button id="send">Confirm delivery</button>', `
-document.getElementById('send').onclick = () => { const notice = document.createElement('div'); notice.setAttribute('role', 'alert'); notice.textContent = 'Could not confirm: destination is required'; document.body.append(notice); ${bug === 'crash' ? "throw new Error('Delivery crashed');" : ''} };`);
+document.getElementById('send').onclick = () => { const notice = document.createElement('div'); notice.setAttribute('role', 'alert'); notice.textContent = 'Could not confirm: destination is required'; document.body.append(notice); ${bug === 'crash' ? 'throw new Error(\'Delivery crashed\');' : ''} };`);
         case '/upload':
             return layout('Avatar', '<label for="avatar">Choose avatar</label><input id="avatar" type="file" hidden><button id="choose">Upload avatar</button><button id="nothing">No chooser</button><label>Visible file<input type="file" id="visible"></label><output id="uploaded"></output>', `
 const avatar = document.getElementById('avatar');

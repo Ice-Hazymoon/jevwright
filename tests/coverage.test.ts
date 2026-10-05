@@ -200,7 +200,7 @@ describe('reach actions', () => {
     }, 90000);
     it('scrolls a windowed container upward and records the direction', async () => {
         const models = scriptedModels(view => /(?:^|\s)Record 1(?:\s|$)/.test(view.text) ? { done: 0.95 } : { tool: 'scroll', target: element => Boolean(element.scroll), scrollText: 'Record 1', scrollDirection: 'up' });
-        const recipe = await runAndReplay('scroll-up', '/reach-scroll', 'Scroll up until Record 1 appears', models, () => [verify('top', ({ page }) => page.locator('#results').evaluate(element => element.scrollTop < 80))], { ready: ({ page }) => page.locator('#results').evaluate(element => { element.scrollTop = element.scrollHeight; }) });
+        const recipe = await runAndReplay('scroll-up', '/reach-scroll', 'Scroll up until Record 1 appears', models, () => [verify('top', ({ page }) => page.locator('#results').evaluate(element => element.scrollTop < 80))], { ready: ({ page }) => page.locator('#results').evaluate((element) => { element.scrollTop = element.scrollHeight; }) });
         expect(recipe.steps[0].actions[0].scrollDirection).toBe('up');
     });
     it('offers the named unseen scroll goal without generic instruction fragments', async () => {
@@ -241,14 +241,13 @@ it('withholds screenshots when a secret appears in a closed root or editor', asy
 });
 
 it('refuses page-option selection when the option contains a declared secret', async () => {
-    const spec: TestSpec = { ...base, id: 'private-option', start: '/reach-select', secrets: { token: secret('private-option-value') }, ready: ({ page }) => page.locator('#order').evaluate(element => { const option = document.createElement('option'); option.textContent = 'private-option-value'; element.append(option); }), steps: () => [act('Choose the private option in Order', { maxActions: 1 })] };
+    const spec: TestSpec = { ...base, id: 'private-option', start: '/reach-select', secrets: { token: secret('private-option-value') }, ready: ({ page }) => page.locator('#order').evaluate((element) => { const option = document.createElement('option'); option.textContent = 'private-option-value'; element.append(option); }), steps: () => [act('Choose the private option in Order', { maxActions: 1 })] };
     const models = scriptedModels(() => ({ tool: 'select', target: is('combobox', 'Order'), option: '{secret}' }));
     const result = (await runSuite([spec], { ...options(), models: models.settings })).results[0]!;
     expect(result.status).toBe('failed');
     expect(JSON.stringify(result)).toContain('Secret input cannot use the select tool');
     expect(JSON.stringify(result)).not.toContain('private-option-value');
 });
-
 
 it('integration reports a missing scroll search instead of succeeding silently', async () => {
     const spec: TestSpec = { ...base, id: 'missing-scroll-search', start: '/reach-feed', steps: () => [act('Scroll until Update 90 appears', { maxActions: 2 })] };
@@ -263,12 +262,11 @@ it('integration keeps a connected original ref when an identical sibling is inse
     const evaluate = models.settings.models!.evaluation as unknown as { doEvaluate: (...args: any[]) => Promise<any> };
     const original = evaluate.doEvaluate.bind(evaluate);
     const spec: TestSpec = { ...base, id: 'connected-ref', start: '/reach-visual', ready: async ({ page }) => {
-        evaluate.doEvaluate = async (...args) => { const result = await original(...args); if (!inserted && args[0].questions.tool) { inserted = true; await page.locator('[data-amount="5"]').evaluate(element => { const clone = element.cloneNode(true) as HTMLElement; clone.onclick = () => { throw new Error('Wrong duplicate selected'); }; element.before(clone); }); } return result; };
+        evaluate.doEvaluate = async (...args) => { const result = await original(...args); if (!inserted && args[0].questions.tool) { inserted = true; await page.locator('[data-amount="5"]').evaluate((element) => { const clone = element.cloneNode(true) as HTMLElement; clone.onclick = () => { throw new Error('Wrong duplicate selected'); }; element.before(clone); }); } return result; };
     }, steps: () => [act('Choose 5, then Finish the summary'), verify('summary', ({ page }) => page.locator('#status').textContent().then(text => text === 'Summary confirmed'))] };
     const result = (await runSuite([spec], { ...options(), models: models.settings })).results[0]!;
     expect(result.status, result.summary).toBe('passed');
 });
-
 
 it('integration searches a model-selected literal after until you see and preserves parentheses', async () => {
     const models = scriptedModels(view => view.notices.includes('Record opened') ? { done: 0.95 } : view.elements.some(is('button', 'Open record')) ? { tool: 'click', target: is('button', 'Open record') } : { tool: 'scroll', target: element => Boolean(element.scroll), scrollText: 'Record 154' });
@@ -302,7 +300,6 @@ it('integration searches quoted instruction text without including quotation del
     expect(result.status, result.summary).toBe('passed');
 });
 
-
 it('rejects a drag whose source and destination are the same element', async () => {
     const spec: TestSpec = { ...base, id: 'self-drag', start: '/reach-actions', steps: () => [act('Deliver Parcel to Receiving area'), verify('delivered', async ({ page }) => (await page.locator('output').textContent())?.includes('delivered') === true)] };
     const models = scriptedModels(view => view.history.some(entry => entry.action === 'drag' && !entry.error) ? { done: 0.95 } : { tool: 'drag', target: is('generic', 'Parcel'), destination: is('generic', 'Parcel') });
@@ -313,20 +310,19 @@ it('rejects a drag whose source and destination are the same element', async () 
     expect(result.attempts[0]!.steps).toHaveLength(1);
 });
 
-
 it('hardening replays a targetless legacy scroll inside an app shell', async () => {
     const { stepKey } = await import('../src/recording.ts');
     const step = act('Scroll down');
     const spec: TestSpec = { ...base, id: 'legacy-shell-scroll', start: '/hardening-scroll', steps: () => [step, verify('shell moved', ({ page }) => page.locator('#app').evaluate(element => element.scrollTop > 0))] };
     await mkdir(join(root, 'recordings'), { recursive: true });
-    await writeFile(join(root, 'recordings', spec.id + '.json'), JSON.stringify({ version: 1, test: spec.id, updatedAt: '', steps: [{ key: stepKey(step), instruction: step.instruction, actions: [{ tool: 'scroll' }] }] }));
+    await writeFile(join(root, 'recordings', `${spec.id}.json`), JSON.stringify({ version: 1, test: spec.id, updatedAt: '', steps: [{ key: stepKey(step), instruction: step.instruction, actions: [{ tool: 'scroll' }] }] }));
     const result = (await runSuite([spec], { ...options(), mode: 'replay' })).results[0]!;
     expect(result.status, result.summary).toBe('passed');
 });
 
 it('reach2 records selection and repeated keyboard chords and replays formatting without a model', async () => {
     const spec: TestSpec = { ...base, id: 'keyboard-format', start: '/surface-editor', data: { text: 'ship confirmed' }, steps: () => [act('Type {text} in Document and make confirmed bold', { maxActions: 6 }), verify('word formatting', ({ page }) => page.locator('#editor').innerHTML().then(html => html === 'ship <b>confirmed</b>'))] };
-    const models = scriptedModels(view => {
+    const models = scriptedModels((view) => {
         if (!view.history.some(entry => entry.action === 'type')) { return { tool: 'type', target: is('textbox', 'Document'), value: 'text' }; }
         if (!view.history.some(entry => entry.action === 'select_text')) { return { tool: 'select_text', target: is('textbox', 'Document'), selectText: 'confirmed' }; }
         if (!view.history.some(entry => entry.action === 'press')) { return { tool: 'press', key: 'ControlOrMeta+b', times: 1 }; }
@@ -379,7 +375,7 @@ it('reach2 searches helper-selected normalized entity words from the instruction
 it('reach2 keeps completed upload groups in control review and replay history', async () => {
     await writeFile(join(root, 'invoice.txt'), 'invoice');
     const spec: TestSpec = { ...base, id: 'completed-upload-review', start: '/surface-editor?uploads', files: { avatar: file('avatar.txt'), invoice: file('invoice.txt') }, steps: () => [act('Attach {avatar} and {invoice} through Documents'), verify('both attached', ({ page }) => page.locator('#files').evaluate(element => (element as HTMLInputElement).files?.length === 2))] };
-    const models = scriptedModels(view => {
+    const models = scriptedModels((view) => {
         if (view.control) { return { needed: view.controlActivations.some(entry => entry.action === 'upload' && entry.file_keys === '["avatar","invoice"]') ? 0 : 0.35 }; }
         return view.history.some(entry => entry.action === 'upload') ? { tool: 'none', target: is('button', 'Documents'), done: 0.93, achieved: 0.65, remaining: 0.1 } : { tool: 'upload', target: is('button', 'Documents'), value: 'avatar', remaining: 0.99 };
     }, () => ({ activation: 'activate', reason: 'The history only identifies one selected file, so activate the control again' }));
@@ -411,8 +407,7 @@ it('reach2 authorizes helper uploads through declared file keys without a text v
             expect(result.attempts[0]?.steps[0]?.actions?.[0]?.fileKeys).toEqual(['avatar', 'invoice']);
             const replay = (await runSuite([spec], { ...options(), mode: 'replay' })).results[0]!;
             expect(replay.status, replay.summary).toBe('passed');
-        }
-        else { expect(result.cause).toBe('agent'); expect(result.attempts[0]?.steps[0]?.actions).toEqual([]); }
+        } else { expect(result.cause).toBe('agent'); expect(result.attempts[0]?.steps[0]?.actions).toEqual([]); }
     }
 });
 
@@ -420,11 +415,11 @@ it('reach2 supplies declared file names when the helper reviews completed upload
     await writeFile(join(root, 'invoice.txt'), 'invoice');
     const spec: TestSpec = { ...base, id: 'helper-upload-identity', start: '/surface-editor?uploads', files: { avatar: file('avatar.txt'), invoice: file('invoice.txt') }, steps: () => [act('Attach {avatar} and {invoice} through Documents'), verify('both attached', ({ page }) => page.locator('#files').evaluate(element => (element as HTMLInputElement).files?.length === 2), { timeoutMs: 500 })] };
     const reviews: Record<string, string>[] = [];
-    const models = scriptedModels(view => {
+    const models = scriptedModels((view) => {
         if (view.control) { return { needed: 0.35 }; }
         if (view.history.some(entry => entry.action === 'click')) { return { done: 0.99 }; }
         return view.history.some(entry => entry.action === 'upload') ? { tool: 'none', target: is('button', 'Documents'), done: 0.93, achieved: 0.65, remaining: 0.1 } : { tool: 'upload', target: is('button', 'Documents'), value: 'avatar', remaining: 0.99 };
-    }, view => {
+    }, (view) => {
         reviews.push(view.values);
         return { activation: view.values.avatar === 'File: avatar.txt' && view.values.invoice === 'File: invoice.txt' ? 'finished' : 'activate', reason: 'Match the uploaded keys to the filenames requested in the step' };
     });

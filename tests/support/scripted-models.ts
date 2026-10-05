@@ -89,7 +89,7 @@ export interface Belief {
 
 export interface ScriptedCall { questions: string[]; view: View }
 
-const onTarget = (p: number, authorized = false): Answer => { const key = authorized ? 'authorized' : 'named'; return { type: 'choice', choice: p >= 0.5 ? key : 'different', probabilities: { [key]: p, different: 1 - p } }; };
+function onTarget(p: number, authorized = false): Answer { const key = authorized ? 'authorized' : 'named'; return { type: 'choice', choice: p >= 0.5 ? key : 'different', probabilities: { [key]: p, different: 1 - p } }; }
 
 /**
  * Deterministic stand-in for Jev and the helper LLM, driven through the real AI SDK
@@ -189,7 +189,7 @@ function answer(id: string, question: EvaluationQuestion, belief: Belief, view: 
         const quoted = (option: string) => {
             try {
                 const entry = JSON.parse(String(question.criteria[option]));
-                return (Array.isArray(entry) ? entry : [entry]).map(entry => {
+                return (Array.isArray(entry) ? entry : [entry]).map((entry) => {
                     const element = typeof entry.element === 'number' ? view.elements.find(element => element.i === entry.element) : undefined;
                     return element ? { source: 'element', text: element.name, value: element.value } : entry;
                 }) as Array<{ text?: string; value?: string; source?: string }>;

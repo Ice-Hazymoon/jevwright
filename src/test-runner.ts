@@ -6,15 +6,15 @@ import type { RecordedAction, StepRecording, TestRecording } from './recording.t
 import type { Redactor } from './secrets.ts';
 import type { CheckOutcome, Env, FixtureContext, MaybePromise, RunContext, Step, TestSpec, Values, WriteRecord } from './spec.ts';
 import type { Browser, Page } from 'playwright';
+import { AssertionError } from 'node:assert';
 import { mkdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
-import { AssertionError } from 'node:assert';
 import { pageState, runAct } from './act.ts';
 import { redactTrace, writeArtifact } from './artifacts.ts';
 import { newTestContext, settle } from './browser.ts';
+import { secretSurface } from './dom.ts';
 import { createDownloads } from './downloads.ts';
 import { JevwrightError } from './errors.ts';
-import { secretSurface } from './dom.ts';
 import { actedOnTarget, adjudicateClaim, checkEvidenceMatches, judgeClaim, replayableCheckClaim, replayableCheckEvidence } from './judge.ts';
 import { createModels, emptyUsage, ModelError } from './models.ts';
 import { createMonitor } from './monitor.ts';
@@ -334,9 +334,7 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
                     const rejected = result.writes.find(write => write.validationError);
                     if (server || rejected) {
                         result.misstep = await misstep(index);
-                        if (result.misstep) { summary += `. Not counted against the product: ${result.misstep}`; }
-                        else if (server) { cause = 'product'; summary += `. Request evidence: ${server.message}`; }
-                        else if (rejected) { cause = 'product'; summary += `. Request evidence: ${rejected.method} ${rejected.path} → ${rejected.status}: ${rejected.validationError}`; }
+                        if (result.misstep) { summary += `. Not counted against the product: ${result.misstep}`; } else if (server) { cause = 'product'; summary += `. Request evidence: ${server.message}`; } else if (rejected) { cause = 'product'; summary += `. Request evidence: ${rejected.method} ${rejected.path} → ${rejected.status}: ${rejected.validationError}`; }
                     }
                 }
                 break;
@@ -700,7 +698,7 @@ function normalize(outcome: CheckOutcome): { passed: boolean; evidence?: unknown
 /** Pixels cannot be redacted: skip a screenshot whenever the visible text or a field value shows a declared secret. */
 async function showsSecret(page: Page, redact: Redactor): Promise<boolean> {
     if (!redact.active) { return false; }
-    // eslint-disable-next-line unicorn/prefer-dom-node-text-content -- only rendered text reaches the pixels
+
     const shown = await secretSurface(page).catch(() => undefined);
     return shown === undefined || redact.contains(shown);
 }
