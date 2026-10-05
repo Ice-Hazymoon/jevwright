@@ -320,7 +320,7 @@ function parseMode(raw: string | undefined): RunMode {
 function passesFor(flags: Flags, mode: RunMode, configRetries: number): Pass[] {
     // A dry run checks fixtures and start pages; retrying would only hide a flaky fixture.
     const retries = flags['dry-run'] ? 0 : parseCount(flags.retries, '--retries', 0) ?? configRetries;
-    if (!flags.new) { return [{ mode, retries, record: !flags['no-record'] }]; }
+    if (!flags.new) { return [{ mode, retries, record: mode !== 'replay' && !flags['no-record'] }]; }
     if (!flags.test) { throw new JevwrightError('--new needs --test <id> naming the test being written'); }
     if (flags.mode || flags['no-record'] || flags['dry-run']) { throw new JevwrightError('--new sets its own mode and recording; drop --mode, --no-record and --dry-run'); }
     return [{ mode: 'ai', retries: 0, record: true }, { mode: 'replay', retries: 0, record: false }];

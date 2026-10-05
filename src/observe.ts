@@ -139,7 +139,7 @@ export async function observe(page: Page, options: ObserveOptions = {}): Promise
     result.text = clipProtected(texts.filter(Boolean).join(' '), LIMITS.text, options.redact);
     for (const element of result.elements) {
         const node = [...surface.nodes].find(node => node.ref === element.ref);
-        const snapshot: AriaNode[] = []; collect(roots, item => item.ref === element.ref, snapshot);
+        const snapshot: AriaNode[] = []; collect(roots, item => element.ref ? item.ref === element.ref : item.role === element.role && clean(item.name ?? '') === element.name, snapshot);
         const box = node?.box ?? snapshot[0]?.box;
         const detail = box ? surface.details.find(detail => sameBox(detail.box, box)) : undefined;
         if (!detail) {
@@ -158,7 +158,7 @@ export async function observe(page: Page, options: ObserveOptions = {}): Promise
         if (detail.selection !== undefined) { element.selection = detail.inputType === 'password' || SECRET.test(`${element.name} ${element.ariaName ?? ''}`) ? '••••' : clipProtected(detail.selection, 300, options.redact); }
         if (detail.formatting && detail.value === element.value && !options.redact?.contains(detail.value ?? '') && !SECRET.test(`${element.name} ${element.ariaName ?? ''}`)) { element.formatting = detail.formatting; }
         if (detail.dropTarget) { element.dropTarget = true; }
-        if (detail.content) { element.content = clipProtected(detail.content, 160, options.redact); }
+        if (detail.content) { element.content = options.redact?.contains(detail.content) ? detail.content : clipValue(detail.content, 160); }
         if (detail.near) { element.near = clipProtected(detail.near, LIMITS.near, options.redact); }
         if (detail.value !== undefined) { element.value = options.redact?.contains(detail.value) ? detail.value : SECRET.test(element.name) ? '••••' : clipValue(detail.value, 300); }
         if (detail.inputType) { element.inputType = detail.inputType; }

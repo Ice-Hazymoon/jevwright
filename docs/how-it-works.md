@@ -174,6 +174,10 @@ Evidence choices reference the element numbers already in the page state. Full t
 When recording updates are disabled, including `--no-record`, the judge omits this unused choice. Runtime-reference checks also omit it. The three verdict questions, thresholds, observations and adjudication remain available.
 Body-field candidates can use a visible label's subject word; entity controls can use exact quoted names. The model must still select complete proof. Short whole-page options exclude incidental times, generated ids and live-region text.
 Replay deterministically checks every selected quote, its recorded container/nearby context and any field value/state/content.
+Element-name proof excludes generated ids and dates. Labeled read-only controls retain rendered paragraph boundaries
+when their rendered text agrees with the visible-text filter. Their original accessible label can identify a proof option.
+If replay proof mismatches, the engine waits 1.5 seconds and settles before checking again, as for auto checks.
+A mismatch after that second observation still fails. Replay retains the final check observation for audit.
 New evidence marks its region normalization: generated route ids and unstable container ids do not bind it
 to a previous fixture. Unmarked evidence keeps its original literal region comparison. Exact quote excerpts
 must remain uniquely visible in the same recorded page or dialog; old whole-page text remains an exact comparison.
@@ -248,7 +252,8 @@ Recorded duplicate targets include their original count; a changed count require
 using the old ordinal. A failed attempt saves only the successful prefix confirmed by a passed verification
 or declared expectation, and marks the recording `partial`. The failed step is never saved. Auto replays
 that prefix and grounds the remaining unrecorded steps. Existing complete recordings remain unchanged
-when the failed attempt learned no new verified recipe.
+after a failed attempt, unless old unsafe secret data requires replacement. A shorter prefix cannot
+discard their previously verified suffix. CLI replay never updates recording files.
 
 After a product failure involving replay, auto may use one fresh AI retry. It needs at least 20% of
 the run budget left; otherwise the report records why it stayed with replay. A fresh pass remains

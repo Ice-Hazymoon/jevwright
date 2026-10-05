@@ -162,6 +162,8 @@ Replay mode needs no key and no model, so it is the cheapest gate:
 ```
 
 Replay rechecks the direct page evidence recorded by passing `check` steps. Checks without usable evidence are `unverified` and make the CLI exit 1; `--allow-unverified` overrides that exit policy while retaining the report count. A step without a recording fails, so a test committed without its recording cannot pass CI unnoticed. To heal stale recordings and run checks in CI, run the default auto mode and provide `OPENROUTER_API_KEY` as a secret.
+CLI replay leaves recording files unchanged. A failed auto attempt retains an existing complete recording;
+without one, it can save a verified partial prefix. Secret checks still apply before writing a replacement.
 
 ## Documentation
 
@@ -218,6 +220,7 @@ missing anchors. Confirm the cause with an auto run; a mismatch alone does not e
 - `check` waits up to 15 additional seconds per observation for visible loading to finish; persistent loading is a timeout. `check` requires the asserted content to be visible. A count or saved-button state cannot prove what another tab contains.
 - Failed checks receive a second look. Visible contradictions, or missing expected content in an open visible region, are `product`; a collapsed or unopened region is `agent`. Uncertain region evidence receives adjudication.
 - Compound factual checks can record several fields or exact page quotes. Replay rechecks every selected piece in its recorded region. Missing direct evidence and recognized absence or negative clauses remain `unverified`.
+- Check proof excludes element names containing generated ids or dates. Labeled read-only cards retain rendered paragraph boundaries when their visible text agrees.
 - `check` is a model judgment in auto/AI mode. Replay verifies recorded direct evidence; checks without it remain `unverified`. Exact values (money, multilingual text, line breaks) and negative claims belong in `verify`.
 - New recordings bind app routes to the run’s `baseURL`, so changing the host or port alone does not invalidate the route check. Path, sorted query and recorded effects must still match. Routes to other origins remain literal. Unmarked legacy routes retain path-only checks.
 - Chromium only.

@@ -546,8 +546,16 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
                         result.status = 'unverified';
                         result.error = 'Check has no directly recheckable evidence for this claim; record it with an auto run';
                     } else {
-                        const observed = await observeReady();
+                        let observed = await observeReady();
+                        if (!checkEvidenceMatches(recorded.checkEvidence, observed)) {
+                            // An exiting dialog can outlive the action in the accessibility snapshot, as in auto checks.
+                            await page!.waitForTimeout(1500);
+                            await settle(page!, monitor);
+                            observed = await observeReady();
+                        }
                         result.evidence = { claim, checked: recorded.checkEvidence };
+                        result.observation = `step-${String(index + 1).padStart(2, '0')}-observation.json`;
+                        await writeArtifact(join(directory, result.observation), pageState(observed), redact);
                         if (!checkEvidenceMatches(recorded.checkEvidence, observed)) {
                             result.status = 'failed'; result.failure = 'assertion'; result.error = `Recorded check evidence is no longer visible: ${claim}`;
                         }

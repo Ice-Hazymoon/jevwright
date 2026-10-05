@@ -1,6 +1,6 @@
 import type { TestSpec } from '../src/index.ts';
 import type { RunSummary, SuiteOptions } from '../src/suite.ts';
-import type { View } from './support/scripted-models.ts';
+import type { View, ViewElement } from './support/scripted-models.ts';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -121,6 +121,35 @@ describe('integrity regression paths', () => {
         expect(recording.steps).toHaveLength(1);
         const next = await suite([spec], { policy, recordingsDir }).run;
         expect(next.results[0]?.attempts[0]?.steps[0]?.source).toBe('replay');
+    });
+    it('retains a complete recording when a later auto attempt fails', async () => {
+        const recordingsDir = join(root, 'complete-prefix-preserved');
+        const steps = (passed: boolean) => [act('Save draft'), check('The Draft field shows "Original"'), verify('later assertion', () => passed, { timeoutMs: 1 }), act('Open Details')];
+        const policy = (view: View) => view.claim ? { holds: 0.99, support: 'supports' as const, region: 'open' as const } : view.step === 'Open Details' && !view.history.length ? { tool: 'click' as const, target: (element: ViewElement) => element.name === 'Details' } : integrityPolicy(view);
+        const spec = { ...base, steps: () => steps(true) };
+        expect((await suite([spec], { policy, recordingsDir }).run).totals.passed).toBe(1);
+        const file = join(recordingsDir, base.id + '.json');
+        const legacy = JSON.parse(await readFile(file, 'utf8'));
+        delete legacy.steps.find((step: { checkEvidence?: unknown }) => step.checkEvidence)?.checkEvidence;
+        await writeFile(file, JSON.stringify(legacy));
+        expect((await suite([{ ...spec, steps: () => steps(false) }], { policy, recordingsDir }).run).results[0]?.status).toBe('failed');
+        expect(JSON.parse(await readFile(file, 'utf8'))).toEqual(legacy);
+        expect((await suite([spec], { mode: 'replay', recordingsDir }).run).totals.failed).toBe(0);
+    });
+    it('rechecks replay proof after a dialog finishes leaving the snapshot', async () => {
+        const recordingsDir = join(root, 'check-dialog-exit');
+        const ready = async ({ page }: { page: import('playwright').Page }) => { await page.getByRole('dialog').evaluate(node => node.remove()); };
+        const spec = { ...base, id: 'check-dialog-exit', start: '/proof-dialog-exit', ready, steps: () => [check('The Draft field shows "Original"')] };
+        const policy = () => ({ holds: 0.99, support: 'supports' as const, region: 'open' as const });
+        expect((await suite([spec], { policy, recordingsDir }).run).totals.passed).toBe(1);
+        const exiting = { ...spec, ready: async ({ page }: { page: import('playwright').Page }) => {
+            const snapshot = page.ariaSnapshotJSON.bind(page);
+            const stale = await snapshot({ mode: 'ai', boxes: true });
+            await ready({ page });
+            let reads = 0;
+            page.ariaSnapshotJSON = options => ++reads === 1 ? Promise.resolve(stale) : snapshot(options);
+        } };
+        expect((await suite([exiting], { recordingsDir, mode: 'replay' }).run).totals.passed).toBe(1);
     });
     it('reports cancelled running tests as interrupted', async () => {
         const controller = new AbortController();

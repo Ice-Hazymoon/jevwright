@@ -297,6 +297,8 @@ export async function runSuite(specs: ReadonlyArray<TestSpec<unknown>>, options:
         // Step indices, not recording positions: unrecorded steps leave gaps in the recording.
         const changed = steps ? changedActionSteps(recording, steps).map(position => recordedSteps![position]!) : [];
         const partial = result.status === 'failed';
+        // A failed prefix cannot replace a complete path; secret-containing recordings still follow sanitizing replacements.
+        if (partial && recording && !recording.partial && !redact.contains(JSON.stringify(recording))) { return { result, saved: false, changed }; }
         const learned = steps && (partial && recording && !recording.partial
             ? steps.some(step => learnedRecording({ ...recording, steps: recording.steps.filter(entry => entry.key === step.key) }, [step]))
             : learnedRecording(recording, steps) || recording?.partial !== (partial || undefined) || recording?.steps.some(entry => redact.contains(JSON.stringify(entry))));

@@ -88,6 +88,14 @@ document.getElementById('tab').onclick = () => { document.getElementById('browse
             return layout('Scrollable workspace', '<div style="height:80px;overflow-y:auto"><p>' + 'Reference content '.repeat(150) + 'Final visible record</p></div>');
         case '/proof-panel':
             return layout('Message workspace', '<label>Message body<textarea>First passage\n\nFinal passage</textarea></label><button>Open delivery Amber package</button><p>Receipt issued 2027-08-04 09:32</p><button>Copy receipt value</button>');
+        case '/paragraph-card':
+            return layout('Read-only message', '<button aria-label="Message">' + (bug === 'inline' ? '<span>Opening passage</span> <span>Final passage</span>' : '<p>Opening passage</p><p>Final passage</p>') + '</button>');
+        case '/disabled-captions':
+            return layout('Pending actions', '<button disabled>Store settings</button><button disabled>Send invitation</button>');
+        case '/proof-dialog-exit':
+            return layout('Draft workspace', '<label>Draft<input value="Original"></label><dialog open aria-label="Leave editor"><button>Keep writing</button></dialog>');
+        case '/volatile-proof-row':
+            return layout('Deliveries', '<div role="button">REF-8AZ34JXY Amber package 2027-08-04</div>');
         case '/compatibility-editor':
             return layout('Writing workspace', '<section aria-label="Writing area"><div contenteditable="true" role="textbox" aria-label="Document"><p>First passage</p><p><br></p><p>Final passage</p></div></section>');
         case '/integrity-region':

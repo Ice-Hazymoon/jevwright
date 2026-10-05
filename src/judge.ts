@@ -119,7 +119,7 @@ export function checkEvidenceOptions(observation: Observation, claim: string): C
         if (entry.source !== 'element') { return false; }
         const name = entry.text.toLowerCase().replace(/\s*\*$/, '');
         const subject = name.split(/\W+/).at(-1);
-        return lower.includes(name) || literals.some(text => text.length >= 3 && entry.text.includes(text))
+        return lower.includes(name) || Boolean(entry.target?.ariaName && lower.includes(entry.target.ariaName.toLowerCase())) || literals.some(text => text.length >= 3 && entry.text.includes(text))
             || (entry.value !== undefined && ((entry.value.length >= 3 && lower.includes(entry.value.toLowerCase())) || (subject && subject.length >= 4 && lower.split(/\W+/).includes(subject))));
     });
     const fields = relevant.filter(entry => entry.value !== undefined);
@@ -149,6 +149,7 @@ export function replayableCheckClaim(claim: string): boolean {
 export function replayableCheckEvidence(evidence: CheckEvidence[]): boolean {
     return evidence.length > 0 && evidence.every(entry => Boolean(entry.text && entry.region)
         && (entry.source !== 'element' || entry.target?.name === entry.text)
+        && (entry.source !== 'element' || stable(entry.text) === entry.text)
         && !JSON.stringify(entry).includes('{secret}')
         && [entry.text, entry.value, entry.content, entry.target?.context, entry.target?.near].every(text => !text?.endsWith('…')));
 }

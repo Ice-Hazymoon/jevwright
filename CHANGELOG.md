@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Keep CLI replay read-only and preserve complete verified recordings after a failed auto attempt.
+- Preserve rendered paragraphs in labeled read-only controls and match disabled-control metadata by identity.
+- Exclude volatile element names from check proof; offer labeled card content without relying on changing captions.
+- Recheck replay proof after settling a mismatched snapshot, and retain the observed check state for audit.
 - Preserve persistent check-loading timeouts through step exception handling and retain their failed-step evidence.
 - Skip replay-proof selection when recording updates are disabled or the check uses a trusted reference; retain all verdict questions and evidence.
 - Offer local body-field and entity-control proof; reject incidental timestamps and generated ids in short whole-page proof.

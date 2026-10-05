@@ -17,7 +17,7 @@ import { main } from '../src/cli.ts';
 import { createModels, gatewayFromEnv } from '../src/models.ts';
 import { createMonitor, matchesWrite } from '../src/monitor.ts';
 import { buildObservation, observe } from '../src/observe.ts';
-import { describeTarget, resolveTarget } from '../src/recording.ts';
+import { describeTarget, resolveTarget, stepKey } from '../src/recording.ts';
 import { serveReport } from '../src/serve.ts';
 import { fillTemplate, templateKeys } from '../src/spec.ts';
 import { VERSION } from '../src/version.ts';
@@ -511,6 +511,24 @@ const saveTest = (id: string, extra: Record<string, unknown> = {}) => defineTest
 });`;
 
 describe('cli', () => {
+    it('keeps replay recordings unchanged across two runs', async () => {
+        const claim = 'The Draft field shows "Original"';
+        const recording = { version: 1, test: 'draft-proof', updatedAt: '2026-01-01T00:00:00Z', steps: [
+            { key: stepKey({ instruction: 'Open Details' }), instruction: 'Open Details', actions: [{ tool: 'click', target: { role: 'button', name: 'Details', nth: 0 } }] },
+            { key: stepKey({ instruction: `check:${claim}` }), instruction: claim, actions: [], checkClaim: claim, checkEvidence: [{ regionVersion: 1, source: 'element', text: 'Draft', region: 'page /integrity', target: { role: 'textbox', name: 'Draft', nth: 0 }, value: 'Original' }] },
+        ] };
+        const dir = await project({
+            'recordings/draft-proof.json': JSON.stringify(recording),
+            'jevwright.config.ts': `import { act, check, defineConfig, defineTest } from ${SRC};
+import { startFixtureApp } from ${FIXTURE_APP};
+export default defineConfig({ recordingsDir: 'recordings', retries: 0, async setup() { const app = await startFixtureApp(); return { baseURL: app.origin, teardown: () => app.close() }; }, tests: [defineTest({ id: 'draft-proof', title: 'Open details', risk: 'The draft changes', start: '/integrity', steps: () => [act('Open Details'), check(${JSON.stringify(claim)})] })] });`,
+        });
+        const original = readFileSync(join(dir, 'recordings/draft-proof.json'), 'utf8');
+        for (let attempt = 0; attempt < 2; attempt++) {
+            expect((await cli(dir, ['run', '--mode', 'replay'])).code).toBe(0);
+            expect(readFileSync(join(dir, 'recordings/draft-proof.json'), 'utf8')).toBe(original);
+        }
+    }, 60_000);
     it('lists the tests a TypeScript config defines, narrowed by the filters', async () => {
         const dir = await project({ 'jevwright.config.ts': `import { act, check, defineConfig, defineTest, reload } from ${SRC};${profileTests}
 export default defineConfig({ baseURL: 'http://localhost:3000', tests: [saveTest('profile-save', { module: 'profile' }), saveTest('profile-clear', { module: 'profile', tags: ['smoke'] }), saveTest('billing-pay', { module: 'billing' })] });` });
@@ -963,6 +981,48 @@ describe('integrity regressions', () => {
             if (kind === 'receipt') { expect(options.some(entry => entry.text.includes('2027-08-04'))).toBe(false); }
         });
     });
+    it('keeps rendered paragraph boundaries in a named read-only card', async () => {
+        await open('/paragraph-card', async page => {
+            const shown = await observe(page);
+            expect(shown.elements.find(element => element.role === 'button')?.content).toBe('Opening passage\n\nFinal passage');
+        });
+    });
+    it('rejects paragraph proof when a read-only card collapses to one line', async () => {
+        await open('/paragraph-card', async page => {
+            const { checkEvidenceCandidates, checkEvidenceMatches } = await import('../src/judge.ts');
+            const before = await observe(page);
+            const evidence = checkEvidenceCandidates(before).filter(entry => entry.source === 'element' && entry.target?.role === 'button');
+            await page.goto(app.origin + '/paragraph-card?bug=inline');
+            await page.evaluate(() => history.replaceState({}, '', '/paragraph-card'));
+            expect(checkEvidenceMatches(evidence, await observe(page))).toBe(false);
+        });
+    });
+    it('offers card content proof through its original accessible label', async () => {
+        await open('/paragraph-card', async page => {
+            const { checkEvidenceOptions } = await import('../src/judge.ts');
+            const options = checkEvidenceOptions(await observe(page), 'The Message card shows both paragraphs');
+            expect(options.flat().some(entry => entry.target?.ariaName === 'Message')).toBe(true);
+        });
+    });
+    it('keeps disabled action captions on their own elements', async () => {
+        await open('/disabled-captions', async page => {
+            const snapshot = page.ariaSnapshotJSON.bind(page);
+            page.ariaSnapshotJSON = async options => {
+                const tree = await snapshot(options);
+                const strip = (nodes: typeof tree) => { for (const node of nodes) { if (node.disabled) { delete node.ref; } if (node.children) { strip(node.children); } } };
+                strip(tree);
+                return tree;
+            };
+            expect((await observe(page)).elements.filter(element => element.role === 'button').map(element => element.name)).toEqual(['Store settings', 'Send invitation']);
+        });
+    });
+    it('omits proof targets containing generated IDs or dates', async () => {
+        await open('/volatile-proof-row', async page => {
+            const { checkEvidenceOptions } = await import('../src/judge.ts');
+            const options = checkEvidenceOptions(await observe(page), 'The deliveries show "Amber package"');
+            expect(options.flat().some(entry => entry.source === 'element')).toBe(false);
+        });
+    });
     it('marks a step with no observable effect explicitly', async () => {
         const { recordEnd } = await import('../src/end-state.ts');
         expect(recordEnd(observation, observation, [{ tool: 'hover' }])).toMatchObject({ strict: true, effect: 'none' });
@@ -1277,7 +1337,7 @@ describe('hardening surfaces', () => {
     it('retains aria-labelled card previews and visible body, prices, totals and errors', async () => {
         const { observation } = await open('/hardening-visible-content');
         const cards = observation.elements.filter(element => (element.name === 'Note' || element.ariaName === 'Note'));
-        expect(cards.map(element => element.content)).toEqual(['Working draft Preview action', 'Revised draft']);
+        expect(cards.map(element => element.content)).toEqual(['Working draft\n\nPreview action', 'Revised draft']);
         for (const value of ['Working draft', 'Revised draft', 'The subscription renews monthly.', 'Unit price: $17.43', 'Revenue $69.72', 'Average $17.43', 'This account is still in use.']) {
             expect(observation.text).toContain(value);
         }
