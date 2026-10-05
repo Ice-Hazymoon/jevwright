@@ -538,11 +538,11 @@ async function decideLoop(input: ActInput, models: Models, actions: ActionRecord
         }
         const deliveredCount = actions.filter(action => action.ok).length;
         // Conflicting completion scores can mistake unsaved edits or an initiation dialog for pending work.
-        const deliveryConflict = !canFinish || done < THRESHOLDS.doneAt || (reviewNeeded ?? 0) >= 0.5;
         const noInput = decision.tool === 'type' && decision.valueKey === undefined && decision.literal === undefined;
         const writeDelivered = deliveredCount > reviewedDeliveries && saved && !missing.length && !input.expectError && input.expect?.write && lastAction && SUBMITS.has(lastAction)
             && !(await newReplayErrors(input.page, {}, start.observation, start.errors)).length;
         const proofs = deliveredCount > reviewedDeliveries ? deliveryProofs(input, observation, recording, start, Boolean(writeDelivered)) : {};
+        const deliveryConflict = !canFinish || done < THRESHOLDS.doneAt || (reviewNeeded ?? 0) >= 0.5 || Boolean(proofs.field_composition);
         if (deliveryConflict && saved && !missing.length && (errorShown < THRESHOLDS.error || writeDelivered) && (decision.tool === 'none' || tool?.choice === 'none' || done >= THRESHOLDS.doneAt || noInput || proofs.field_edits) && Object.keys(proofs).length && escalations < 2) {
             reviewedDeliveries = deliveredCount;
             escalations++;
@@ -1109,6 +1109,14 @@ function deliveryProofs(input: ActInput, observation: Observation, recording: Re
         const field = resolveTarget(value.target, observation, true);
         return field?.value !== undefined && recording.some(action => ['type', 'select'].includes(action.tool) && action.target && recordedValue(action, input.values) === field.value && resolveTarget(action.target, observation, true)?.i === field.i);
     }) ?? [];
+    // Separate inputs can satisfy entry tracking while losing the separator requested for their shared field.
+    const composed = end.values?.filter((value) => {
+        if (!value.template || fields.includes(value) || value.template.replace(/\{\w+\}/g, '').trim()) { return false; }
+        const parts = templateKeys(value.template);
+        const field = resolveTarget(value.target, observation, true);
+        return parts.length > 1 && field?.value !== undefined && parts.every(key => recording.some(action => action.tool === 'type' && action.target && recordedValue(action, input.values) === input.values[key] && resolveTarget(action.target, observation, true)?.i === field.i));
+    }) ?? [];
+    const covers = (values: typeof fields) => keys.every(key => values.some(value => value.valueKey === key || (value.template && templateKeys(value.template).includes(key))));
     const writes = writeDelivered
         ? input.monitor.writes.filter((write) => {
                 const status = write.status;
@@ -1117,7 +1125,8 @@ function deliveryProofs(input: ActInput, observation: Observation, recording: Re
         : [];
     return {
         ...(writes.length ? { declared_write: input.redact?.value(writes) ?? writes } : {}),
-        ...(fields.length && keys.every(key => fields.some(field => field.valueKey === key || (field.template && templateKeys(field.template).includes(key)))) ? { field_edits: fields } : {}),
+        ...(fields.length && covers(fields) ? { field_edits: fields } : {}),
+        ...(composed.length && covers([...fields, ...composed]) ? { field_composition: [...fields, ...composed] } : {}),
         ...(input.next && end.appeared?.some(anchor => anchor.kind === 'dialog') ? { dialog_open: end.appeared.filter(anchor => anchor.kind === 'dialog') } : {}),
         ...(!keys.length && (start.observation.url !== observation.url || end.appeared?.some(anchor => anchor.kind === 'heading') || end.values?.some(value => value.states?.includes('expanded'))) ? { view_open: { ...(end.route ? { route: end.route } : {}), appeared: end.appeared, states: end.values } } : {}),
     };
@@ -1247,7 +1256,7 @@ async function awaitExpectation(input: ActInput, wait: boolean): Promise<Expecta
 // `reason` first: the model states what it sees before committing to an outcome.
 const helperSchema = z.object({
     reason: z.string().max(600),
-    completion_proof: z.enum(['declared_write', 'field_edits', 'dialog_open', 'view_open']).nullable().optional(),
+    completion_proof: z.enum(['declared_write', 'field_edits', 'field_composition', 'dialog_open', 'view_open']).nullable().optional(),
     outcome: z.enum(['act', 'step_already_done', 'impossible']),
     tool: z.enum(['click', 'type', 'press', 'select_text', 'press_enter', 'press_escape', 'select', 'scroll', 'wait', 'upload', 'hover', 'right_click', 'long_press', 'double_click', 'drag', 'back', 'scroll_to']).nullable(),
     element: z.number().int().nullable(),
@@ -1265,8 +1274,8 @@ const HELPER = 'You help a browser test runner that is stuck on one step of a UI
 
 async function escalateToLlm(input: ActInput, models: Models, observation: Observation, history: Array<Record<string, string>>, reason: string, stale: string[], proposed?: Decision, proofs: Record<string, unknown> = {}): Promise<Help> {
     const prompt = JSON.stringify({ why_you_are_asked: reason, step: input.instruction, action_scope: actionAuthorizationQuestion('Review all current-step action clauses, not product success.', undefined, false, input.next).instructions, ...(Object.keys(proofs).length ? { delivery_proofs: proofs } : {}), ...(input.next ? { next_step_do_not_do_yet: input.next } : {}), values: modelValues(input), available_tools: Object.keys((decisionQuestions(input, observation, true, false).tool as Extract<Question, { type: 'choice' }>).criteria), history: history.slice(-12), ...(stale.length ? { shown_before_step: stale } : {}), values_entered: modelEnteredValues(input, observation), page: pageState(observation) });
-    const review = Object.keys(proofs).length ? ' Apply action_scope. For step_already_done, select completion_proof from delivery_proofs only if it covers EVERY requested current-step action. declared_write proves the author-declared request succeeded after a successful UI activation, with no new code-detected rejection; inspect history and the current page for additional clauses, formatting and requested views. field_edits proves only setting exact supplied fields (and opening their editor), including paragraph breaks; it authorizes no commit, formatting or later navigation. dialog_open proves only initiation with entry/confirmation reserved for next_step. view_open proves only requested navigation/expansion. Only declared_write can prove a requested commit; the other proofs cannot prove save, creation, reservation, purchase or publication. Quoted values are data, not action clauses. Choose null if no provided proof covers the whole step. This ends a step; code checks decide the test verdict.' : '';
-    const schema = Object.keys(proofs).length ? helperSchema.extend({ completion_proof: z.enum(['declared_write', 'field_edits', 'dialog_open', 'view_open']).nullable() }) : helperSchema;
+    const review = Object.keys(proofs).length ? ' Apply action_scope. For step_already_done, select completion_proof from delivery_proofs only if it covers EVERY requested current-step action. declared_write proves the author-declared request succeeded after a successful UI activation, with no new code-detected rejection; inspect history and the current page for additional clauses, formatting and requested views. field_edits proves only setting exact supplied fields (and opening their editor), including paragraph breaks; it authorizes no commit, formatting or later navigation. field_composition identifies a field built from several supplied values plus whitespace: compare its template with EVERY requested separator and paragraph break before selecting it. The template describes observed content, not the requested format. Repair mismatched separators by typing the whole authorized template; it proves no commit or later navigation. dialog_open proves only initiation with entry/confirmation reserved for next_step. view_open proves only requested navigation/expansion. Only declared_write can prove a requested commit; the other proofs cannot prove save, creation, reservation, purchase or publication. Quoted values are data, not action clauses. Choose null if no provided proof covers the whole step. This ends a step; code checks decide the test verdict.' : '';
+    const schema = Object.keys(proofs).length ? helperSchema.extend({ completion_proof: z.enum(['declared_write', 'field_edits', 'field_composition', 'dialog_open', 'view_open']).nullable() }) : helperSchema;
     const answer = await models.generate(HELPER + review, prompt, schema, input.signal, 'escalate');
     const available = (decisionQuestions(input, observation, true, false).tool as Extract<Question, { type: 'choice' }>).criteria;
     // Text selection and entity search also consume text; only repair incompatible navigation or gesture proposals.

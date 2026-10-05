@@ -96,6 +96,20 @@ it('fresh stops exact field editing before an unrequested trailing Enter', async
     expect(result.attempts[0]?.steps[0]?.actions).toHaveLength(2);
 });
 
+it('fresh reviews separators when several supplied values compose one field', async () => {
+    const spec: TestSpec<void> = { id: 'fresh-composed-separator', title: 'Compose two paragraphs', risk: 'A missing separator is mistaken for complete editing', start: '/fresh-edit', data: { first: 'Opening passage', second: 'Final passage' }, steps: () => [act('Replace Notes with {first}, then one blank paragraph, then {second}'), verify('exact separator and uncommitted draft', async ({ page }) => await page.getByRole('textbox', { name: 'Notes' }).inputValue() === 'Opening passage\n\nFinal passage' && await page.locator('#commits').textContent() === '0')] };
+    const policy = (view: View) => {
+        const target = (element: ViewElement) => element.name === 'Notes';
+        if (!view.history.some(entry => entry.value === 'first')) { return { tool: 'type', target, value: 'first' }; }
+        if (!view.history.some(entry => entry.action === 'press_enter')) { return { tool: 'press_enter', target }; }
+        if (!view.history.some(entry => entry.value === 'second')) { return { tool: 'type', target, value: 'second' }; }
+        return { done: 0.8, achieved: 0.8, remaining: 0.2, needed: 0, tool: 'none', delivered: view.elements.some(element => element.value === 'Opening passage\n\nFinal passage') ? 0.99 : 0.01 };
+    };
+    const result = (await suite([spec], { policy, helper: view => ({ outcome: 'act', tool: 'type', element: view.elements.find(element => element.name === 'Notes')?.i ?? null, value_key: null, text: 'Opening passage\n\nFinal passage', reason: 'The composed field needs the requested blank paragraph' }) }).run).results[0]!;
+    expect(result.status, result.summary).toBe('passed');
+    expect(result.attempts[0]?.steps[0]?.actions?.at(-1)?.source).toBe('llm');
+});
+
 it.each(['warning', 'new-error'])('fresh reviews declared write delivery without suppressing a new error (%s)', async (bug) => {
     const spec: TestSpec<void> = { id: `fresh-write-${bug}`, title: 'Edit then commit an entry', risk: 'Stale warning scores reject a delivered commit or hide a new rejection', start: `/fresh-edit?bug=${bug}`, data: { alias: 'Pending alias', notes: 'Entry notes' }, steps: () => [act('Change Alias to {alias} and Notes to {notes}, then commit the entry', { expect: { write: { method: 'POST', path: '/api/profile', status: 200 } } }), verify('exact commit count', ({ page }) => page.locator('#commits').textContent().then(text => text === '1'))] };
     const policy = (view: View) => view.history.some(entry => entry.element?.includes('Commit entry')) ? { done: 0.29, achieved: 0.2, remaining: 0.9, error: 0.85, tool: 'none', delivered: 0.99 } : view.history.some(entry => entry.value === 'notes') ? { done: 0.1, achieved: 0.2, remaining: 0.9, tool: 'click', target: (element: ViewElement) => element.name === 'Commit entry' } : freshEditPolicy(view);
