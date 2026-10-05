@@ -68,6 +68,19 @@ const statusOf = (summary: RunSummary) => Object.fromEntries(summary.results.map
 describe('integrity regression paths', () => {
     const base = { id: 'integrity-save', title: 'Store a draft', risk: 'A receipt is missing', start: '/integrity', ready: async ({ page }: { page: import('playwright').Page }) => { await page.evaluate(() => { history.replaceState({}, '', '/integrity'); }); } };
     const policy = integrityPolicy;
+    it('omits unused proof selection when recording updates are disabled', async () => {
+        const execution = suite([profileTest()], { updateRecordings: false });
+        expect((await execution.run).totals.passed).toBe(1);
+        const judgments = execution.calls.filter(call => call.questions.includes('holds'));
+        expect(judgments).not.toHaveLength(0);
+        expect(judgments.every(call => !call.questions.includes('evidence'))).toBe(true);
+    });
+    it('does not request replay proof for a trusted-reference check', async () => {
+        const spec = { ...profileTest(), steps: () => [check('The Nickname field shows "Ada"', { reference: async () => ({ nickname: 'Ada' }) })] };
+        const execution = suite([spec]);
+        expect((await execution.run).totals.passed).toBe(1);
+        expect(execution.calls.filter(call => call.questions.includes('holds')).every(call => !call.questions.includes('evidence'))).toBe(true);
+    });
     it.each(['missing', 'half', 'query', 'alert', 'invalid', '500', 'shadow-alert', 'frame-alert'])('fails replay when the recorded effect drifts: %s', async bug => {
         const recordingsDir = join(root, 'integrity-drift-' + bug);
         const spec = { ...base, steps: () => [act('Save draft')] };

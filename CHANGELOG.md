@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Skip replay-proof selection when recording updates are disabled or the check uses a trusted reference; retain all verdict questions and evidence.
+- Offer local body-field and entity-control proof; reject incidental timestamps and generated ids in short whole-page proof.
 - Preserve unmarked legacy end-state rules and repeated instruction keys; apply strict checks only to marked new recordings.
 - Compare replay errors against the step start and recorded end. Ignore informational alert roles and warning states.
 - Exclude toast/live-region contents, relative times and counters from required anchors; record count reductions for repeated controls.

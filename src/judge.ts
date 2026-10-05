@@ -64,8 +64,8 @@ const FAIL = { support: 0.6 };
  * Independent content and region judgments keep an unopened view distinct from missing expected content.
  * Trusted `reference` data turns an opinion into a comparison with ground truth.
  */
-export async function judgeClaim(models: Models, observation: Observation, claim: string, reference: unknown, signal: AbortSignal, priorActions: PriorActions = []): Promise<CheckVerdict> {
-    const recordable = replayableCheckClaim(claim);
+export async function judgeClaim(models: Models, observation: Observation, claim: string, reference: unknown, signal: AbortSignal, priorActions: PriorActions = [], collectEvidence = true): Promise<CheckVerdict> {
+    const recordable = collectEvidence && reference === undefined && replayableCheckClaim(claim);
     const candidates = recordable ? checkEvidenceOptions(observation, claim) : [];
     const state = {
         claim,
@@ -86,7 +86,7 @@ export async function judgeClaim(models: Models, observation: Observation, claim
             },
         },
         region: { type: 'choice', instructions: REGION, criteria: { open: 'The relevant region is open and visible, regardless of its contents', closed: 'The relevant region is not open in the current view', unknown: 'The region or its visibility cannot be established' } },
-        ...(recordable ? { evidence: { type: 'choice' as const, instructions: 'Which option directly proves EVERY part of claim? An element number references page.elements by i, including its exact name, value/content and states. Combine pieces only if complete. Select none for absence, indirect or uncertain proof. This choice does not decide the verdict.', criteria: { none: 'No complete directly recheckable evidence', ...Object.fromEntries(candidates.map((candidate, i) => [String(i), JSON.stringify(candidate.map(entry => entry.target ? { element: resolveTarget(entry.target, observation, true)?.i } : { source: entry.source, text: entry.text }))])) } } } : {}),
+        ...(candidates.length ? { evidence: { type: 'choice' as const, instructions: 'Which option directly proves EVERY part of claim? An element number references page.elements by i, including its exact name, value/content and states. Combine pieces only if complete. Select none for absence, indirect or uncertain proof. This choice does not decide the verdict.', criteria: { none: 'No complete directly recheckable evidence', ...Object.fromEntries(candidates.map((candidate, i) => [String(i), JSON.stringify(candidate.map(entry => entry.target ? { element: resolveTarget(entry.target, observation, true)?.i } : { source: entry.source, text: entry.text }))])) } } } : {}),
     }, signal, 'check');
     const holds = probabilityOf(answers.holds);
     const support = choiceOf(answers.support);
@@ -114,7 +114,14 @@ export function checkEvidenceCandidates(observation: Observation): CheckEvidence
 export function checkEvidenceOptions(observation: Observation, claim: string): CheckEvidence[][] {
     const lower = claim.toLowerCase();
     const candidates = checkEvidenceCandidates(observation);
-    const relevant = candidates.filter(entry => entry.source === 'element' && (lower.includes(entry.text.toLowerCase().replace(/\s*\*$/, '')) || (entry.value !== undefined && entry.value.length >= 3 && lower.includes(entry.value.toLowerCase()))));
+    const literals = [...claim.matchAll(/"([^"\n]+)"|“([^”\n]+)”/g)].map(match => match[1] ?? match[2]!);
+    const relevant = candidates.filter(entry => {
+        if (entry.source !== 'element') { return false; }
+        const name = entry.text.toLowerCase().replace(/\s*\*$/, '');
+        const subject = name.split(/\W+/).at(-1);
+        return lower.includes(name) || literals.some(text => text.length >= 3 && entry.text.includes(text))
+            || (entry.value !== undefined && ((entry.value.length >= 3 && lower.includes(entry.value.toLowerCase())) || (subject && subject.length >= 4 && lower.split(/\W+/).includes(subject))));
+    });
     const fields = relevant.filter(entry => entry.value !== undefined);
     const quotes: CheckEvidence[] = [...claim.matchAll(/"([^"\n]+)"|“([^”\n]+)”/g)].flatMap(match => {
         const text = match[1] ?? match[2]!;
@@ -127,7 +134,7 @@ export function checkEvidenceOptions(observation: Observation, claim: string): C
         ...(combined.length > 1 && combined.length <= 8 ? [combined] : []),
         ...quotes.map(entry => [entry]),
         ...relevant.slice(0, 16).map(entry => [entry]),
-        ...candidates.filter(entry => entry.source !== 'element' && (lower.includes(entry.text.toLowerCase()) || (entry.source === 'text' && entry.text.length <= 512 && !relevant.length && !quotes.length))).map(entry => [entry]),
+        ...candidates.filter(entry => entry.source !== 'element' && (lower.includes(entry.text.toLowerCase()) || (entry.source === 'text' && entry.text.length <= 512 && stable(entry.text) === entry.text && !observation.transientTexts?.some(text => entry.text.includes(text)) && !relevant.length && !quotes.length))).map(entry => [entry]),
     ];
     return options.filter(replayableCheckEvidence);
 }

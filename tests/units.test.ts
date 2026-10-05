@@ -952,6 +952,17 @@ describe('integrity regressions', () => {
         expect(checkEvidenceMatches(quote, shown)).toBe(true);
         expect(checkEvidenceMatches(quote, { ...shown, text: shown.text.replace('Private revision B', 'Different revision') })).toBe(false);
     });
+    it.each(['body', 'entity', 'receipt'])('keeps local proof without unrelated timestamps: %s', async kind => {
+        await open('/proof-panel', async page => {
+            const { checkEvidenceOptions } = await import('../src/judge.ts');
+            const shown = await observe(page);
+            const claim = kind === 'body' ? 'The body shows "First passage" and "Final passage" with a blank line between them' : kind === 'entity' ? 'The delivery list shows "Amber package"' : 'The receipt shows a key and a Copy button';
+            const options = checkEvidenceOptions(shown, claim).flat();
+            if (kind === 'body') { expect(options.some(entry => entry.value === 'First passage\n\nFinal passage')).toBe(true); }
+            if (kind === 'entity') { expect(options.some(entry => entry.target?.name === 'Open delivery Amber package')).toBe(true); }
+            if (kind === 'receipt') { expect(options.some(entry => entry.text.includes('2027-08-04'))).toBe(false); }
+        });
+    });
     it('marks a step with no observable effect explicitly', async () => {
         const { recordEnd } = await import('../src/end-state.ts');
         expect(recordEnd(observation, observation, [{ tool: 'hover' }])).toMatchObject({ strict: true, effect: 'none' });

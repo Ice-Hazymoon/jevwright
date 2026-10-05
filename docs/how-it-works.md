@@ -171,6 +171,8 @@ In auto/AI mode, a separate evidence choice records the exact quoted page text a
 when one evidence option directly supports the whole claim. Options omit unrelated navigation and long whole-page duplicates. Options can combine up to six named fields or
 several exact page quotes and controls. The model must cover every clause. Recognized absence or negative clauses cannot record positive-fragment proof and remain unverified in replay; quoted literal wording is excluded from this conservative language guard.
 Evidence choices reference the element numbers already in the page state. Full target descriptors and field values remain in the recording. This choice does not change the existing verdict.
+When recording updates are disabled, including `--no-record`, the judge omits this unused choice. Runtime-reference checks also omit it. The three verdict questions, thresholds, observations and adjudication remain available.
+Body-field candidates can use a visible label's subject word; entity controls can use exact quoted names. The model must still select complete proof. Short whole-page options exclude incidental times, generated ids and live-region text.
 Replay deterministically checks every selected quote, its recorded container/nearby context and any field value/state/content.
 New evidence marks its region normalization: generated route ids and unstable container ids do not bind it
 to a previous fixture. Unmarked evidence keeps its original literal region comparison. Exact quote excerpts

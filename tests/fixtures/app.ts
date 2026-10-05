@@ -86,6 +86,8 @@ document.getElementById('tab').onclick = () => { document.getElementById('browse
             return layout('Draft editor', '<label>Draft<input id="draft"></label><label>Reference<input id="reference"></label><button id="store">Store draft</button>', `document.getElementById('store').onclick = () => send('/api/draft-validation', { draft: document.getElementById('draft').value });`);
         case '/compatibility-scroller':
             return layout('Scrollable workspace', '<div style="height:80px;overflow-y:auto"><p>' + 'Reference content '.repeat(150) + 'Final visible record</p></div>');
+        case '/proof-panel':
+            return layout('Message workspace', '<label>Message body<textarea>First passage\n\nFinal passage</textarea></label><button>Open delivery Amber package</button><p>Receipt issued 2027-08-04 09:32</p><button>Copy receipt value</button>');
         case '/compatibility-editor':
             return layout('Writing workspace', '<section aria-label="Writing area"><div contenteditable="true" role="textbox" aria-label="Document"><p>First passage</p><p><br></p><p>Final passage</p></div></section>');
         case '/integrity-region':

@@ -114,6 +114,8 @@ export interface AttemptOptions {
     /** Shared across every concurrently running attempt in the run; checked ahead of the per-attempt call cap. */
     runBudget?: RunBudget;
     recording?: TestRecording;
+    /** Omit replay-proof selection when this attempt cannot persist it; verdict evidence remains. */
+    collectCheckEvidence?: boolean;
     /** Ignore recordings and ground every step with the model. */
     fresh?: boolean;
     probe?: boolean;
@@ -556,7 +558,7 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
                 const reference = step.reference ? await step.reference(runContext(index)) : undefined;
                 const priorActions = steps.filter(entry => entry.kind === 'act' && entry.status === 'passed' && entry.actions?.some(action => action.ok)).slice(-3).map(entry => ({ step: entry.label, history: entry.actions!.filter(action => action.ok).slice(-12).map(action => ({ action: action.tool, ...(action.element ? { element: action.element } : {}), ...(action.destination ? { destination: action.destination } : {}) })) }));
                 let observed = await observeReady();
-                let verdict = await judgeClaim(models, observed, claim, reference, signal, priorActions);
+                let verdict = await judgeClaim(models, observed, claim, reference, signal, priorActions, options.collectCheckEvidence);
                 const attempts: unknown[] = [verdict];
                 if (!verdict.passed || verdict.uncertain) {
                     // A second look after the page settles; UI updates can trail the data.
@@ -565,7 +567,7 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
                     const next = await observeReady();
                     if (next.signature !== observed.signature) {
                         observed = next;
-                        verdict = await judgeClaim(models, observed, claim, reference, signal, priorActions);
+                        verdict = await judgeClaim(models, observed, claim, reference, signal, priorActions, options.collectCheckEvidence);
                         attempts.push(verdict);
                     }
                 }

@@ -280,6 +280,7 @@ export async function runSuite(specs: ReadonlyArray<TestSpec<unknown>>, options:
             models,
             runBudget,
             recording,
+            collectCheckEvidence: store.enabled && (options.updateRecordings ?? mode !== 'replay') && !options.dryRun,
             fresh,
             probe: options.probe,
             dryRun: options.dryRun,
