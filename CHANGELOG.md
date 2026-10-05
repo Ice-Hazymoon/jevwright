@@ -6,7 +6,7 @@
 
 - Record durable end effects only: exclude mirrored visual toast cards, clipped descriptors and initial values/states of revealed fields. Preserve strict all-anchor and absence-before checks.
 - Settle before recording action ends and retry route changes during accessibility/DOM observation.
-- Review completed-view proposals that would start unrelated editing; code checks still decide the verdict.
+- Resolve conflicting completion judgments with an independent review of requested action delivery, including unsaved edits, initiation dialogs and view-only steps; code checks still decide the verdict.
 - Read rendered loading text, ignore aria-live=off, and inspect visible check evidence after bounded waiting. Missing evidence during persistent loading remains a timeout.
 
 - Breaking before 1.0: `--mode replay` no longer passes a test whose `check` steps were skipped. A check passes in replay only when its recorded direct evidence is still visible; checks without evidence (all recordings made before this release) report `unverified`, which fails the run unless `--allow-unverified` is passed. Re-record with an auto run to add evidence. Recordings from 0.1.x–0.6.0 keep their original end-state semantics.

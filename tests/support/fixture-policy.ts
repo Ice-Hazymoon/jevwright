@@ -6,7 +6,7 @@ export function freshSectionPolicy(view: View): Belief {
     if (view.proposal) { return { onTarget: view.proposal.element === 'button "Add rate"' ? 0.02 : 0.98 }; }
     if (view.control) { return { needed: 0.02 }; }
     if (view.elements.some(element => element.name === 'Rates' && element.state?.includes('expanded'))) {
-        return { done: 0.91, remaining: 0.97, achieved: 0.08, tool: 'click', target: element => element.name === 'Add rate' };
+        return { done: 0.91, remaining: 0.97, achieved: 0.08, delivered: 0.99, tool: 'click', target: element => element.name === 'Add rate' };
     }
     if (view.dialog) { return { tool: 'type', inputSource: 'step', target: element => element.name === 'Amount' }; }
     return { tool: 'click', target: element => element.name === 'Rates' };
@@ -267,4 +267,13 @@ export function gestureNavigationPolicy(view: View): Belief {
     const question = JSON.parse(view.instructions ?? '{}').navigation;
     const scoped = question?.instructions?.includes('prerequisites');
     return { done: 0.97, achieved: 0.99, remaining: 0.02, navigation: view.review && !scoped ? 0.64 : 0.01, tool: 'none' };
+}
+
+/** Reproduce a draft's exact inputs being treated as unfinished until an unrequested commit. */
+export function freshEditPolicy(view: View): Belief {
+    const commit = view.step?.includes('then commit');
+    if (!view.history.some(entry => entry.value === 'alias')) { return { tool: 'type', target: is('textbox', 'Alias'), value: 'alias' }; }
+    if (!view.history.some(entry => entry.value === 'notes')) { return { tool: 'type', target: is('textbox', 'Notes'), value: 'notes' }; }
+    if (commit && view.history.some(entry => entry.element?.includes('Commit entry'))) { return { done: 0.99 }; }
+    return { done: 0.29, achieved: 0.2, remaining: 0.9, needed: 0.84, tool: 'none', target: is('button', 'Commit entry'), delivered: commit ? 0.01 : 0.99 };
 }

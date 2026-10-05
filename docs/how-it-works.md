@@ -89,7 +89,7 @@ The helper LLM (DeepSeek V4.1 Flash by default) is consulted when Jev is stuck:
 - when it repeats itself;
 - when an action it just chose failed.
 
-A high-confidence completed view can conflict with a proposal to edit its contents. If the scope audit rejects that proposal, the helper reviews completion before more work begins. This review shares the two-call limit and does not decide the test verdict.
+Conflicting completion scores can treat unsaved edits or an opened initiation dialog as unfinished work. Within the two-helper-call limit, a review compares every current-step action with successful history and stable effects caused by this step. It runs at most once per new successful action count. The helper must select a provided code proof: exact authored field edits, an opened initiation dialog with its next action reserved, or an opened view. Unsupported completion does not bypass the normal guards. These proofs authorize no commit, formatting or later navigation. Declared expectations and later checks still decide effects and the test verdict.
 
 The helper is called at most twice per step. It may:
 - act on a numbered control;

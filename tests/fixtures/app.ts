@@ -57,6 +57,10 @@ function escapeHtml(text: string): string {
 function pages(state: FixtureState, url: URL): string | undefined {
     const bug = url.searchParams.get('bug');
     switch (url.pathname) {
+        case '/fresh-edit':
+            return layout('Entry draft', '<label>Alias<input id="alias" value="Initial"></label><label>Notes<textarea id="notes"></textarea></label><button id="commit">Commit entry</button><output id="commits">0</output>', `
+document.getElementById('commit').onclick = () => document.getElementById('commits').textContent = String(Number(document.getElementById('commits').textContent) + 1);
+`);
         case '/fresh-effects':
             return layout('Entry workspace', '<label>Alias<input id="alias" value="Initial"></label><button id="open">Open preferences</button><button id="save">Store entry</button><div id="panel"></div><section aria-label="Feedback"><div aria-live="polite" style="position:absolute;width:1px;height:1px;overflow:hidden"></div><div id="feedback" style="position:fixed;right:20px;top:20px"></div></section>', `
 document.getElementById('save').onclick = () => { document.querySelector('[aria-live]').textContent = 'Entry stored'; document.getElementById('feedback').innerHTML = '<h3>Entry stored</h3><button>Dismiss message</button>'; document.getElementById('panel').innerHTML = '<h2>Stored entry</h2><button>…R4M7</button><button aria-label="Row actions">Entry …R4M7</button>'; };

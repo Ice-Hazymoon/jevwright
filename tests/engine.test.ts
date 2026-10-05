@@ -12,7 +12,7 @@ import { act, check, reload, run, runSuite, secret, verify } from '../src/index.
 import { describePageValue, pageValueChoices, readPageValue } from '../src/page-values.ts';
 import { createRedactor } from '../src/secrets.ts';
 import { startFixtureApp } from './fixtures/app.ts';
-import { deferredPolicy, fixturePolicy, freshSectionPolicy, gestureNavigationPolicy, integrityPolicy, reservationPolicy, reservationScopePolicy, savedViewPolicy, singlePageSearchPolicy } from './support/fixture-policy.ts';
+import { deferredPolicy, fixturePolicy, freshEditPolicy, freshSectionPolicy, gestureNavigationPolicy, integrityPolicy, reservationPolicy, reservationScopePolicy, savedViewPolicy, singlePageSearchPolicy } from './support/fixture-policy.ts';
 import { scriptedModels } from './support/scripted-models.ts';
 
 type App = Awaited<ReturnType<typeof startFixtureApp>>;
@@ -64,6 +64,53 @@ function suite(specs: Array<TestSpec<void>>, options: Partial<SuiteOptions> & { 
 }
 
 const statusOf = (summary: RunSummary) => Object.fromEntries(summary.results.map(result => [result.id, result.status === 'passed' ? 'passed' : `${result.status}:${result.cause}`]));
+
+it.each([false, true])('fresh respects exact field edits without losing a requested commit (%s)', async (commit) => {
+    const spec: TestSpec<void> = { id: `fresh-edit-${commit}`, title: 'Set entry fields', risk: 'Draft changes implicitly commit or declared commits are skipped', start: '/fresh-edit', data: { alias: 'Pending alias', notes: 'Opening passage\n\nFinal passage' }, steps: () => [act(`Change Alias to {alias} and Notes to {notes}${commit ? ', then commit the entry' : ''}`), verify('exact fields and commit boundary', async ({ page }) => await page.getByRole('textbox', { name: 'Alias' }).inputValue() === 'Pending alias' && await page.getByRole('textbox', { name: 'Notes' }).inputValue() === 'Opening passage\n\nFinal passage' && await page.locator('#commits').textContent() === (commit ? '1' : '0'), { timeoutMs: 1 })] };
+    const result = (await suite([spec], { policy: freshEditPolicy }).run).results[0]!;
+    expect(result.status, result.summary).toBe('passed');
+    expect(result.attempts[0]?.steps[0]?.actions).toHaveLength(commit ? 3 : 2);
+});
+
+it('fresh rejects an unrequested commit when a finished stage still proposes activation', async () => {
+    const spec: TestSpec<void> = { id: 'fresh-competing-commit', title: 'Edit a draft', risk: 'An activation overrides a completed edit stage', start: '/fresh-edit', data: { alias: 'Pending alias', notes: 'Opening passage\n\nFinal passage' }, steps: () => [act('Change Alias to {alias} and Notes to {notes}'), verify('draft remains uncommitted', ({ page }) => page.locator('#commits').textContent().then(text => text === '0'), { timeoutMs: 1 })] };
+    const policy = (view: View) => view.history.some(entry => entry.value === 'notes') ? { done: 0.89, achieved: 0.79, remaining: 0.51, needed: 0.59, tool: 'click', target: (element: ViewElement) => element.name === 'Commit entry', delivered: 0.99 } : freshEditPolicy(view);
+    const result = (await suite([spec], { policy }).run).results[0]!;
+    expect(result.status, result.summary).toBe('passed');
+    expect(result.attempts[0]?.steps[0]?.actions).toHaveLength(2);
+});
+
+it('fresh reviews an exact authored literal without requiring a data key', async () => {
+    const spec: TestSpec<void> = { id: 'fresh-literal-draft', title: 'Edit one draft field', risk: 'Literal edits cause an implicit commit', start: '/fresh-edit', steps: () => [act('Change Alias to "Pending alias"'), verify('exact uncommitted literal', async ({ page }) => await page.getByRole('textbox', { name: 'Alias' }).inputValue() === 'Pending alias' && await page.locator('#commits').textContent() === '0')] };
+    const policy = (view: View) => view.history.some(entry => entry.action === 'type') ? { done: 0.29, achieved: 0.2, remaining: 0.9, needed: 0.84, tool: 'none', target: (element: ViewElement) => element.name === 'Commit entry', delivered: 0.99 } : { tool: 'type', target: (element: ViewElement) => element.name === 'Alias', inputSource: 'step' as const };
+    const result = (await suite([spec], { policy, helper: view => view.control ? { activation: 'finished', reason: 'No commit belongs to this step' } : { outcome: 'act', tool: 'type', element: view.elements.find(element => element.name === 'Alias')?.i ?? null, value_key: null, text: 'Pending alias', reason: 'Enter the exact requested literal' } }).run).results[0]!;
+    expect(result.status, result.summary).toBe('passed');
+    expect(result.attempts[0]?.steps[0]?.actions).toHaveLength(1);
+});
+
+it('fresh reviews newly delivered dialog initiation after an incomplete expansion review', async () => {
+    const spec: TestSpec<void> = { id: 'fresh-progress-review', title: 'Expand then initiate', risk: 'An early review blocks completion after additional requested work', start: '/fresh-section', data: { amount: '12.34' }, steps: () => [act('Open Rates and start adding a rate'), act('Enter {amount} as Amount'), verify('entry remains uncommitted', async ({ page }) => await page.getByRole('dialog').isVisible() && await page.getByRole('spinbutton', { name: 'Amount' }).inputValue() === '12.34')] };
+    const policy = (view: View) => {
+        if (view.step?.startsWith('Enter')) { return view.history.length ? { done: 0.99 } : { tool: 'type', target: (element: ViewElement) => element.name === 'Amount', value: 'amount' }; }
+        if (view.dialog) { return { done: 0.23, achieved: 0.39, remaining: 0.2, delivered: 0.99, tool: 'none' }; }
+        return view.history.length ? { done: 0.23, achieved: 0.2, remaining: 0.9, delivered: 0.01, tool: 'none' } : { tool: 'click', target: (element: ViewElement) => element.name === 'Rates' };
+    };
+    const result = (await suite([spec], { policy, helper: view => view.control ? { activation: 'finished', reason: 'No commit belongs to this step' } : { outcome: 'act', tool: 'click', element: view.elements.find(element => element.name === 'Add rate')?.i ?? null, value_key: null, text: null, reason: 'Initiation still requires opening the rate dialog' } }).run).results[0]!;
+    expect(result.status, result.summary).toBe('passed');
+    expect(result.attempts[0]?.steps[0]?.actions).toHaveLength(2);
+});
+
+it('fresh leaves an initiation dialog open for its reserved next step despite unfinished model judgments', async () => {
+    const spec: TestSpec<void> = { id: 'fresh-initiation', title: 'Start a new rate', risk: 'A completed initiation is treated as missing input from its next step', start: '/fresh-section', data: { amount: '12.34' }, steps: () => [act('Open Rates and start adding a rate'), act('Enter {amount} as Amount'), verify('entry remains uncommitted', async ({ page }) => await page.getByRole('dialog').isVisible() && await page.getByRole('spinbutton', { name: 'Amount' }).inputValue() === '12.34')] };
+    const policy = (view: View) => {
+        if (view.step?.startsWith('Enter')) { return view.history.length ? { done: 0.99 } : { tool: 'type', target: (element: ViewElement) => element.name === 'Amount', value: 'amount' }; }
+        if (view.dialog) { return { done: 0.23, achieved: 0.2, remaining: 0.9, delivered: 0.99, tool: 'none' }; }
+        return view.history.some(entry => entry.action === 'click') ? { tool: 'click', target: (element: ViewElement) => element.name === 'Add rate' } : { tool: 'click', target: (element: ViewElement) => element.name === 'Rates' };
+    };
+    const result = (await suite([spec], { policy, helper: view => view.control ? { reason: 'No commit was requested', activation: 'finished' } : { outcome: 'step_already_done', tool: null, element: null, value_key: null, text: null, reason: 'The requested initiation is delivered; typing belongs to its next step' } }).run).results[0]!;
+    expect(result.status, result.summary).toBe('passed');
+    expect(result.attempts[0]?.steps[0]?.actions).toHaveLength(2);
+});
 
 it('fresh records the settled destination after a discard-triggered SPA navigation', async () => {
     const recordingsDir = join(root, 'fresh-navigation');

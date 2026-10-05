@@ -54,6 +54,7 @@ export interface ViewElement {
 /** What a scripted Jev "believes" about the current state; unset answers default to unlikely. */
 export interface Belief {
     done?: number;
+    delivered?: number;
     complete?: number;
     achieved?: number;
     remaining?: number;
@@ -122,9 +123,12 @@ export function scriptedModels(policy: (view: View) => Belief, helper?: (view: V
             const text = JSON.stringify(prompt);
             const payload = JSON.parse(extractJson(text)) as Record<string, unknown>;
             const view = toView({ task: { step: payload.step, values: payload.values, history: payload.history, next_step: payload.next_step }, page: payload.page, claim: payload.claim, prior_actions: payload.prior_actions, control: payload.control, control_activations: payload.control_activations });
-            const output = helper?.(view, String(payload.why_you_are_asked ?? '')) ?? (payload.control ? { reason: 'The fixture policy requested no pending activation of this control', activation: 'finished' } : { outcome: 'impossible', tool: null, element: null, value_key: null, text: null, reason: 'scripted helper has no answer' });
+            const proofs = payload.delivery_proofs as Record<string, unknown> | undefined;
+            const output = proofs && (policy(view).delivered ?? 0) >= 0.5
+                ? { reason: 'The current step requests only the code-observed delivery', completion_proof: Object.keys(proofs)[0], outcome: 'step_already_done', tool: null, element: null, value_key: null, text: null }
+                : helper?.(view, String(payload.why_you_are_asked ?? '')) ?? (payload.control ? { reason: 'The fixture policy requested no pending activation of this control', activation: 'finished' } : { outcome: 'impossible', tool: null, element: null, value_key: null, text: null, reason: 'scripted helper has no answer' });
             return {
-                content: [{ type: 'text', text: JSON.stringify(output) }],
+                content: [{ type: 'text', text: JSON.stringify(proofs ? { completion_proof: null, ...output } : output) }],
                 finishReason: { unified: 'stop', raw: 'stop' },
                 usage: { inputTokens: { total: 500, noCache: 500, cacheRead: 0, cacheWrite: 0 }, outputTokens: { total: 40, text: 40, reasoning: 0 } },
                 warnings: [],
@@ -138,7 +142,7 @@ export function scriptedModels(policy: (view: View) => Belief, helper?: (view: V
 
 function answer(id: string, question: EvaluationQuestion, belief: Belief, view: View): Answer {
     if (question.type === 'boolean') {
-        const value = ({ done: belief.done, done_change: belief.done, complete: belief.complete ?? belief.done, remaining: belief.remaining ?? (belief.done === undefined ? 0 : 1 - belief.done), error: belief.error, anomaly: belief.anomaly, holds: belief.holds, scroll_search: belief.scrollText ? 0.99 : 0.01 } as Record<string, number | undefined>)[id];
+        const value = ({ done: belief.done, done_change: belief.done, delivered: belief.delivered, complete: belief.complete ?? belief.done, remaining: belief.remaining ?? (belief.done === undefined ? 0 : 1 - belief.done), error: belief.error, anomaly: belief.anomaly, holds: belief.holds, scroll_search: belief.scrollText ? 0.99 : 0.01 } as Record<string, number | undefined>)[id];
         return { type: 'boolean', probability: value ?? 0.03 };
     }
     if (question.type === 'score') { return { type: 'score', score: 0 }; }
