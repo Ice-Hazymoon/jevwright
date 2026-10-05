@@ -138,7 +138,7 @@ export function checkEvidenceOptions(observation: Observation, claim: string): C
             ? [{ regionVersion: 1 as const, source: 'text' as const, text, region: evidenceRegion(observation, undefined, 1), match: 'contains' as const }] : [];
     });
     const combined = [...quotes, ...relevant.filter(entry => entry.source === 'element' && entry.value === undefined)];
-    const contextual = contextualTextEvidence(observation, claim, relevant);
+    const contextual = contextualTextEvidence(observation, claim, relevant, literals);
     const options = [
         ...(fields.length > 1 && fields.length <= 6 ? [fields] : []),
         ...(combined.length > 1 && combined.length <= 8 ? [combined] : []),
@@ -152,21 +152,25 @@ export function checkEvidenceOptions(observation: Observation, claim: string): C
 }
 
 /** Local labels retain their surrounding object, without recording changing text elsewhere on the page. */
-function contextualTextEvidence(observation: Observation, claim: string, represented: CheckEvidence[]): CheckEvidence[] {
+function contextualTextEvidence(observation: Observation, claim: string, represented: CheckEvidence[], quoted: string[]): CheckEvidence[] {
     const unquoted = claim.replace(/"(?:\\.|[^"\\])*"|“[^”]*”/g, '');
-    const labels = [...new Set([...unquoted.matchAll(/\b\p{Lu}[\p{L}\p{N}_-]{2,}\b/gu)].map(match => match[0]))]
-        .filter(label => !represented.some(entry => [entry.text, entry.value, entry.target?.ariaName].includes(label)));
+    const labels = [...new Set([...quoted, ...[...unquoted.matchAll(/\b\p{Lu}[\p{L}\p{N}_-]{2,}\b/gu)].map(match => match[0])])]
+        .filter(label => label.length >= 3 && label.length <= 256)
+        .filter(label => !represented.some(entry => quoted.includes(label) ? entry.value === label : [entry.text, entry.value, entry.target?.ariaName].includes(label)));
     const snippets = new Set<string>();
     for (const label of labels) {
         let offset = observation.text.indexOf(label);
         for (let occurrence = 0; offset >= 0 && occurrence < 4; occurrence++, offset = observation.text.indexOf(label, offset + label.length)) {
-            let start = Math.max(0, offset - 80);
-            let end = Math.min(observation.text.length, offset + label.length + 80);
-            while (start > 0 && !/\s/.test(observation.text[start - 1]!)) { start--; }
-            while (end < observation.text.length && !/\s/.test(observation.text[end]!)) { end++; }
-            const text = observation.text.slice(start, end).trim();
-            if (text.length <= 256 && stable(text) === text && observation.text.indexOf(text) === observation.text.lastIndexOf(text)
-                && !observation.transientTexts?.some(transient => text.includes(transient) || transient.includes(text))) { snippets.add(text); }
+            // Smaller windows avoid unrelated volatile details; selection must still prove every clause.
+            for (const radius of [24, 48, 80]) {
+                let start = Math.max(0, offset - radius);
+                let end = Math.min(observation.text.length, offset + label.length + radius);
+                while (start > 0 && !/\s/.test(observation.text[start - 1]!)) { start--; }
+                while (end < observation.text.length && !/\s/.test(observation.text[end]!)) { end++; }
+                const text = observation.text.slice(start, end).trim();
+                if (text.length <= 256 && !text.includes('…') && stable(text) === text && observation.text.indexOf(text) === observation.text.lastIndexOf(text)
+                    && !observation.transientTexts?.some(transient => text.includes(transient) || transient.includes(text))) { snippets.add(text); }
+            }
         }
     }
     return [...snippets].slice(0, 8).map(text => ({ regionVersion: 1, source: 'text', text, region: evidenceRegion(observation, undefined, 1), match: 'contains' }));
@@ -184,7 +188,7 @@ export function replayableCheckEvidence(evidence: CheckEvidence[]): boolean {
         && (entry.source !== 'element' || entry.target?.name === entry.text)
         && (entry.source !== 'element' || stable(entry.text) === entry.text)
         && !JSON.stringify(entry).includes('{secret}')
-        && [entry.text, entry.value, entry.content, entry.target?.context, entry.target?.near].every(text => !text?.endsWith('…')));
+        && [entry.text, entry.value, entry.content, entry.target?.context, entry.target?.near].every(text => !text?.includes('…')));
 }
 
 function evidenceRegion(observation: Observation, element?: { context?: string; near?: string }, version?: 1): string {

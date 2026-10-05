@@ -198,6 +198,40 @@ describe('integrity regression paths', () => {
         await writeFile(path, JSON.stringify(recording));
         expect((await suite([spec], { recordingsDir, mode: 'replay' }).run).results[0]?.status).toBe('unverified');
     });
+    it('reports stored local proof with a clipped identifier as unverified', async () => {
+        const recordingsDir = join(root, 'local-clipped-evidence');
+        const spec = { ...base, id: 'local-clipped-check', start: '/contextual-proof?bug=clipped-id', ready: async ({ page }: { page: import('playwright').Page }) => { await page.evaluate(() => history.replaceState({}, '', '/contextual-proof')); }, steps: () => [check('The page shows "Amber parcel"')] };
+        expect((await suite([spec], { recordingsDir, policy: () => ({ holds: 0.99, support: 'supports', region: 'open' }) }).run).totals.passed).toBe(1);
+        const path = join(recordingsDir, spec.id + '.json');
+        const recording = JSON.parse(await readFile(path, 'utf8'));
+        recording.steps[0].checkEvidence = [{ regionVersion: 1, source: 'text', text: 'Reference …X7K9', region: 'page /contextual-proof', match: 'contains' }];
+        await writeFile(path, JSON.stringify(recording));
+        expect((await suite([spec], { recordingsDir, mode: 'replay' }).run).results[0]?.status).toBe('unverified');
+    });
+    it.each([true, false])('keeps only independently selected proof after positive adjudication: %s', async selected => {
+        const recordingsDir = join(root, 'adjudicated-proof-' + selected);
+        const spec = { ...base, id: 'adjudicated-proof-' + selected, steps: () => [check('The Draft field shows "Original"')] };
+        const execution = suite([spec], { recordingsDir, policy: () => ({ holds: 0.52, support: 'supports', pSupport: 0.75, region: 'open', proof: selected }), helper: view => {
+            expect(view.elements.find(element => element.name === 'Draft')?.value).toBe('Original');
+            return { verdict: 'true', region: 'open', reason: 'The Draft field visibly contains Original' };
+        } });
+        expect((await execution.run).totals.passed).toBe(1);
+        const recording = JSON.parse(await readFile(join(recordingsDir, spec.id + '.json'), 'utf8'));
+        expect(Boolean(recording.steps[0].checkEvidence?.length)).toBe(selected);
+        expect((await suite([spec], { recordingsDir, mode: 'replay' }).run).results[0]?.status).toBe(selected ? 'passed' : 'unverified');
+        if (selected) {
+            const drift = { ...spec, ready: async ({ page }: { page: import('playwright').Page }) => { await spec.ready({ page }); await page.getByLabel('Draft').fill('Wrong'); } };
+            expect((await suite([drift], { recordingsDir, mode: 'replay' }).run).results[0]?.status).toBe('failed');
+        }
+    });
+    it('does not promote proof from an initially negative judgment after adjudication', async () => {
+        const recordingsDir = join(root, 'negative-adjudicated-proof');
+        const spec = { ...base, id: 'negative-adjudicated-proof', steps: () => [check('The Draft field shows "Original"')] };
+        expect((await suite([spec], { recordingsDir, policy: () => ({ holds: 0.45, support: 'supports', region: 'open', proof: true }), helper: () => ({ verdict: 'true', region: 'open', reason: 'The field contains Original' }) }).run).totals.passed).toBe(1);
+        const recording = JSON.parse(await readFile(join(recordingsDir, spec.id + '.json'), 'utf8'));
+        expect(recording.steps[0].checkEvidence).toBeUndefined();
+        expect((await suite([spec], { recordingsDir, mode: 'replay' }).run).results[0]?.status).toBe('unverified');
+    });
     it('uses each occurrence of an identical instruction for its own control', async () => {
         const recordingsDir = join(root, 'integrity-occurrences');
         const spec = { ...base, id: 'integrity-repeated', steps: () => [act('Activate current control'), act('Activate current control')] };

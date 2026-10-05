@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Retain independently selected proof after a positive-leaning check receives positive adjudication, only while the proof still matches that observation.
+- Reject clipped text anywhere in replay proof, including shortened identifiers; offer nearby relationship text around quoted subjects.
 - Share check scope once while retaining all verdict questions; match whole control labels and offer bounded contextual proof for unquoted visible labels.
 - Keep CLI replay read-only and preserve complete verified recordings after a failed auto attempt.
 - Preserve rendered paragraphs in labeled read-only controls and match disabled-control metadata by identity.

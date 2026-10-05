@@ -1043,6 +1043,45 @@ describe('integrity regressions', () => {
             expect(proof.some(entry => entry.target?.name === 'Publish')).toBe(false);
         });
     });
+    it('binds quoted subjects to their nearby visible relationship', async () => {
+        await open('/contextual-proof', async page => {
+            const { checkEvidenceOptions, checkEvidenceMatches } = await import('../src/judge.ts');
+            const shown = await observe(page);
+            const proof = checkEvidenceOptions(shown, 'The delivery overview lists "Amber parcel" with "Inspector" as its owner').find(option => option.some(entry => entry.source === 'text' && entry.text.includes('Amber parcel') && entry.text.includes('Owner: Inspector')));
+            expect(proof).toBeDefined();
+            expect(checkEvidenceMatches(proof!, shown)).toBe(true);
+            await page.goto(app.origin + '/contextual-proof?bug=owner-moved');
+            await page.evaluate(() => history.replaceState({}, '', '/contextual-proof'));
+            expect(checkEvidenceMatches(proof!, await observe(page))).toBe(false);
+        });
+    });
+    it('omits local text proof containing a clipped identifier', async () => {
+        await open('/contextual-proof?bug=clipped-id', async page => {
+            const { checkEvidenceOptions } = await import('../src/judge.ts');
+            const proof = checkEvidenceOptions(await observe(page), 'The Amber parcel shows a Ready status').flat();
+            expect(proof.some(entry => entry.source === 'text' && entry.text.includes('…'))).toBe(false);
+        });
+    });
+    it('keeps quoted relationship proof independent of a neighboring timestamp', async () => {
+        await open('/contextual-proof?bug=nearby-time', async page => {
+            const { checkEvidenceOptions, checkEvidenceMatches } = await import('../src/judge.ts');
+            const shown = await observe(page);
+            const proof = checkEvidenceOptions(shown, 'The delivery overview lists "Amber parcel" with "Inspector" as its owner').find(option => option.some(entry => entry.source === 'text' && entry.text.includes('Amber parcel') && entry.text.includes('Owner: Inspector')));
+            expect(proof).toBeDefined();
+            expect(checkEvidenceMatches(proof!, shown)).toBe(true);
+            await page.locator('[data-time]').evaluate(element => { element.textContent = 'Reviewed 2028-08-05 10:41'; });
+            expect(checkEvidenceMatches(proof!, await observe(page))).toBe(true);
+        });
+    });
+    it('keeps stored clipped text proof unverified even when its suffix is still present', async () => {
+        await open('/contextual-proof?bug=clipped-id', async page => {
+            const { checkEvidenceMatches } = await import('../src/judge.ts');
+            const shown = await observe(page);
+            await page.evaluate(() => history.replaceState({}, '', '/contextual-proof'));
+            expect(shown.text).toContain('Reference …X7K9');
+            expect(checkEvidenceMatches([{ regionVersion: 1, source: 'text', text: 'Reference …X7K9', region: 'page /contextual-proof', match: 'contains' }], await observe(page))).toBe(false);
+        });
+    });
     it('keeps all verdicts and field facts within a bounded check instruction payload', async () => {
         await open('/integrity', async page => {
             const { judgeClaim } = await import('../src/judge.ts');

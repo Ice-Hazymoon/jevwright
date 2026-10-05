@@ -220,8 +220,10 @@ missing anchors. Confirm the cause with an auto run; a mismatch alone does not e
 - `check` waits up to 15 additional seconds per observation for visible loading to finish; persistent loading is a timeout. `check` requires the asserted content to be visible. A count or saved-button state cannot prove what another tab contains.
 - Failed checks receive a second look. Visible contradictions, or missing expected content in an open visible region, are `product`; a collapsed or unopened region is `agent`. Uncertain region evidence receives adjudication.
 - Compound factual checks can record several fields or exact page quotes. Replay rechecks every selected piece in its recorded region. Missing direct evidence and recognized absence or negative clauses remain `unverified`.
-- Unquoted visible labels can use a unique local text excerpt that retains surrounding context. Replay requires the whole excerpt; changing dates, generated ids and live content cannot supply this proof.
+- A positive adjudication can retain proof from a check that already leaned positive. The proof must match its observation; adjudication creates no proof.
+- Quoted subjects and unquoted visible labels can use a unique local text excerpt that retains surrounding context. Replay requires the whole excerpt; changing dates, generated ids, clipped text and live content cannot supply this proof.
 - Check proof excludes element names containing generated ids or dates. Labeled read-only cards retain rendered paragraph boundaries when their visible text agrees.
+- Proof containing Unicode `…` remains `unverified`, including a literal ellipsis. Use `verify` to assert that exact text.
 - `check` is a model judgment in auto/AI mode. Replay verifies recorded direct evidence; checks without it remain `unverified`. Exact values (money, multilingual text, line breaks) and negative claims belong in `verify`.
 - New recordings bind app routes to the run’s `baseURL`, so changing the host or port alone does not invalidate the route check. Path, sorted query and recorded effects must still match. Routes to other origins remain literal. Unmarked legacy routes retain path-only checks.
 - Chromium only.

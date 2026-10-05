@@ -582,8 +582,10 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
                 if (verdict.uncertain) {
                     observed = await observeReady();
                     const tie = await adjudicateClaim(models, observed, claim, reference, signal, priorActions);
-                    attempts.push({ adjudicated: tie });
-                    verdict = { ...verdict, evidence: undefined, passed: tie.passed, support: tie.support, note: tie.reason, ...(tie.region ? { region: tie.region, pRegion: 1 } : {}) };
+                    // Adjudication confirms truth; retain only selected positive proof that still matches its observation.
+                    const evidence = verdict.passed && tie.passed && verdict.evidence && checkEvidenceMatches(verdict.evidence, observed) ? verdict.evidence : undefined;
+                    attempts.push({ adjudicated: tie, ...(evidence ? { evidence } : {}) });
+                    verdict = { ...verdict, evidence, passed: tie.passed, support: tie.support, note: tie.reason, ...(tie.region ? { region: tie.region, pRegion: 1 } : {}) };
                 }
                 // Exactly what the claim was judged against, so a verdict can be audited without re-running.
                 result.observation = `step-${String(index + 1).padStart(2, '0')}-observation.json`;

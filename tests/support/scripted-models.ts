@@ -81,6 +81,8 @@ export interface Belief {
     support?: 'supports' | 'contradicts' | 'not_shown';
     region?: 'open' | 'closed' | 'unknown';
     pSupport?: number;
+    /** Evidence selection can be confident while the truth judgment still needs adjudication. */
+    proof?: boolean;
     /** Whether the step's actions operated on what the step names (post-failure audit); defaults to yes. */
     onTarget?: number;
 }
@@ -195,7 +197,7 @@ function answer(id: string, question: EvaluationQuestion, belief: Belief, view: 
         };
         const fields = (option: string) => quoted(option).filter(entry => entry.source === 'element' && entry.value !== undefined && view.claim?.includes(entry.text ?? '') && view.claim?.includes(entry.value));
         const field = options.toSorted((a, b) => fields(b).length - fields(a).length).find(option => fields(option).length);
-        chosen = belief.support === 'supports' && (belief.holds ?? 0) >= 0.7 ? field ?? options.find(option => quoted(option).some(entry => entry.source === 'text')) ?? 'none' : 'none';
+        chosen = (belief.proof ?? (belief.support === 'supports' && (belief.holds ?? 0) >= 0.7)) ? field ?? options.find(option => quoted(option).some(entry => entry.source === 'text')) ?? 'none' : 'none';
     }
     if (id === 'region') { chosen = belief.region ?? 'unknown'; }
     return distribution(options, chosen && options.includes(chosen) ? chosen : undefined, id === 'support' ? belief.pSupport : id === 'target' ? belief.pTarget : undefined);

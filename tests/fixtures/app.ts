@@ -97,7 +97,7 @@ document.getElementById('tab').onclick = () => { document.getElementById('browse
         case '/volatile-proof-row':
             return layout('Deliveries', '<div role="button">REF-8AZ34JXY Amber package 2027-08-04</div>');
         case '/contextual-proof':
-            return layout('Delivery overview', '<article><h2>Amber parcel</h2><p>Status: ' + (bug === 'moved' ? 'Waiting' : 'Ready') + '</p><p>Owner: Inspector</p></article><article><h2>Sage parcel</h2><p>Status: ' + (bug === 'moved' ? 'Ready' : 'Waiting') + '</p><p>Owner: Editor</p></article><p>' + 'Unrelated information '.repeat(100) + '</p><p>Checked 2027-08-04 09:32</p>');
+            return layout('Delivery overview', '<article><h2>Amber parcel</h2>' + (bug === 'clipped-id' ? '<p>Reference …X7K9</p>' : '') + '<p>Status: ' + (bug === 'moved' ? 'Waiting' : 'Ready') + '</p><p>Owner: ' + (bug === 'owner-moved' ? 'Editor' : 'Inspector') + '</p></article>' + (bug === 'nearby-time' ? '<p data-time>Reviewed 2027-08-04 09:32</p>' : '') + '<article><h2>Sage parcel</h2><p>Status: ' + (bug === 'moved' ? 'Ready' : 'Waiting') + '</p><p>Owner: ' + (bug === 'owner-moved' ? 'Inspector' : 'Editor') + '</p></article><p>' + 'Unrelated information '.repeat(100) + '</p><p>Checked 2027-08-04 09:32</p>');
         case '/proof-label-overlap':
             return layout('Publishing workspace', '<button>Publish</button><button>Unpublish</button>');
         case '/compatibility-editor':
