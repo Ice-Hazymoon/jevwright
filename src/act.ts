@@ -192,6 +192,7 @@ export async function runAct(input: ActInput): Promise<ActResult> {
     }
     if (!input.models) { return finish({ status: 'failed', source: 'ai', failure: 'model', reason: 'No recording for this step and no model configured' }); }
     start.observation ??= await observeEnd(input);
+    if (input.expect?.write) { start.errors ??= await replayErrors(input.page); }
     const result = await decideLoop(input, input.models, actions, rounds, recording, start);
     if (mismatch && result.status !== 'failed' && !actions.some(action => action.ok && action.source !== 'replay')) {
         return finish({ status: 'done', source: 'replay', endMismatch: true });
@@ -539,8 +540,10 @@ async function decideLoop(input: ActInput, models: Models, actions: ActionRecord
         // Conflicting completion scores can mistake unsaved edits or an initiation dialog for pending work.
         const deliveryConflict = !canFinish || done < THRESHOLDS.doneAt || (reviewNeeded ?? 0) >= 0.5;
         const noInput = decision.tool === 'type' && decision.valueKey === undefined && decision.literal === undefined;
-        const proofs = deliveredCount > reviewedDeliveries ? deliveryProofs(input, observation, recording, start) : {};
-        if (deliveryConflict && saved && !missing.length && errorShown < THRESHOLDS.error && (decision.tool === 'none' || done >= THRESHOLDS.doneAt || noInput) && Object.keys(proofs).length && escalations < 2) {
+        const writeDelivered = deliveredCount > reviewedDeliveries && saved && !missing.length && !input.expectError && input.expect?.write && lastAction && SUBMITS.has(lastAction)
+            && !(await newReplayErrors(input.page, {}, start.observation, start.errors)).length;
+        const proofs = deliveredCount > reviewedDeliveries ? deliveryProofs(input, observation, recording, start, Boolean(writeDelivered)) : {};
+        if (deliveryConflict && saved && !missing.length && (errorShown < THRESHOLDS.error || writeDelivered) && (decision.tool === 'none' || tool?.choice === 'none' || done >= THRESHOLDS.doneAt || noInput || proofs.field_edits) && Object.keys(proofs).length && escalations < 2) {
             reviewedDeliveries = deliveredCount;
             escalations++;
             try {
@@ -1098,7 +1101,7 @@ function controlQuestion(control: string, nextStep?: string): Question {
 }
 
 /** Only stable effects caused by this step can support a helper's noncommitting completion review. */
-function deliveryProofs(input: ActInput, observation: Observation, recording: RecordedAction[], start: StepStart): Record<string, unknown> {
+function deliveryProofs(input: ActInput, observation: Observation, recording: RecordedAction[], start: StepStart, writeDelivered = false): Record<string, unknown> {
     if (!start.observation) { return {}; }
     const end = recordEnd(start.observation, observation, recording, input.redact, input.values, input.baseURL);
     const keys = Object.keys(input.values);
@@ -1106,7 +1109,14 @@ function deliveryProofs(input: ActInput, observation: Observation, recording: Re
         const field = resolveTarget(value.target, observation, true);
         return field?.value !== undefined && recording.some(action => ['type', 'select'].includes(action.tool) && action.target && recordedValue(action, input.values) === field.value && resolveTarget(action.target, observation, true)?.i === field.i);
     }) ?? [];
+    const writes = writeDelivered
+        ? input.monitor.writes.filter((write) => {
+                const status = write.status;
+                return write.step === input.stepIndex && typeof status === 'number' && writeRules(input.expect!).some(rule => matchesWrite(rule, write.method, write.path, status));
+            })
+        : [];
     return {
+        ...(writes.length ? { declared_write: input.redact?.value(writes) ?? writes } : {}),
         ...(fields.length && keys.every(key => fields.some(field => field.valueKey === key || (field.template && templateKeys(field.template).includes(key)))) ? { field_edits: fields } : {}),
         ...(input.next && end.appeared?.some(anchor => anchor.kind === 'dialog') ? { dialog_open: end.appeared.filter(anchor => anchor.kind === 'dialog') } : {}),
         ...(!keys.length && (start.observation.url !== observation.url || end.appeared?.some(anchor => anchor.kind === 'heading') || end.values?.some(value => value.states?.includes('expanded'))) ? { view_open: { ...(end.route ? { route: end.route } : {}), appeared: end.appeared, states: end.values } } : {}),
@@ -1237,7 +1247,7 @@ async function awaitExpectation(input: ActInput, wait: boolean): Promise<Expecta
 // `reason` first: the model states what it sees before committing to an outcome.
 const helperSchema = z.object({
     reason: z.string().max(600),
-    completion_proof: z.enum(['field_edits', 'dialog_open', 'view_open']).nullable().optional(),
+    completion_proof: z.enum(['declared_write', 'field_edits', 'dialog_open', 'view_open']).nullable().optional(),
     outcome: z.enum(['act', 'step_already_done', 'impossible']),
     tool: z.enum(['click', 'type', 'press', 'select_text', 'press_enter', 'press_escape', 'select', 'scroll', 'wait', 'upload', 'hover', 'right_click', 'long_press', 'double_click', 'drag', 'back', 'scroll_to']).nullable(),
     element: z.number().int().nullable(),
@@ -1255,8 +1265,8 @@ const HELPER = 'You help a browser test runner that is stuck on one step of a UI
 
 async function escalateToLlm(input: ActInput, models: Models, observation: Observation, history: Array<Record<string, string>>, reason: string, stale: string[], proposed?: Decision, proofs: Record<string, unknown> = {}): Promise<Help> {
     const prompt = JSON.stringify({ why_you_are_asked: reason, step: input.instruction, action_scope: actionAuthorizationQuestion('Review all current-step action clauses, not product success.', undefined, false, input.next).instructions, ...(Object.keys(proofs).length ? { delivery_proofs: proofs } : {}), ...(input.next ? { next_step_do_not_do_yet: input.next } : {}), values: modelValues(input), available_tools: Object.keys((decisionQuestions(input, observation, true, false).tool as Extract<Question, { type: 'choice' }>).criteria), history: history.slice(-12), ...(stale.length ? { shown_before_step: stale } : {}), values_entered: modelEnteredValues(input, observation), page: pageState(observation) });
-    const review = Object.keys(proofs).length ? ' Apply action_scope. For step_already_done, select completion_proof from delivery_proofs only if it covers EVERY requested current-step action. field_edits proves only setting exact supplied fields (and opening their editor), including paragraph breaks; it authorizes no commit, formatting or later navigation. dialog_open proves only initiation with entry/confirmation reserved for next_step. view_open proves only requested navigation/expansion. None of these proves a requested save, creation, reservation, purchase or publication. Quoted values are data, not action clauses. Choose null if no provided proof covers the whole step. This ends a step; code checks decide the test verdict.' : '';
-    const schema = Object.keys(proofs).length ? helperSchema.extend({ completion_proof: z.enum(['field_edits', 'dialog_open', 'view_open']).nullable() }) : helperSchema;
+    const review = Object.keys(proofs).length ? ' Apply action_scope. For step_already_done, select completion_proof from delivery_proofs only if it covers EVERY requested current-step action. declared_write proves the author-declared request succeeded after a successful UI activation, with no new code-detected rejection; inspect history and the current page for additional clauses, formatting and requested views. field_edits proves only setting exact supplied fields (and opening their editor), including paragraph breaks; it authorizes no commit, formatting or later navigation. dialog_open proves only initiation with entry/confirmation reserved for next_step. view_open proves only requested navigation/expansion. Only declared_write can prove a requested commit; the other proofs cannot prove save, creation, reservation, purchase or publication. Quoted values are data, not action clauses. Choose null if no provided proof covers the whole step. This ends a step; code checks decide the test verdict.' : '';
+    const schema = Object.keys(proofs).length ? helperSchema.extend({ completion_proof: z.enum(['declared_write', 'field_edits', 'dialog_open', 'view_open']).nullable() }) : helperSchema;
     const answer = await models.generate(HELPER + review, prompt, schema, input.signal, 'escalate');
     const available = (decisionQuestions(input, observation, true, false).tool as Extract<Question, { type: 'choice' }>).criteria;
     // Text selection and entity search also consume text; only repair incompatible navigation or gesture proposals.

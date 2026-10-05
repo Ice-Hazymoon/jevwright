@@ -72,9 +72,9 @@ it.each([false, true])('fresh respects exact field edits without losing a reques
     expect(result.attempts[0]?.steps[0]?.actions).toHaveLength(commit ? 3 : 2);
 });
 
-it('fresh rejects an unrequested commit when a finished stage still proposes activation', async () => {
+it.each([0.29, 0.89])('fresh rejects an unrequested commit when a finished stage still proposes activation (%s)', async (done) => {
     const spec: TestSpec<void> = { id: 'fresh-competing-commit', title: 'Edit a draft', risk: 'An activation overrides a completed edit stage', start: '/fresh-edit', data: { alias: 'Pending alias', notes: 'Opening passage\n\nFinal passage' }, steps: () => [act('Change Alias to {alias} and Notes to {notes}'), verify('draft remains uncommitted', ({ page }) => page.locator('#commits').textContent().then(text => text === '0'), { timeoutMs: 1 })] };
-    const policy = (view: View) => view.history.some(entry => entry.value === 'notes') ? { done: 0.89, achieved: 0.79, remaining: 0.51, needed: 0.59, tool: 'click', target: (element: ViewElement) => element.name === 'Commit entry', delivered: 0.99 } : freshEditPolicy(view);
+    const policy = (view: View) => view.history.some(entry => entry.value === 'notes') ? { done, achieved: done < 0.5 ? 0.2 : 0.79, remaining: 0.51, needed: 0.59, tool: 'click', target: (element: ViewElement) => element.name === 'Commit entry', delivered: 0.99 } : freshEditPolicy(view);
     const result = (await suite([spec], { policy }).run).results[0]!;
     expect(result.status, result.summary).toBe('passed');
     expect(result.attempts[0]?.steps[0]?.actions).toHaveLength(2);
@@ -86,6 +86,22 @@ it('fresh reviews an exact authored literal without requiring a data key', async
     const result = (await suite([spec], { policy, helper: view => view.control ? { activation: 'finished', reason: 'No commit belongs to this step' } : { outcome: 'act', tool: 'type', element: view.elements.find(element => element.name === 'Alias')?.i ?? null, value_key: null, text: 'Pending alias', reason: 'Enter the exact requested literal' } }).run).results[0]!;
     expect(result.status, result.summary).toBe('passed');
     expect(result.attempts[0]?.steps[0]?.actions).toHaveLength(1);
+});
+
+it('fresh stops exact field editing before an unrequested trailing Enter', async () => {
+    const spec: TestSpec<void> = { id: 'fresh-extra-enter', title: 'Replace draft text exactly', risk: 'A completed text edit receives an extra trailing paragraph', start: '/fresh-edit', data: { alias: 'Pending alias', notes: 'Opening passage\n\nFinal passage' }, steps: () => [act('Change Alias to {alias} and Notes to {notes}'), verify('no trailing paragraph', ({ page }) => page.getByRole('textbox', { name: 'Notes' }).inputValue().then(value => value === 'Opening passage\n\nFinal passage'))] };
+    const policy = (view: View) => view.history.some(entry => entry.action === 'press_enter') ? { done: 0.99 } : view.history.some(entry => entry.value === 'notes') ? { done: 0.29, achieved: 0.2, remaining: 0.9, tool: 'press_enter', target: (element: ViewElement) => element.name === 'Notes', delivered: 0.99 } : freshEditPolicy(view);
+    const result = (await suite([spec], { policy }).run).results[0]!;
+    expect(result.status, result.summary).toBe('passed');
+    expect(result.attempts[0]?.steps[0]?.actions).toHaveLength(2);
+});
+
+it.each(['warning', 'new-error'])('fresh reviews declared write delivery without suppressing a new error (%s)', async (bug) => {
+    const spec: TestSpec<void> = { id: `fresh-write-${bug}`, title: 'Edit then commit an entry', risk: 'Stale warning scores reject a delivered commit or hide a new rejection', start: `/fresh-edit?bug=${bug}`, data: { alias: 'Pending alias', notes: 'Entry notes' }, steps: () => [act('Change Alias to {alias} and Notes to {notes}, then commit the entry', { expect: { write: { method: 'POST', path: '/api/profile', status: 200 } } }), verify('exact commit count', ({ page }) => page.locator('#commits').textContent().then(text => text === '1'))] };
+    const policy = (view: View) => view.history.some(entry => entry.element?.includes('Commit entry')) ? { done: 0.29, achieved: 0.2, remaining: 0.9, error: 0.85, tool: 'none', delivered: 0.99 } : view.history.some(entry => entry.value === 'notes') ? { done: 0.1, achieved: 0.2, remaining: 0.9, tool: 'click', target: (element: ViewElement) => element.name === 'Commit entry' } : freshEditPolicy(view);
+    const result = (await suite([spec], { policy }).run).results[0]!;
+    expect(result.status, result.summary).toBe(bug === 'warning' ? 'passed' : 'failed');
+    expect(result.attempts[0]?.steps[0]?.actions).toHaveLength(3);
 });
 
 it('fresh reviews newly delivered dialog initiation after an incomplete expansion review', async () => {
