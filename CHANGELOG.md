@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Breaking before 1.0: `--mode replay` no longer passes a test whose `check` steps were skipped. A check passes in replay only when its recorded direct evidence is still visible; checks without evidence (all recordings made before this release) report `unverified`, which fails the run unless `--allow-unverified` is passed. Re-record with an auto run to add evidence. Recordings from 0.1.x–0.6.0 keep their original end-state semantics.
 - Retain independently selected proof after a positive-leaning check receives positive adjudication, only while the proof still matches that observation.
 - Reject clipped text anywhere in replay proof, including shortened identifiers; offer nearby relationship text around quoted subjects.
 - Share check scope once while retaining all verdict questions; match whole control labels and offer bounded contextual proof for unquoted visible labels.
