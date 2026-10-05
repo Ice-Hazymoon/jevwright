@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Preserve explicit repeated control-key gestures during helper normalization; accept complete control judgments with long explanations while requesting short JSON reasons.
+
 - Preserve a pending action independently authorized by action-stage review before consulting recovery; control review also requests bounded schema JSON.
 
 - Recheck same-route dialog transitions and removed controls during observation; bind rich-editor templates to actual rendered separators.

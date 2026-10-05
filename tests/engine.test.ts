@@ -235,6 +235,13 @@ it('fresh recognizes an explicitly supplied control key in helper text', async (
     expect(result.attempts[0]?.steps[0]?.actions?.map(action => action.tool)).toEqual(['type', 'press_enter']);
 });
 
+it('fresh preserves explicit repeat counts when helper text names a control key', async () => {
+    const spec: TestSpec<void> = { id: 'fresh-helper-repeated-key', title: 'Edit and repeat a control key', risk: 'Control-key normalization loses a requested repetition count', start: '/fresh-edit?keypress=1', data: { notes: 'Opening passage' }, steps: () => [act('Set Notes to {notes}, then press Enter twice in Notes'), verify('both Enter events delivered', async ({ page }) => await page.locator('#keys').textContent() === '2' && await page.getByRole('textbox', { name: 'Notes' }).inputValue() === 'Opening passage\n\n', { timeoutMs: 1 })] };
+    const policy = (view: View) => view.history.some(entry => ['press', 'press_enter'].includes(entry.action ?? '')) ? { done: 0.99, needed: 0, tool: 'none' } : view.history.length ? { done: 0.23, achieved: 0.2, remaining: 0.9, needed: 0, tool: 'none' } : { tool: 'type', target: (element: ViewElement) => element.name === 'Notes', value: 'notes' };
+    const result = (await suite([spec], { policy, helper: view => ({ outcome: 'act', tool: 'press', element: view.elements.find(element => element.name === 'Notes')?.i ?? null, value_key: null, text: 'Enter', key: null, times: 2, reason: 'Deliver both requested Enter presses' }) }).run).results[0]!;
+    expect(result.status, result.summary).toBe('passed');
+});
+
 it('fresh reviews newly delivered dialog initiation after an incomplete expansion review', async () => {
     const spec: TestSpec<void> = { id: 'fresh-progress-review', title: 'Expand then initiate', risk: 'An early review blocks completion after additional requested work', start: '/fresh-section', data: { amount: '12.34' }, steps: () => [act('Open Rates and start adding a rate'), act('Enter {amount} as Amount'), verify('entry remains uncommitted', async ({ page }) => await page.getByRole('dialog').isVisible() && await page.getByRole('spinbutton', { name: 'Amount' }).inputValue() === '12.34')] };
     const policy = (view: View) => {
