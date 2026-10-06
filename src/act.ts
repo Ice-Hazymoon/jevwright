@@ -515,6 +515,7 @@ async function decideLoop(input: ActInput, models: Models, actions: ActionRecord
             trace.target = undefined;
             trace.note = 'Dialog choice is explicitly reserved for the next step';
         }
+        if (reservedDialogChoice(input, observation, start, controlCandidate)) { controlCandidate = undefined; }
         const activatedControl = controlCandidate;
         const activations = activatedControl?.ref ? actions.filter(action => action.ok && actionTargets.get(action) === (activatedControl.connectedRef ?? activatedControl.ref) && ['click', 'double_click', 'press_enter', 'upload'].includes(action.tool)).map(action => ({ action: action.tool, element: action.element ?? describeElement(activatedControl), ...(action.fileKeys?.length ? { file_keys: JSON.stringify(action.fileKeys) } : {}) })) : [];
         const actionAudit = (proposal: Decision, controlActivations: Array<Record<string, string>> = [], controlReview?: string) => ({
@@ -779,6 +780,8 @@ async function decideLoop(input: ActInput, models: Models, actions: ActionRecord
                 return { status: 'failed', failure: 'model', reason: error instanceof Error ? error.message : String(error) };
             }
         }
+        // Recovery and control review must respect the same deferred dialog boundary as the initial proposal.
+        if (reservedDialogChoice(input, observation, start, next.target)) { return { status: 'failed', failure: 'ambiguous', reason: 'Recovery proposed resolving a dialog choice reserved for the next step' }; }
         const record = await performDecision(input, next, observation, actions, recording, Math.max(0, 120000 - searchSpentMs));
         if (next.tool === 'scroll' && next.scrollText) { searchSpentMs += record.durationMs; }
         if (record.ok && next.tool === 'scroll' && !next.scrollText && recording.filter(action => action.tool === 'scroll' && !action.scrollText).length === 2) { history.push({ event: 'Two single-page scrolls have been performed. If task.step names a target entity, choose scoped scroll search for that entity using scroll_start/scroll_end instead of another single-page move.' }); }
@@ -1221,7 +1224,8 @@ function reservedDialogChoice(input: ActInput, observation: Observation, start: 
         }
         return false;
     };
-    return [target.name, target.ariaName].some(name => name && mentions(input.next!, name) && !mentions(input.instruction, name));
+    if ([target.name, target.ariaName].some(name => name && mentions(input.instruction, name))) { return false; }
+    return observation.elements.some(element => ACTIVATION_ROLES.has(element.role) && [element.name, element.ariaName].some(name => name && mentions(input.next!, name) && !mentions(input.instruction, name)));
 }
 
 /** Only stable effects caused by this step can support a helper's noncommitting completion review. */
@@ -1261,7 +1265,7 @@ function deliveryProofs(input: ActInput, observation: Observation, recording: Re
 async function confirmDone(input: ActInput, models: Models, observation: Observation, history: Array<Record<string, string>>, change: Record<string, unknown> | undefined, control?: PageElement, activations: Array<Record<string, string>> = []): Promise<{ confidence: number; decision: Decision; pTool: number; pTarget: number; navigation: number; needed?: number }> {
     const all = decisionQuestions(input, observation, true, false);
     const questions = Object.fromEntries(Object.entries(all).filter(([key]) => ['navigation', 'tool', 'target', 'value', 'option', 'input_source', 'page_value', 'key', 'times', 'press_target', 'selection_text'].includes(key)));
-    questions.complete = { type: 'choice', instructions: `${actionAuthorizationQuestion('Review whether all requested UI actions and their necessary final controls for task.step have been delivered.', undefined, true, input.next).instructions} Use history, last_change and values_supplied even after fields disappear. Successful later actions can correct earlier failed attempts. Absent product effects after delivered actions belong to later checks, not pending UI work. Secrets are hidden.`, criteria: {
+    questions.complete = { type: 'choice', instructions: `${actionAuthorizationQuestion('Review whether all requested UI actions and their necessary final controls for task.step have been delivered.', undefined, true, input.next).instructions} Use history, last_change and values_supplied even after fields disappear. A navigation attempt that opens a dialog with a choice explicitly named in next_step ends at that dialog; do not resolve any choice unless task.step also explicitly requests it. Review every other current-step clause. Successful later actions can correct earlier failed attempts. Absent product effects after delivered actions belong to later checks, not pending UI work. Secrets are hidden.`, criteria: {
         achieved: 'Requested UI actions delivered, including a necessary final control only when a committed result is requested; code checks their effects later. Merely permitted actions are not additional required work. Tool prerequisites count.',
         pending: 'A requested UI action or its necessary final control has not been delivered; absent product content after delivery alone is not a missing action.',
     } };

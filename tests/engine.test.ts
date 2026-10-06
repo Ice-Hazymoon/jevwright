@@ -409,6 +409,29 @@ it('fresh cannot finish after completion review rejects the required repair inpu
     expect(result.attempts[0]?.steps[0]?.actions).toHaveLength(3);
 });
 
+it('fresh reserves fallback dialog controls despite a permissive independent audit', async () => {
+    const spec: TestSpec<void> = { id: 'fresh-deferred-fallback', title: 'Keep a dialog choice in its own step', risk: 'A none proposal becomes an early fallback activation', start: '/fresh-reserved-choice?bug=deferred', steps: () => [act('Click Browse entries to leave for the entries list'), act('Choose Stay on draft'), verify('choice delivered once', ({ page }) => page.locator('#choices').textContent().then(count => count === '1'), { timeoutMs: 1 })] };
+    const policy = (view: View) => {
+        if (view.proposal) { return { onTarget: 0.99 }; }
+        if (view.control) { return { needed: 0.67 }; }
+        if (view.dialog) { return view.step?.startsWith('Click Browse') ? { done: 0.46, achieved: 0.62, remaining: 0.52, needed: 0.67, tool: 'none', pTool: 0.59, pTarget: 0.99, target: (element: ViewElement) => element.name === 'Stay on draft' } : { tool: 'click', target: (element: ViewElement) => element.name === 'Stay on draft' }; }
+        return view.history.length ? { done: 0.99, needed: 0 } : { tool: 'click', target: (element: ViewElement) => element.name === 'Browse entries' };
+    };
+    const result = (await suite([spec], { policy, helper: () => ({ outcome: 'impossible', tool: null, element: null, value_key: null, text: null, reason: 'The destination is blocked by the pending dialog choice' }) }).run).results[0]!;
+    expect(result.status, result.summary).toBe('passed');
+    expect(result.attempts[0]?.steps.filter(step => step.kind === 'act').map(step => step.actions?.length)).toEqual([1, 1]);
+});
+
+it('fresh rejects an alternative helper dialog choice reserved for a later step', async () => {
+    const spec: TestSpec<void> = { id: 'fresh-deferred-helper-alternative', title: 'Keep the pending cancellation available', risk: 'Helper resolves another choice after the actor proposal is rejected', start: '/fresh-reserved-choice?bug=deferred', steps: () => [act('Click Browse entries to leave for the entries list'), act('Choose Stay on draft')] };
+    const policy = (view: View) => view.dialog ? { done: 0.49, achieved: 0.21, needed: 0.67, remaining: 0.57, tool: 'none', pTarget: 0.98, target: (element: ViewElement) => element.name === 'Stay on draft', onTarget: 0.99 } : view.history.length ? { done: 0.99, needed: 0 } : { tool: 'click', target: (element: ViewElement) => element.name === 'Browse entries' };
+    const result = (await suite([spec], { policy, helper: view => ({ outcome: 'act', tool: 'click', element: view.elements.find(element => element.name === 'Discard draft')?.i ?? null, value_key: null, text: null, reason: 'Discard first to reach the requested destination' }) }).run).results[0]!;
+    expect(result.status).toBe('failed');
+    expect(result.cause, result.summary).toBe('agent');
+    expect(result.attempts[0]?.steps[0]?.actions).toHaveLength(1);
+    expect(result.attempts[0]?.steps[0]?.actions?.[0]?.element).toContain('Browse entries');
+});
+
 it('fresh reserves a newly opened dialog choice for its explicitly named next step', async () => {
     const spec: TestSpec<void> = { id: 'fresh-reserved-dialog-choice', title: 'Attempt navigation then keep editing', risk: 'Independent scope review consumes the next-step dialog choice early', start: '/fresh-reserved-choice', steps: () => [act('Click Browse entries to leave for the entries list'), act('Choose Stay on draft'), verify('choice delivered once', async ({ page }) => !await page.getByRole('alertdialog').isVisible() && await page.locator('#choices').textContent() === '1', { timeoutMs: 1 })] };
     const policy = (view: View) => view.dialog ? { done: 0.47, achieved: 0.27, needed: 0.9, remaining: 0.57, tool: 'click', target: (element: ViewElement) => element.name === 'Stay on draft', onTarget: 0.99 } : view.history.length ? { done: 0.99, needed: 0 } : { tool: 'click', target: (element: ViewElement) => element.name === 'Browse entries' };

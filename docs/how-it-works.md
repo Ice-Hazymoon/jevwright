@@ -361,7 +361,7 @@ Rich editors with complete visible direct paragraph blocks expose a `paragraphs`
 
 A newly opened dialog control explicitly named only in the immediately following act stays reserved for that act, including during action-stage recovery. Explicit current-step controls remain eligible even when the next step repeats them. Composition recovery types the complete authorized template directly when only paragraph structure or separators need repair.
 
-A next step can reserve cancellation as well as confirmation. A navigation attempt then ends at its newly opened dialog; recovery cannot resolve a different choice just to reach the destination first. Every other current-step clause still needs delivery, and explicitly requested current choices remain authorized.
+A next step can reserve cancellation as well as confirmation. A navigation attempt then ends at its newly opened dialog; recovery cannot resolve a different choice just to reach the destination first. Every other current-step clause still needs delivery, and explicitly requested current choices remain authorized. The same boundary filters fallback controls when Jev proposes none and checks the final action after helper recovery. A helper proposing a reserved choice fails as agent before that choice executes.
 
 Helper generation requests disable reasoning and retain the 1500-token output budget. The OpenRouter adapter receives this policy through its model settings because it does not forward the SDK's per-call reasoning option. Empty or invalid output receives the existing single retry, then fails as `model`; it establishes no completion.
 

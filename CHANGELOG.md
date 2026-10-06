@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Enforce next-step dialog boundaries for fallback control candidates and final helper actions; retain explicitly requested current choices and review navigation delivery at the dialog.
+
 - Keep already delivered controls out of the undelivered-completion guard; omit absent view-proof fields from model JSON and expose the actual pending field value to recovery.
 
 - Include causal field delivery proofs in independent action audits; preserve a confident authorized remaining control before redundant helper recovery.
