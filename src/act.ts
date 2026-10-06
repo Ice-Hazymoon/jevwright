@@ -522,7 +522,7 @@ async function decideLoop(input: ActInput, models: Models, actions: ActionRecord
             next_step: input.next ?? null,
             history: history.filter(entry => entry.action && !entry.error),
             proposal: { action: proposal.tool, ...(proposal.target ? { element: describeElement(proposal.target) } : {}) },
-            context: { page: pageState(observation), target: proposal.target?.i, ...(input.previous ? { previous_step: input.previous } : {}), control_activations: controlActivations, ...(controlReview ? { control_review: controlReview } : {}) },
+            context: { page: pageState(observation), target: proposal.target?.i, ...(input.previous ? { previous_step: input.previous } : {}), delivery_proofs: deliveryProofs(input, observation, recording, start), control_activations: controlActivations, ...(controlReview ? { control_review: controlReview } : {}) },
         });
         const auditAction = (proposal: Decision, controlActivations: Array<Record<string, string>> = [], controlReview?: string) => actedOnTarget(models, [actionAudit(proposal, controlActivations, controlReview)], input.signal, 0);
         const completionProposed = done >= 0.35 || decision.tool === 'none' || activations.length > 0;
@@ -568,6 +568,19 @@ async function decideLoop(input: ActInput, models: Models, actions: ActionRecord
             const keys = new Set(recording.filter(action => action.tool === 'type' && action.valueKey && action.target && resolveTarget(action.target, observation, true)?.i === field.i).map(action => action.valueKey!));
             return keys.size > 1 && [...keys].some(key => input.values[key] && !field.value!.includes(input.values[key]!));
         });
+        // Exact field evidence cannot intercept a confident toolbar action independently authorized for remaining work.
+        if (!reviewedPendingAction && proposedAction && decision.target && ACTIVATION_ROLES.has(decision.target.role) && !activations.length && (proofs.field_edits || proofs.field_composition) && !overlappingInputs && !paragraphMismatches.length) {
+            try {
+                const authorized = (await auditAction(decision))[0] ?? 0;
+                if (authorized >= 0.75) {
+                    reviewedPendingAction = true;
+                    controlCandidate = undefined;
+                    canFinish = false;
+                    trace.targetAudit = round2(authorized);
+                    trace.note = 'Independent action audit preserved the grounded remaining control';
+                }
+            } catch (error) { return { status: 'failed', failure: 'model', reason: error instanceof Error ? error.message : String(error) }; }
+        }
         const deliveryConflict = !canFinish || done < THRESHOLDS.doneAt || (reviewNeeded ?? 0) >= 0.5 || Boolean(proofs.field_composition);
         if (!reviewedPendingAction && (deliveryConflict || overlappingInputs) && saved && !missing.length && (errorShown < THRESHOLDS.error || writeDelivered) && (decision.tool === 'none' || tool?.choice === 'none' || done >= THRESHOLDS.doneAt || noInput || proofs.field_edits || overlappingInputs || writeDelivered) && (Object.keys(proofs).length || overlappingInputs) && escalations < 2) {
             reviewedDeliveries = deliveredCount;

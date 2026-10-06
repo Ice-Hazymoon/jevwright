@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Include causal field delivery proofs in independent action audits; preserve a confident authorized remaining control before redundant helper recovery.
+
 - Compile explicit empty-paragraph counts between two public values into authorized template separators; reject helper completion that contradicts actual paragraph blocks.
 
 - Audit a concrete pending control before accepting helper completion; preserve an independently authorized action and fail uncertain work as agent. Prefer a complete authorized public-value template over its single component key, and clarify page/composition text operands.

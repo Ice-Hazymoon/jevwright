@@ -15,7 +15,7 @@ export interface View {
     field?: string;
     control?: string;
     controlActivations: Array<Record<string, string>>;
-    auditContext?: { prior_actions?: Array<Record<string, string>>; control_activations?: Array<Record<string, string>> };
+    auditContext?: { prior_actions?: Array<Record<string, string>>; control_activations?: Array<Record<string, string>>; delivery_proofs?: Record<string, unknown> };
     review?: boolean;
     instructions?: string;
     actionScope?: string;

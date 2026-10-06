@@ -65,6 +65,29 @@ function suite(specs: Array<TestSpec<void>>, options: Partial<SuiteOptions> & { 
 
 const statusOf = (summary: RunSummary) => Object.fromEntries(summary.results.map(result => [result.id, result.status === 'passed' ? 'passed' : `${result.status}:${result.cause}`]));
 
+it('fresh preserves a confident independently authorized formatting control instead of asking recovery again', async () => {
+    const spec: TestSpec<void> = { id: 'fresh-confident-format-control', title: 'Format the selected word', risk: 'A redundant helper intercepts a grounded remaining toolbar action', start: '/surface-editor', data: { text: 'ship confirmed' }, steps: () => [act('Type {text} in Document and make exactly confirmed bold'), verify('one bold word', ({ page }) => page.locator('#editor').innerHTML().then(html => html === 'ship <b>confirmed</b>'), { timeoutMs: 1 })] };
+    const policy = (view: View) => view.proposal ? { onTarget: 0.99 } : !view.history.some(entry => entry.action === 'type') ? { tool: 'type', target: (element: ViewElement) => element.name === 'Document', value: 'text' } : !view.history.some(entry => entry.action === 'select_text') ? { done: 0.05, tool: 'select_text', target: (element: ViewElement) => element.name === 'Document', selectText: 'confirmed' } : !view.history.some(entry => entry.element?.includes('Bold')) ? { done: 0.07, tool: 'click', target: (element: ViewElement) => element.name === 'Bold', pTool: 0.94, pTarget: 0.88 } : { done: 0.99, achieved: 0.99, tool: 'none' };
+    const result = (await suite([spec], { policy, helper: view => view.history.some(entry => entry.action === 'select_text') ? { outcome: 'act', tool: 'click', element: 999, value_key: null, text: null, reason: 'The pending formatting control is the necessary action' } : { outcome: 'act', tool: 'select_text', element: view.elements.find(element => element.name === 'Document')?.i ?? null, value_key: null, text: 'confirmed', reason: 'Select exactly the requested word' } }).run).results[0]!;
+    expect(result.status, result.summary).toBe('passed');
+});
+
+it.each([false, true])('fresh gives an action audit field proofs without losing a requested commit (%s)', async (commit) => {
+    const spec: TestSpec<void> = { id: `fresh-audit-field-proof-${commit}`, title: 'Audit commit against actual field edits', risk: 'An audit lacks evidence that only the requested field edits were delivered', start: '/fresh-edit', data: { alias: 'Pending alias', notes: 'Entry notes' }, steps: () => [act(`Change Alias to {alias} and Notes to {notes}${commit ? ', then commit the entry' : ''}`), verify('requested commit boundary', ({ page }) => page.locator('#commits').textContent().then(text => text === (commit ? '1' : '0')), { timeoutMs: 1 })] };
+    const policy = (view: View) => {
+        if (view.proposal) { return { onTarget: commit ? 0.99 : view.auditContext?.delivery_proofs?.field_edits ? 0.01 : 0.59 }; }
+        if (view.control) { return { needed: commit ? 0.99 : 0.01 }; }
+        if (view.history.filter(entry => entry.action === 'type').length < 2) { return freshEditPolicy(view); }
+        if (view.history.some(entry => entry.element?.includes('Commit entry'))) { return { done: 0.99, achieved: 0.99, needed: 0, tool: 'none' }; }
+        if (commit) { return freshEditPolicy(view); }
+        const weight = (element: ViewElement) => element.role === 'textbox' && element.name === 'Notes' ? 0.48 : element.role === 'textbox' && element.name === 'Alias' ? 0.32 : element.name === 'Commit entry' ? 0.14 : 0.01;
+        const total = Object.keys(JSON.parse(view.instructions ?? '{}').target?.criteria ?? {}).reduce((sum, key) => sum + weight(view.elements.find(element => element.i === Number(key))!), 0);
+        return { done: 0.95, achieved: 0.94, remaining: 0.05, needed: commit ? 0.99 : 0.01, tool: 'none', targetProbability: (element: ViewElement) => weight(element) / total };
+    };
+    const result = (await suite([spec], { policy, helper: view => view.control ? { activation: 'activate', reason: 'The changes appear to need a final commit' } : { outcome: 'step_already_done', tool: null, element: null, value_key: null, text: null, reason: 'The exact fields are already entered' } }).run).results[0]!;
+    expect(result.status, result.summary).toBe('passed');
+});
+
 it.each([false, true])('fresh respects exact field edits without losing a requested commit (%s)', async (commit) => {
     const spec: TestSpec<void> = { id: `fresh-edit-${commit}`, title: 'Set entry fields', risk: 'Draft changes implicitly commit or declared commits are skipped', start: '/fresh-edit', data: { alias: 'Pending alias', notes: 'Opening passage\n\nFinal passage' }, steps: () => [act(`Change Alias to {alias} and Notes to {notes}${commit ? ', then commit the entry' : ''}`), verify('exact fields and commit boundary', async ({ page }) => await page.getByRole('textbox', { name: 'Alias' }).inputValue() === 'Pending alias' && await page.getByRole('textbox', { name: 'Notes' }).inputValue() === 'Opening passage\n\nFinal passage' && await page.locator('#commits').textContent() === (commit ? '1' : '0'), { timeoutMs: 1 })] };
     const result = (await suite([spec], { policy: freshEditPolicy }).run).results[0]!;
