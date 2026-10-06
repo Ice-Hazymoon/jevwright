@@ -207,6 +207,16 @@ it('fresh reserves a newly opened dialog choice for its explicitly named next st
     expect(result.attempts[0]?.steps[0]?.actions).toHaveLength(1);
 });
 
+it('fresh preserves the whole dialog when its next step chooses a cancellation', async () => {
+    const spec: TestSpec<void> = { id: 'fresh-reserved-dialog-alternative', title: 'Attempt navigation then retain the draft', risk: 'Recovery takes another dialog choice to finish navigation before cancellation', start: '/fresh-reserved-choice', steps: () => [act('Click Browse entries to leave for the entries list'), act('Choose Stay on draft'), verify('draft choice delivered once', ({ page }) => page.locator('#choices').textContent().then(count => count === '1'), { timeoutMs: 1 })] };
+    const policy = (view: View) => view.dialog ? { done: 0.47, achieved: 0.27, needed: 0.9, remaining: 0.57, tool: 'click', target: (element: ViewElement) => element.name === 'Stay on draft', onTarget: 0.99 } : view.history.length ? { done: 0.99, needed: 0 } : { tool: 'click', target: (element: ViewElement) => element.name === 'Browse entries' };
+    const result = (await suite([spec], { policy, helper: view => /navigation attempt[^.]*next-step dialog choice/i.test(view.helperInstructions ?? '')
+        ? { outcome: 'step_already_done', completion_proof: 'dialog_open', tool: null, element: null, value_key: null, text: null, reason: 'The navigation attempt delivered initiation; the next step chooses cancellation' }
+        : { outcome: 'act', tool: 'click', element: view.elements.find(element => element.name === 'Discard draft')?.i ?? null, value_key: null, text: null, reason: 'The pending dialog blocks reaching the entries list; discard first to finish navigation' } }).run).results[0]!;
+    expect(result.status, result.summary).toBe('passed');
+    expect(result.attempts[0]?.steps[0]?.actions).toHaveLength(1);
+});
+
 it.each([false, true])('fresh retains a dialog choice explicitly requested in both current and next steps (%s)', async (quoted) => {
     const instruction = quoted ? 'Click "Browse entries", then choose "Stay on draft"' : 'Click Browse entries, then choose Stay on draft';
     const spec: TestSpec<void> = { id: `fresh-current-dialog-choice-${quoted}`, title: 'Choose a current dialog action twice', risk: 'A next-step mention cancels an explicitly requested current control', start: '/fresh-reserved-choice', steps: () => [act(instruction), act(instruction), verify('both requested choices delivered', ({ page }) => page.locator('#choices').textContent().then(count => count === '2'), { timeoutMs: 1 })] };

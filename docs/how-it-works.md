@@ -360,3 +360,5 @@ Missing authored input feedback does not wait for autosave. After the final allo
 Rich editors with complete visible direct paragraph blocks expose a `paragraphs` list, including empty strings for empty paragraph nodes. Completion reviews distinguish these nodes from line breaks caused by rendered margins. This observation supplies action evidence; exact business verification still decides persistence and correctness. Secret and value-free views withhold the list.
 
 A newly opened dialog control explicitly named only in the immediately following act stays reserved for that act, including during action-stage recovery. Explicit current-step controls remain eligible even when the next step repeats them. Composition recovery types the complete authorized template directly when only paragraph structure or separators need repair.
+
+A next step can reserve cancellation as well as confirmation. A navigation attempt then ends at its newly opened dialog; recovery cannot resolve a different choice just to reach the destination first. Every other current-step clause still needs delivery, and explicitly requested current choices remain authorized.
