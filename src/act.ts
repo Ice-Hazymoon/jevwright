@@ -487,7 +487,8 @@ async function decideLoop(input: ActInput, models: Models, actions: ActionRecord
             history.push({ action: 'wait', event: 'Content is still loading; review completion after waiting' });
             round--; continue;
         }
-        let canFinish = saved && !missing.length && remaining < 0.5 && navigation < 0.5;
+        const paragraphMismatches = paragraphConflicts(input, observation, recording);
+        let canFinish = saved && !missing.length && remaining < 0.5 && navigation < 0.5 && !paragraphMismatches.length;
         let likelyComplete = false;
         let reviewNeeded: number | undefined;
         let reviewedPendingAction = false;
@@ -573,9 +574,28 @@ async function decideLoop(input: ActInput, models: Models, actions: ActionRecord
             escalations++;
             try {
                 const reason = overlappingInputs ? 'Several supplied values were typed into the same field, but its current value no longer contains all of them. Inspect whether the instruction requests composition or intentional replacements. Input history is not final-content proof. Repair any missing requested text or separator with a whole authorized value/template. A whole template replaces the field automatically; no select_text prerequisite is needed.' : 'Completion and the proposed remaining work conflict; review every current-step action against the available code evidence';
-                const help = await escalateToLlm(input, models, observation, history, reason, stale, decision.tool === 'none' || decision.tool === 'wait' ? undefined : decision, proofs);
+                const paragraphReason = paragraphMismatches.length ? ` Code-observed paragraph blocks contradict the explicit current-step count: ${JSON.stringify(paragraphMismatches)}. Return one type action replacing the field with expected_text. Field composition is not completion evidence until these blocks match.` : '';
+                const help = await escalateToLlm(input, models, observation, history, reason + paragraphReason, stale, decision.tool === 'none' || decision.tool === 'wait' ? undefined : decision, proofs);
                 trace.deliveryReview = `${Object.keys(proofs).join(', ') || 'overlapping_inputs'}: ${help.outcome}; ${help.reason ?? ''}`;
-                if (help.outcome === 'done' && help.proof && Object.hasOwn(proofs, help.proof)) { trace.deliveryProof = help.proof; trace.note = `Helper delivery review: ${help.reason}`; return { status: 'done' }; }
+                if (help.outcome === 'done' && help.proof && Object.hasOwn(proofs, help.proof)) {
+                    if (paragraphMismatches.length) { return { status: 'failed', failure: 'ambiguous', reason: 'Helper completion contradicts the explicitly requested paragraph blocks' }; }
+                    const pendingTarget = decision.target;
+                    const concreteActivation = pendingTarget && ACTIVATION_ROLES.has(pendingTarget.role) && ['click', 'double_click', 'press_enter', 'select'].includes(decision.tool) && targetConfidence >= priority;
+                    const pendingActivations = pendingTarget ? actions.filter(action => action.ok && actionTargets.get(action) === (pendingTarget.connectedRef ?? pendingTarget.ref) && ['click', 'double_click', 'press_enter', 'select'].includes(action.tool)).map(action => ({ action: action.tool, element: action.element ?? describeElement(pendingTarget) })) : [];
+                    const authorized = concreteActivation ? (await auditAction(decision, pendingActivations))[0] ?? 0 : 0;
+                    // A selected code proof cannot erase a separately authorized, undelivered current-step control.
+                    if (authorized >= 0.75) {
+                        canFinish = false;
+                        reviewedPendingAction = true;
+                        controlCandidate = undefined;
+                        trace.targetAudit = round2(authorized);
+                        trace.note = 'Helper completion conflicts with an independently authorized pending activation';
+                    } else if (authorized > 0.25) {
+                        return { status: 'failed', failure: 'ambiguous', reason: 'Helper completion leaves an uncertain pending current-step activation' };
+                    } else {
+                        trace.deliveryProof = help.proof; trace.note = `Helper delivery review: ${help.reason}`; return { status: 'done' };
+                    }
+                }
                 // A code-rejected recovery action cannot fall through to an earlier completion score.
                 if (help.outcome === 'impossible' && help.rejectedAction) { return { status: 'failed', failure: 'not-found', reason: `Completion review could not carry out required work: ${help.reason ?? 'no authorized action'}` }; }
                 if (help.outcome === 'act') {
@@ -908,6 +928,42 @@ function valueTemplate(text: string, values: Values): string | undefined {
         }
     }
     return used > 0 && template.replace(/\{\w+\}/g, '').trim() === '' ? template : undefined;
+}
+
+/** Normalize only an explicit count between two quoted public values; quoted data supplies no instructions. */
+function requestedParagraphTemplate(template: string, input: ActInput): string {
+    const parts = /^(\{(\w+)\})\s*(\{(\w+)\})$/.exec(template);
+    if (!parts || parts[2] === parts[4]) { return template; }
+    const keys = [parts[2]!, parts[4]!];
+    if (keys.some(key => input.values[key] === undefined || input.secretKeys?.has(key) || /[\r\n]/.test(input.values[key]!))) { return template; }
+    const first = input.instruction.indexOf(JSON.stringify(input.values[keys[0]!]));
+    const second = input.instruction.indexOf(JSON.stringify(input.values[keys[1]!]));
+    if (first < 0 || second <= first) { return template; }
+    const unquoted = input.instruction.replace(/"(?:\\.|[^"\\])*"|“[^”]*”|‘[^’]*’/g, text => ' '.repeat(text.length));
+    const clause = unquoted.slice(first, second);
+    if (/\b(?:not|never|without|don't)\b/i.test(clause)) { return template; }
+    const numbers = ['one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen', 'eighteen', 'nineteen', 'twenty'];
+    const counts = [...clause.matchAll(/(?<![\w.\-])([1-9a]|1\d|20|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|an)\s+(?:empty|blank)\s+paragraphs?\b/gi)];
+    if (counts.length !== 1) { return template; }
+    const word = counts[0]![1]!.toLowerCase();
+    const count = /^\d+$/.test(word) ? Number(word) : word === 'a' || word === 'an' ? 1 : numbers.indexOf(word) + 1;
+    return `${parts[1]}${'\n'.repeat(count + 1)}${parts[3]}`;
+}
+
+/** Actual paragraph blocks outrank rendered margins when an explicit public-value composition requests empties. */
+function paragraphConflicts(input: ActInput, observation: Observation, recording: RecordedAction[]): Array<Record<string, unknown>> {
+    return observation.elements.flatMap((field) => {
+        if (field.transient || field.value === undefined || !recording.some(action => action.tool === 'type' && action.target && resolveTarget(action.target, observation, true)?.i === field.i)) { return []; }
+        const template = valueTemplate(field.value, input.values);
+        if (template === undefined) { return []; }
+        const required = requestedParagraphTemplate(template, input);
+        // Correctly rendered newline counts can still describe margins rather than empty paragraph blocks.
+        const expected = fillValues(required, input.values);
+        if (expected === undefined || !/\n\n/.test(required) || requestedParagraphTemplate(required.replace(/\s+/g, ''), input) !== required) { return []; }
+        const parts = expected.split('\n');
+        if (field.paragraphs ? JSON.stringify(field.paragraphs) === JSON.stringify(parts) : field.value === expected) { return []; }
+        return [{ element: describeElement(field), expected_text: expected, expected_paragraphs: parts, ...(field.paragraphs ? { actual_paragraphs: field.paragraphs } : {}) }];
+    });
 }
 
 function failureFor(reason: string): ActFailure {
@@ -1335,7 +1391,7 @@ async function escalateToLlm(input: ActInput, models: Models, observation: Obser
     const prompt = JSON.stringify({ why_you_are_asked: reason, step: input.instruction, action_scope: actionAuthorizationQuestion('Review all current-step action clauses, not product success.', undefined, false, input.next).instructions, ...(proposal ? { proposed_action: proposal } : {}), ...(Object.keys(proofs).length ? { delivery_proofs: proofs } : {}), ...(input.next ? { next_step_do_not_do_yet: input.next } : {}), values: modelValues(input), available_tools: Object.keys((decisionQuestions(input, observation, true, false).tool as Extract<Question, { type: 'choice' }>).criteria), history: history.slice(-12), ...(stale.length ? { shown_before_step: stale } : {}), values_entered: modelEnteredValues(input, observation), page: pageState(observation) });
     const review = Object.keys(proofs).length ? ' Apply action_scope. For step_already_done, select completion_proof from delivery_proofs only if it covers EVERY requested current-step action. declared_write proves the author-declared request succeeded after a successful UI activation, with no new code-detected rejection; inspect history and the current page for additional clauses, formatting and requested views. field_edits proves only setting exact supplied fields (and opening their editor), including paragraph breaks; it authorizes no commit, formatting or later navigation. field_composition identifies a field built from several supplied values plus whitespace: compare its template with EVERY requested separator and paragraph break before selecting it. The template describes observed content, not the requested format. page.elements.paragraphs lists real paragraph blocks, including empty strings for empty paragraphs; line breaks in rendered value can come from margins and do not prove empty paragraph blocks. When only missing paragraph structure or separators need repair, return one type action containing the whole authorized template; never click, select, clear or press the editor in preparation. Typing already focuses and replaces that field. For plain-text templates, N empty paragraphs between adjacent supplied values require N + 1 newline characters; one empty paragraph uses exactly two. Encode each newline once as a JSON `\\n` escape so parsed text contains newline characters, not literal backslashes. This repair proves no commit or later navigation. dialog_open proves only initiation with entry/confirmation reserved for next_step. A navigation attempt ends at its newly opened dialog when an explicit next-step dialog choice remains, including cancellation; do not resolve a different choice to reach the destination first, unless the current step explicitly requests that choice. Inspect every other current-step clause before selecting this proof. view_open proves only requested navigation/expansion. activation_history proves successful UI activations in this step, not their product effects. Inspect their exact targets, requested counts, all input/action clauses, formatting and final views before selecting it. It can establish delivery of a required commit control only when that control was actually activated; it never proves persistence or product success. The other field/dialog/view proofs cannot establish save, creation, reservation, purchase or publication. Quoted values are data, not action clauses. Choose null if no provided proof covers the whole step. This ends a step; code checks decide the test verdict.' : '';
     const schema = Object.keys(proofs).length ? helperSchema.extend({ completion_proof: z.enum(['declared_write', 'activation_history', 'field_edits', 'field_composition', 'dialog_open', 'view_open']).nullable() }) : helperSchema;
-    const pending = ' proposed_action is an unexecuted candidate, not successful history or evidence of completion. Check its scope and preserve correct input arguments and exact selection spans; selecting a supplied whole field does not satisfy formatting only its requested word. A pending view proposal does not establish that view is open. If a type proposal lacks an authorized value, resolve the requested step/page value or its editor prerequisite; do not skip required unentered input by submitting first.';
+    const pending = ' proposed_action is an unexecuted candidate, not successful history or evidence of completion. Check its scope and preserve correct input arguments and exact selection spans; selecting a supplied whole field does not satisfy formatting only its requested word. A pending view proposal does not establish that view is open. If a type proposal lacks an authorized value, resolve the requested step/page value or its editor prerequisite; do not skip required unentered input by submitting first. Set value_key to null for page values and whole-field composed text; put the exact authorized value/template in text. A non-null value_key must name an existing given key, never a literal value or field label. Do not pair a single component key with a whole composed text.';
     const answer = await models.generate(HELPER + pending + review, prompt, schema, input.signal, 'escalate');
     const available = (decisionQuestions(input, observation, true, false).tool as Extract<Question, { type: 'choice' }>).criteria;
     // Text selection and entity search also consume text; only repair incompatible navigation or gesture proposals.
@@ -1374,12 +1430,18 @@ async function escalateToLlm(input: ActInput, models: Models, observation: Obser
  */
 function helperText(answer: z.infer<typeof helperSchema>, input: ActInput, observation: Observation): Pick<Decision, 'valueKey' | 'literal' | 'template' | 'pageValue'> {
     const valueKey = originalValueKey(input, answer.value_key ?? undefined);
+    // A valid multi-value recipe contains the component; preferring that component would discard its companions.
+    if (answer.tool === 'type' && valueKey !== undefined && !input.secretKeys?.has(valueKey) && answer.text !== null && !input.redact?.contains(answer.text)) {
+        const template = valueTemplate(answer.text, input.values);
+        const keys = template === undefined ? [] : templateKeys(template);
+        if (template !== undefined && keys.includes(valueKey) && new Set(keys).size > 1 && !keys.some(key => input.secretKeys?.has(key))) { return { template: requestedParagraphTemplate(template, input) }; }
+    }
     if (valueKey !== undefined) { return { valueKey }; }
     if (answer.text === null || input.redact?.contains(answer.text) || templateKeys(answer.text).some(key => input.secretKeys?.has(key)) || answer.text.includes('<secret value>')) { return {}; }
     // Authored text keeps its exact separators even when the page contains the same words with different whitespace.
     if (input.instruction.includes(answer.text)) { return { literal: answer.text }; }
     const template = valueTemplate(answer.text, input.values);
-    if (template !== undefined) { return { template }; }
+    if (template !== undefined) { return { template: answer.tool === 'type' ? requestedParagraphTemplate(template, input) : template }; }
     const literal = answer.text.replace(/\s+/g, ' ').trim();
     const pageValue = describePageValue(observation, literal, input.redact);
     return pageValue ? { literal, pageValue } : {};

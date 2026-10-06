@@ -112,6 +112,65 @@ it('fresh provides exact field delivery proofs during an uncertain extra-control
     expect(result.attempts[0]?.steps[0]?.actions).toHaveLength(2);
 });
 
+it.each(['healthy', 'empty', 'uncertain', 'unrequested'])('fresh audits a concrete pending control before accepting helper completion (%s)', async (variant) => {
+    const spec: TestSpec<void> = { id: `fresh-helper-completion-audit-${variant}`, title: 'Keep completion behind pending controls', risk: 'A helper completion bypasses an undelivered requested view', start: `/completion-list${variant === 'empty' ? '?bug=empty' : ''}`, steps: () => [act(variant === 'unrequested' ? 'Save the entry' : 'Save the entry, then open the Saved entries view'), verify('view boundary', ({ page }) => page.locator('#tab').getAttribute('aria-pressed').then(value => value === (variant === 'unrequested' ? 'false' : 'true')), { timeoutMs: 1 }), ...(variant === 'unrequested' ? [] : [verify('entry in opened view', ({ page }) => page.locator('#panel').textContent().then(value => value === 'Saved entriesField notes'), { timeoutMs: 1 })])] };
+    const policy = (view: View) => {
+        if (view.proposal) { return { onTarget: variant === 'uncertain' ? 0.49 : variant === 'unrequested' ? 0.01 : view.proposal.element?.includes('Saved entries') ? 0.99 : 0.01 }; }
+        if (view.history.some(entry => entry.element?.includes('Saved entries'))) { return { done: 0.99, achieved: 0.99, needed: 0, tool: 'none' }; }
+        return view.history.length ? { done: 0.77, achieved: 0.35, remaining: 0.77, needed: 0.77, tool: 'click', pTool: 0.58, pTarget: 0.83, target: (element: ViewElement) => element.name?.startsWith('Saved entries') === true } : { tool: 'click', target: (element: ViewElement) => element.name === 'Save entry' };
+    };
+    const result = (await suite([spec], { policy, helper: () => ({ outcome: 'step_already_done', completion_proof: 'activation_history', tool: null, element: null, value_key: null, text: null, reason: 'The save summary appears to establish that the requested view is open' }) }).run).results[0]!;
+    expect(result.status, result.summary).toBe(['healthy', 'unrequested'].includes(variant) ? 'passed' : 'failed');
+    expect(result.attempts[0]?.steps[0]?.actions).toHaveLength(['uncertain', 'unrequested'].includes(variant) ? 1 : 2);
+    if (variant === 'uncertain') { expect(result.cause).toBe('agent'); }
+    if (variant === 'empty') { expect(result.cause).toBe('product'); expect(result.summary).toContain('entry in opened view'); }
+});
+
+it('fresh prefers a complete authorized composition over its single component key', async () => {
+    const spec: TestSpec<void> = { id: 'fresh-composition-dual-arguments', title: 'Repair both paragraphs together', risk: 'A single value_key discards a complete authorized text recipe from the same helper response', start: '/fresh-edit', data: { first: 'Opening passage', second: 'Final passage' }, steps: () => [act('Replace Notes with {first}, then one blank paragraph, then {second}'), verify('exact complete paragraphs', ({ page }) => page.getByRole('textbox', { name: 'Notes' }).inputValue().then(value => value === 'Opening passage\n\nFinal passage'), { timeoutMs: 1 })] };
+    const policy = (view: View) => {
+        const target = (element: ViewElement) => element.name === 'Notes';
+        if (view.elements.some(element => element.name === 'Notes' && element.value === 'Opening passage\n\nFinal passage')) { return { done: 0.99, achieved: 0.99, needed: 0, tool: 'none' }; }
+        if (!view.history.some(entry => entry.value === 'first')) { return { tool: 'type', target, value: 'first' }; }
+        if (!view.history.some(entry => entry.action === 'press')) { return { tool: 'press', key: 'Shift+ArrowLeft', target }; }
+        return { tool: 'type', target, value: view.history.some(entry => entry.value === 'second') ? 'first' : 'second' };
+    };
+    const result = (await suite([spec], { policy, helper: view => ({ outcome: 'act', tool: 'type', element: view.elements.find(element => element.name === 'Notes')?.i ?? null, value_key: 'first', text: 'Opening passage\n\nFinal passage', reason: 'Repair the damaged first passage and missing blank paragraph with both supplied values' }) }).run).results[0]!;
+    expect(result.status, result.summary).toBe('passed');
+    expect(result.attempts[0]?.steps[0]?.actions?.at(-1)?.value).toBe('{first}\n\n{second}');
+});
+
+it('fresh makes page-value recovery use text rather than an undeclared value key', async () => {
+    const spec: TestSpec<void> = { id: 'fresh-page-input-key-slot', title: 'Resolve a page value in the text operand', risk: 'A helper puts the page literal in an undeclared key and leaves text empty', start: '/surface-labels', steps: () => [act('Store the entry as the page instructs'), verify('stored', ({ page }) => page.locator('#status').textContent().then(value => value === 'Entry stored'), { timeoutMs: 1 })] };
+    const policy = (view: View) => view.notices.includes('Entry stored') ? { done: 0.99 } : view.elements.some(element => element.name === 'Cost' && element.value === '17.25') ? { tool: 'click', target: (element: ViewElement) => element.name === 'Store entry' } : { tool: 'type', target: (element: ViewElement) => element.name === 'Cost', inputSource: 'step' as const };
+    const result = (await suite([spec], { policy, helper: view => ({ outcome: 'act', tool: 'type', element: view.elements.find(element => element.name === 'Cost')?.i ?? null, value_key: /value_key to null for page values/i.test(view.helperInstructions ?? '') ? null : '17.25', text: /value_key to null for page values/i.test(view.helperInstructions ?? '') ? '17.25' : null, reason: 'Enter the exact page value in Cost before storing' }) }).run).results[0]!;
+    expect(result.status, result.summary).toBe('passed');
+});
+
+it('fresh rejects helper completion when actual paragraph blocks contradict an explicit count', async () => {
+    const spec: TestSpec<void> = { id: 'fresh-incorrect-paragraph-proof', title: 'Require actual empty blocks', risk: 'Helper completion misreads paragraph margins as a blank paragraph', start: '/fresh-paragraphs', data: { first: 'Opening passage', second: 'Final passage' }, steps: () => [act('Replace Draft with {first}, then one empty paragraph, then {second}'), verify('exact requested blocks', ({ page }) => page.getByRole('textbox', { name: 'Draft' }).locator('p').allTextContents().then(parts => parts.length === 3 && parts[1] === ''), { timeoutMs: 1 })] };
+    const target = (element: ViewElement) => element.name === 'Draft';
+    const policy = (view: View) => !view.history.some(entry => entry.value === 'first') ? { tool: 'type', target, value: 'first' } : !view.history.some(entry => entry.action === 'press_enter') ? { tool: 'press_enter', target } : !view.history.some(entry => entry.value === 'second') ? { tool: 'type', target, value: 'second' } : { done: 0.99, needed: 0, tool: 'none' };
+    const result = (await suite([spec], { policy, helper: () => ({ outcome: 'step_already_done', completion_proof: 'field_composition', tool: null, element: null, value_key: null, text: null, reason: 'Both passages appear separated by one empty paragraph' }) }).run).results[0]!;
+    expect(result.cause, result.summary).toBe('agent');
+});
+
+it.each(['one', 'two', 'literal-data'])('fresh compiles an explicit empty-paragraph count without reading quoted data as instructions (%s)', async (quantity) => {
+    const count = quantity === 'one' ? 1 : 2;
+    const second = 'Final passage mentions one empty paragraph';
+    const instruction = quantity === 'literal-data' ? 'Replace Draft with {first}, then the literal separator "\\n\\n\\n", then {second}' : `Replace Draft with {first}, then ${quantity} empty paragraphs, then {second}`;
+    const spec: TestSpec<void> = { id: `fresh-compiled-paragraphs-${quantity}`, title: 'Keep the requested empty paragraph count', risk: 'A helper adds an extra newline or treats quoted data as a paragraph instruction', start: '/fresh-paragraphs', data: { first: 'Opening passage', second }, steps: () => [act(instruction), verify('exact requested blocks', ({ page }) => page.getByRole('textbox', { name: 'Draft' }).locator('p').allTextContents().then(parts => JSON.stringify(parts) === JSON.stringify(['Opening passage', ...Array.from({ length: count }).fill(''), second])), { timeoutMs: 1 })] };
+    const policy = (view: View) => {
+        const target = (element: ViewElement) => element.name === 'Draft';
+        if (!view.history.some(entry => entry.value === 'first')) { return { tool: 'type', target, value: 'first' }; }
+        if (!view.history.some(entry => entry.action === 'press_enter')) { return { tool: 'press_enter', target }; }
+        if (!view.history.some(entry => entry.value === 'second')) { return { tool: 'type', target, value: 'second' }; }
+        return { done: 0.99, achieved: 0.99, needed: 0, tool: 'none' };
+    };
+    const result = (await suite([spec], { policy, helper: view => (view.elements.find(element => element.name === 'Draft')?.paragraphs?.length ?? 0) >= 3 ? { outcome: 'step_already_done', completion_proof: 'field_composition', tool: null, element: null, value_key: null, text: null, reason: 'The composed field appears to have the required blank paragraphs' } : { outcome: 'act', tool: 'type', element: view.elements.find(element => element.name === 'Draft')?.i ?? null, value_key: null, text: `Opening passage${'\n'.repeat(quantity === 'literal-data' ? 3 : count + 2)}${second}`, reason: 'Replace the whole field to supply its missing blank paragraph structure' } }).run).results[0]!;
+    expect(result.status, result.summary).toBe('passed');
+});
+
 it('fresh reviews an already delivered UI activation without requiring a declared write', async () => {
     const spec: TestSpec<void> = { id: 'fresh-delivered-activation', title: 'Commit once after editing', risk: 'Missing a declared request proof repeats a delivered final control', start: '/fresh-edit', data: { alias: 'Pending alias', notes: 'Entry notes' }, steps: () => [act('Change Alias to {alias} and Notes to {notes}, then commit the entry'), verify('one commit', ({ page }) => page.locator('#commits').textContent().then(text => text === '1'))] };
     const policy = (view: View) => view.history.some(entry => entry.element?.includes('Commit entry')) ? { done: 0.83, achieved: 0.63, remaining: 0.57, needed: 0.32, tool: 'click', target: (element: ViewElement) => element.name === 'Commit entry', delivered: 0.01 } : freshEditPolicy(view);

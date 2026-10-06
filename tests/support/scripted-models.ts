@@ -66,6 +66,7 @@ export interface Belief {
     navigation?: number;
     needed?: number;
     pTarget?: number;
+    pTool?: number;
     /** Reproduce nonuniform target rankings independently of the proposed tool. */
     targetProbability?: (element: ViewElement) => number;
     pageValue?: string;
@@ -209,7 +210,7 @@ function answer(id: string, question: EvaluationQuestion, belief: Belief, view: 
         chosen = (belief.proof ?? (belief.support === 'supports' && (belief.holds ?? 0) >= 0.7)) ? field ?? options.find(option => quoted(option).some(entry => entry.source === 'text')) ?? 'none' : 'none';
     }
     if (id === 'region') { chosen = belief.region ?? 'unknown'; }
-    return distribution(options, chosen && options.includes(chosen) ? chosen : undefined, id === 'support' ? belief.pSupport : id === 'target' ? belief.pTarget : undefined);
+    return distribution(options, chosen && options.includes(chosen) ? chosen : undefined, id === 'support' ? belief.pSupport : id === 'target' ? belief.pTarget : id === 'tool' ? belief.pTool : undefined);
 }
 
 /** A confident choice, or a flat distribution when the script has no opinion. */
