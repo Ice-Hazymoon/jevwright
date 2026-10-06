@@ -529,7 +529,7 @@ async function decideLoop(input: ActInput, models: Models, actions: ActionRecord
         const completionProposed = done >= 0.35 || decision.tool === 'none' || activations.length > 0;
         if (saved && !missing.length && completionProposed && (acted() || done < 0.9 || proposedAction)) {
             try {
-                const review = await confirmDone(input, models, observation, history, change, controlCandidate, activations);
+                const review = await confirmDone(input, models, observation, history, change, controlCandidate, activations, observation.elements.some(element => reservedDialogChoice(input, observation, start, element)));
                 reviewNeeded = review.needed;
                 const confirm = review.confidence;
                 trace.confirm = round2(confirm);
@@ -1262,10 +1262,10 @@ function deliveryProofs(input: ActInput, observation: Observation, recording: Re
     };
 }
 
-async function confirmDone(input: ActInput, models: Models, observation: Observation, history: Array<Record<string, string>>, change: Record<string, unknown> | undefined, control?: PageElement, activations: Array<Record<string, string>> = []): Promise<{ confidence: number; decision: Decision; pTool: number; pTarget: number; navigation: number; needed?: number }> {
+async function confirmDone(input: ActInput, models: Models, observation: Observation, history: Array<Record<string, string>>, change: Record<string, unknown> | undefined, control?: PageElement, activations: Array<Record<string, string>> = [], dialogBoundary = false): Promise<{ confidence: number; decision: Decision; pTool: number; pTarget: number; navigation: number; needed?: number }> {
     const all = decisionQuestions(input, observation, true, false);
     const questions = Object.fromEntries(Object.entries(all).filter(([key]) => ['navigation', 'tool', 'target', 'value', 'option', 'input_source', 'page_value', 'key', 'times', 'press_target', 'selection_text'].includes(key)));
-    questions.complete = { type: 'choice', instructions: `${actionAuthorizationQuestion('Review whether all requested UI actions and their necessary final controls for task.step have been delivered.', undefined, true, input.next).instructions} Use history, last_change and values_supplied even after fields disappear. A navigation attempt that opens a dialog with a choice explicitly named in next_step ends at that dialog; do not resolve any choice unless task.step also explicitly requests it. Review every other current-step clause. Successful later actions can correct earlier failed attempts. Absent product effects after delivered actions belong to later checks, not pending UI work. Secrets are hidden.`, criteria: {
+    questions.complete = { type: 'choice', instructions: `${actionAuthorizationQuestion('Review whether all requested UI actions and their necessary final controls for task.step have been delivered.', undefined, true, input.next).instructions} Use history, last_change and values_supplied even after fields disappear.${dialogBoundary ? ' A navigation attempt that opens a dialog with a choice explicitly named in next_step ends at that dialog; do not resolve any choice unless task.step also explicitly requests it. Review every other current-step clause.' : ''} Successful later actions can correct earlier failed attempts. Absent product effects after delivered actions belong to later checks, not pending UI work. Secrets are hidden.`, criteria: {
         achieved: 'Requested UI actions delivered, including a necessary final control only when a committed result is requested; code checks their effects later. Merely permitted actions are not additional required work. Tool prerequisites count.',
         pending: 'A requested UI action or its necessary final control has not been delivered; absent product content after delivery alone is not a missing action.',
     } };

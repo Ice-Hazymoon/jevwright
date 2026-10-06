@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Enforce next-step dialog boundaries for fallback control candidates and final helper actions; retain explicitly requested current choices and review navigation delivery at the dialog.
+- Enforce next-step dialog boundaries for fallback control candidates and final helper actions; retain explicitly requested current choices and review navigation delivery at the dialog only when that boundary is observed.
 
 - Keep already delivered controls out of the undelivered-completion guard; omit absent view-proof fields from model JSON and expose the actual pending field value to recovery.
 
