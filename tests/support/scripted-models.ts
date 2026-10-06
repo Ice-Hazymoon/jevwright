@@ -20,7 +20,7 @@ export interface View {
     instructions?: string;
     actionScope?: string;
     proposal?: Record<string, string>;
-    pendingProposal?: { action: string; element?: string; text?: string; value_key?: string; template?: string; key?: string; times?: number; file_keys?: string[] };
+    pendingProposal?: { action: string; element?: string; current_value?: string; text?: string; value_key?: string; template?: string; key?: string; times?: number; file_keys?: string[] };
     change?: Record<string, unknown>;
     /** The following act step, when the engine shares it. */
     next?: string | null;
