@@ -1231,8 +1231,8 @@ function controlQuestion(control: string, nextStep?: string): Question {
 
 /** Restrict causal initiation completion to one explicit click, without additional work or repetition. */
 function singleClickInstruction(instruction: string): boolean {
-    const text = instruction.trim().replace(/"(?:[^"\\]|\\.)*"|“[^”]*”/g, 'control');
-    if (!/^(?:click|tap)\s+\S/i.test(text) || /[;,]|\b(?:and|then|also|if|when|while|until|before|after|unless|using|without|except|followed|first|last|finally|again|repeatedly|twice|both|each|every|all|two|three|four|five|six|seven|eight|nine|ten|double|triple|times)\b|\b\d+\b/i.test(text)) { return false; }
+    const text = instruction.trim().replace(/"(?:[^"\\]|\\.)*"|“[^”]*”/g, 'control').replace(/[.!?]+$/, '').trim();
+    if (!/^(?:click|tap)\s+\S/i.test(text) || /[;,:.!?&+—\r\n]|\s[-/]\s|\b(?:and|then|also|but|as|with|plus|if|when|while|until|before|after|unless|using|without|except|followed|first|last|finally|again|repeatedly|twice|both|each|every|all|two|three|four|five|six|seven|eight|nine|ten|double|triple|times)\b|\b\d+\b/i.test(text)) { return false; }
     const goal = text.split(/\s+to\s+/i);
     return goal.length === 1 || (goal.length === 2 && /^(?:leave|open|view|reach|return|go|navigate)\b/i.test(goal[1]!) && !/\b(?:type|enter|fill|set|edit|change|mark|check|clear|replace|save|submit|publish|delete|confirm|click|tap|select)\b/i.test(goal[1]!));
 }

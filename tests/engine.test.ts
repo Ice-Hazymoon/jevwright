@@ -440,9 +440,9 @@ it.each([false, true])('fresh ends a single click at its deferred dialog despite
     expect(result.attempts[0]?.steps.filter(step => step.kind === 'act').map(step => step.actions?.length)).toEqual([1, 1]);
 });
 
-it.each(['Click Browse entries twice', 'Click Browse entries and mark Read the details', 'Click Browse entries to fill Notes'])('fresh does not end deferred initiation with unfinished clauses (%s)', async (instruction) => {
+it.each(['Click Browse entries twice', 'Click Browse entries and mark Read the details', 'Click Browse entries to fill Notes', 'Click Browse entries. Mark Read the details', 'Click Browse entries & mark Read the details'])('fresh does not end deferred initiation with unfinished clauses (%s)', async (instruction) => {
     const spec: TestSpec<void> = { id: 'fresh-click-initiation-incomplete', title: 'Retain unfinished current work', risk: 'One delivered click hides additional current actions', start: '/fresh-reserved-choice?bug=initiation', steps: () => [act(instruction), act('Choose Stay on draft')] };
-    const policy = (view: View) => view.dialog ? { done: 0.3, achieved: 0.18, remaining: 0.57, needed: 0.67, tool: 'none', pTarget: 0.98, target: (element: ViewElement) => element.name === 'Stay on draft', onTarget: 0.99 } : { tool: 'click', target: (element: ViewElement) => element.name === 'Browse entries' };
+    const policy = (view: View) => view.dialog ? view.step?.startsWith('Choose') ? { tool: 'click', target: (element: ViewElement) => element.name === 'Stay on draft' } : { done: 0.3, achieved: 0.18, remaining: 0.57, needed: 0.67, tool: 'none', pTarget: 0.98, target: (element: ViewElement) => element.name === 'Stay on draft', onTarget: 0.99 } : view.history.length ? { done: 0.99, needed: 0 } : { tool: 'click', target: (element: ViewElement) => element.name === 'Browse entries' };
     const result = (await suite([spec], { policy, helper: view => ({ outcome: 'act', tool: 'click', element: view.elements.find(element => element.name === 'Discard draft')?.i ?? null, value_key: null, text: null, reason: 'Resolve the choice to finish the current work' }) }).run).results[0]!;
     expect(result.status).toBe('failed');
     expect(result.cause, result.summary).toBe('agent');
