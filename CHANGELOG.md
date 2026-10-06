@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Expose complete visible paragraph blocks in rich editors for composition reviews; rendered margins cannot establish an empty paragraph. Withhold paragraph values for secrets and value-free model views.
+
 - Preserve explicit repeated control-key gestures during helper normalization; accept complete control judgments with long explanations while requesting short JSON reasons.
 
 - Preserve a pending action independently authorized by action-stage review before consulting recovery; control review also requests bounded schema JSON.

@@ -44,6 +44,7 @@ export interface ViewElement {
     role: string;
     name?: string;
     value?: string;
+    paragraphs?: string[];
     near?: string;
     in?: string;
     state?: string;

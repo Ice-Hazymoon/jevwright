@@ -889,6 +889,27 @@ describe('legacy end-state compatibility', () => {
     });
 });
 
+it.each(['missing', 'empty'])('fresh observes actual paragraph blocks independently of rendered margins: %s', async (bug) => {
+    await open(`/fresh-paragraphs?bug=${bug}`, async (page) => {
+        const observation = await observe(page);
+        const field = named(observation, 'textbox', 'Draft')[0]!;
+        expect(Reflect.get(field, 'paragraphs')).toEqual(bug === 'empty' ? ['Opening passage', '', 'Final passage'] : ['Opening passage', 'Final passage']);
+    });
+});
+
+it('fresh withholds paragraph values from secret fields and value-free model views', async () => {
+    const { createRedactor, secret } = await import('../src/secrets.ts');
+    const { pageState } = await import('../src/act.ts');
+    await open('/fresh-paragraphs?bug=empty', async (page) => {
+        const observation = await observe(page);
+        expect((pageState(observation, { values: false }).elements as Array<Record<string, unknown>>).every(element => !('paragraphs' in element))).toBe(true);
+        await page.getByRole('textbox', { name: 'Draft' }).locator('p').first().evaluate((element) => { element.textContent = 'private-sequence-829173'; });
+        const masked = await observe(page, { redact: createRedactor([secret('private-sequence-829173')]) });
+        expect(named(masked, 'textbox', 'Draft')[0]?.paragraphs).toBeUndefined();
+        expect(JSON.stringify(createRedactor([secret('private-sequence-829173')]).value(pageState(masked)))).not.toContain('private-sequence-829173');
+    });
+});
+
 describe('recorded end states', () => {
     it('fresh templates bind the observed rich-editor separators rather than the action arguments', async () => {
         await open('/compatibility-editor?bug=spaced', async (page) => {

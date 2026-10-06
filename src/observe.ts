@@ -36,6 +36,8 @@ export interface PageElement {
     role: string;
     name: string;
     value?: string;
+    /** Complete visible direct paragraph blocks in a rich editor, including empty paragraphs. */
+    paragraphs?: string[];
     placeholder?: string;
     /** Visible text next to the element; the real label when the accessible name is generic. */
     near?: string;
@@ -173,6 +175,7 @@ export async function observe(page: Page, options: ObserveOptions = {}, navigati
         if (detail.content) { element.content = options.redact?.contains(detail.content) ? detail.content : clipValue(detail.content, 160); }
         if (detail.near) { element.near = clipProtected(detail.near, LIMITS.near, options.redact); }
         if (detail.value !== undefined) { element.value = options.redact?.contains(detail.value) ? detail.value : SECRET.test(element.name) ? '••••' : clipValue(detail.value, 300); }
+        if (detail.paragraphs && !SECRET.test(`${element.name} ${element.ariaName ?? ''}`) && !options.redact?.contains(JSON.stringify(detail.paragraphs))) { element.paragraphs = detail.paragraphs.map(text => clipValue(text, 300)); }
         if (detail.inputType) { element.inputType = detail.inputType; }
         if (detail.autocomplete) { element.autocomplete = detail.autocomplete; }
         if (detail.nativeSelect) { element.nativeSelect = true; }
@@ -184,7 +187,7 @@ export async function observe(page: Page, options: ObserveOptions = {}, navigati
     result.scrollable = surface.scrollable;
     result.canGoBack = await canGoBack(page).catch(() => false);
     result.scroll = surface.pageScroll;
-    result.signature = createHash('sha1').update(JSON.stringify([result.signature, result.text, result.elements.map(element => [element.content, element.near, element.value, element.selection, element.formatting, element.ariaName, element.dropTarget, element.scroll]), surface.busy, surface.pageScroll, result.canGoBack])).digest('hex').slice(0, 16);
+    result.signature = createHash('sha1').update(JSON.stringify([result.signature, result.text, result.elements.map(element => [element.content, element.near, element.value, element.selection, element.formatting, element.paragraphs, element.ariaName, element.dropTarget, element.scroll]), surface.busy, surface.pageScroll, result.canGoBack])).digest('hex').slice(0, 16);
     const disconnected = await page.evaluate((keys) => {
         const refs = Reflect.get(window, '__jevwrightRefs') as Map<string, Element> | undefined;
         return keys.some(key => !refs?.get(key)?.isConnected);

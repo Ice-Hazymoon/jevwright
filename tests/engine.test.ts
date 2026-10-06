@@ -159,6 +159,26 @@ it.each([[false, false], [true, false], [false, true]])('fresh reviews separator
     expect(result.attempts[0]?.steps[0]?.actions?.at(-1)?.source).toBe('llm');
 });
 
+it('fresh distinguishes an empty paragraph from rendered spacing between rich-editor blocks', async () => {
+    const spec: TestSpec<void> = { id: 'fresh-rich-paragraph-separator', title: 'Keep a blank paragraph', risk: 'Paragraph margins disguise a missing empty paragraph', start: '/fresh-paragraphs', data: { first: 'Opening passage', second: 'Final passage' }, steps: () => [act('Replace Draft with {first}, then one empty paragraph, then {second}'), verify('exact three paragraphs', ({ page }) => page.getByRole('textbox', { name: 'Draft' }).locator('p').allTextContents().then(parts => JSON.stringify(parts) === JSON.stringify(['Opening passage', '', 'Final passage'])), { timeoutMs: 1 })] };
+    const policy = (view: View) => {
+        const target = (element: ViewElement) => element.name === 'Draft';
+        if (!view.history.some(entry => entry.value === 'first')) { return { tool: 'type', target, value: 'first' }; }
+        if (!view.history.some(entry => entry.action === 'press_enter')) { return { tool: 'press_enter', target }; }
+        if (!view.history.some(entry => entry.value === 'second')) { return { tool: 'type', target, value: 'second' }; }
+        return { done: 0.79, achieved: 0.79, needed: 0, tool: 'none' };
+    };
+    const result = (await suite([spec], { policy, helper: (view) => {
+        const field = view.elements.find(element => element.name === 'Draft');
+        const paragraphs = field ? Reflect.get(field, 'paragraphs') as string[] | undefined : undefined;
+        return paragraphs && JSON.stringify(paragraphs) !== JSON.stringify(['Opening passage', '', 'Final passage'])
+            ? { outcome: 'act', tool: 'type', element: field?.i ?? null, value_key: null, text: 'Opening passage\n\nFinal passage', reason: 'Two nonempty paragraph blocks do not supply the requested empty paragraph' }
+            : { outcome: 'step_already_done', completion_proof: view.deliveryProofs?.includes('field_composition') ? 'field_composition' : 'field_edits', tool: null, element: null, value_key: null, text: null, reason: 'Rendered blank lines appear to satisfy the requested empty paragraph' };
+    } }).run).results[0]!;
+    expect(result.status, result.summary).toBe('passed');
+    expect(result.attempts[0]?.steps[0]?.actions?.at(-1)?.source).toBe('llm');
+});
+
 it('fresh does not force composition after intentional replacements in one field', async () => {
     const spec: TestSpec<void> = { id: 'fresh-intentional-replacement', title: 'Replace an intermediate draft value', risk: 'Input history incorrectly requires retaining superseded text', start: '/fresh-edit', data: { first: 'Intermediate passage', second: 'Final passage' }, steps: () => [act('Set Notes to {first}, then replace its entire value with {second}'), verify('only final replacement remains', ({ page }) => page.getByRole('textbox', { name: 'Notes' }).inputValue().then(value => value === 'Final passage'))] };
     const policy = (view: View) => {

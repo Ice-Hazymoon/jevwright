@@ -42,7 +42,7 @@ export function trackRoots() {
 export interface DomSurface {
     documentId: string;
     nodes: AriaNode[];
-    details: Array<{ transient?: true; box: NonNullable<AriaNode['box']>; content?: string; visibleName?: string; selection?: string; formatting?: import('./observe.ts').TextFormatting[]; dropTarget?: boolean; near?: string; value?: string; inputType?: string; autocomplete?: string; nativeSelect?: boolean; context?: string; draggable?: boolean; scroll?: { top: number; height: number; viewport: number } }>;
+    details: Array<{ transient?: true; box: NonNullable<AriaNode['box']>; content?: string; visibleName?: string; selection?: string; paragraphs?: string[]; formatting?: import('./observe.ts').TextFormatting[]; dropTarget?: boolean; near?: string; value?: string; inputType?: string; autocomplete?: string; nativeSelect?: boolean; context?: string; draggable?: boolean; scroll?: { top: number; height: number; viewport: number } }>;
     text: string;
     transientTexts?: string[];
     dialog?: AriaNode;
@@ -259,6 +259,12 @@ export async function readSurface(page: Page | Frame, scope?: ElementHandle<Elem
                 : focused && editable ? (element.getRootNode() instanceof ShadowRoot ? (element.getRootNode() as ShadowRoot & { getSelection?: () => Selection | null }).getSelection?.() : document.getSelection())?.toString() : undefined;
             // eslint-disable-next-line unicorn/prefer-dom-node-text-content -- innerText is the rendered text a user can see; textContent would include hidden text
             const value = field ? element instanceof HTMLInputElement && element.type === 'password' ? '••••' : element.value : editable ? (element as HTMLElement).innerText : undefined;
+            // Rendered gaps between paragraphs are not empty paragraph nodes.
+            const blocks = [...element.children];
+            const paragraphs = editable && blocks.length > 0 && blocks.length <= 20 && blocks.every(child => child instanceof HTMLElement && child.tagName === 'P' && visible(child)) && [...element.childNodes].every(node => node.nodeType !== Node.TEXT_NODE || !node.textContent?.trim())
+                // eslint-disable-next-line unicorn/prefer-dom-node-text-content -- retain visible paragraph text while distinguishing empty paragraph nodes from margins
+                ? blocks.map(child => (child as HTMLElement).innerText.trim())
+                : undefined;
             const formatting: NonNullable<DomSurface['details'][number]['formatting']> = [];
             // Offsets are useful only when text nodes and the rendered field value agree exactly.
             if (editable && element.textContent === value) {
@@ -282,7 +288,7 @@ export async function readSurface(page: Page | Frame, scope?: ElementHandle<Elem
             const blockText = label && rendered && !field && !select && element instanceof HTMLElement ? element.innerText.trim() : rendered;
             // Preserve rendered paragraph boundaries only when the visible-text filter confirms the same content.
             const content = blockText.replace(/\s+/g, ' ') === rendered ? blockText : rendered;
-            if (transient(element) || nativeRole || label || group || actionRoles.has(role) || scrolling || draggable || dropTarget) { details.push({ box, ...(transient(element) ? { transient: true as const } : {}), ...(visibleName ? { visibleName } : {}), ...(selected !== undefined ? { selection: selected } : {}), ...(dropTarget ? { dropTarget: true } : {}), ...(context ? { context } : {}), ...(label && rendered && !field && !select && rendered !== label ? { content } : {}), ...(field && near && near !== name ? { near } : {}), ...(element instanceof HTMLInputElement ? { inputType: element.type, autocomplete: element.autocomplete } : {}), ...(editable ? { value, ...(element.textContent === value ? { formatting } : {}) } : {}), ...(select ? { nativeSelect: true } : {}), ...(draggable ? { draggable: true } : {}), ...(scrolling ? { scroll: { top: element.scrollTop, height: element.scrollHeight, viewport: element.clientHeight } } : {}) }); }
+            if (transient(element) || nativeRole || label || group || actionRoles.has(role) || scrolling || draggable || dropTarget) { details.push({ box, ...(transient(element) ? { transient: true as const } : {}), ...(visibleName ? { visibleName } : {}), ...(selected !== undefined ? { selection: selected } : {}), ...(dropTarget ? { dropTarget: true } : {}), ...(context ? { context } : {}), ...(label && rendered && !field && !select && rendered !== label ? { content } : {}), ...(field && near && near !== name ? { near } : {}), ...(element instanceof HTMLInputElement ? { inputType: element.type, autocomplete: element.autocomplete } : {}), ...(editable ? { value, ...(paragraphs ? { paragraphs } : {}), ...(element.textContent === value ? { formatting } : {}) } : {}), ...(select ? { nativeSelect: true } : {}), ...(draggable ? { draggable: true } : {}), ...(scrolling ? { scroll: { top: element.scrollTop, height: element.scrollHeight, viewport: element.clientHeight } } : {}) }); }
             scrollable ||= scrolling;
             const clickable = css.cursor === 'pointer' && rendered && rendered.length <= 160 && !interactiveParent(element);
             const leaf = rendered && rendered.length <= 160 && ![...element.children].some(child => text(child)) && !interactiveParent(element) && (pointerSignal(element) || instruction.toLowerCase().includes(rendered.toLowerCase()));

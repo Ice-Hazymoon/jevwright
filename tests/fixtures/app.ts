@@ -64,6 +64,15 @@ ${url.searchParams.has('keypress') ? `document.getElementById('notes').addEventL
 ${url.searchParams.has('delay') ? `let editTimer; document.getElementById('notes').addEventListener('input', () => { clearTimeout(editTimer); editTimer = setTimeout(() => send('/api/profile', { nickname: document.getElementById('alias').value, bio: document.getElementById('notes').value }), 2400); });` : ''}
 document.getElementById('commit').onclick = async () => { document.getElementById('commits').textContent = String(Number(document.getElementById('commits').textContent) + 1); ${bug ? `await send('/api/profile', { nickname: document.getElementById('alias').value, bio: document.getElementById('notes').value }); ${bug === 'new-error' ? 'document.getElementById("error").innerHTML = \'<div role="alert">Entry failed validation</div>\';' : ''}` : ''}${url.searchParams.has('clear') ? 'document.getElementById("alias").value = ""; document.getElementById("notes").value = "";' : ''} };
 `);
+        case '/fresh-paragraphs':
+            return layout('Document draft', `<div id="draft" role="textbox" aria-label="Draft" contenteditable="true"><p>${bug ? `Opening passage</p>${bug === 'empty' ? '<p><br></p>' : ''}<p>Final passage` : '<br>'}</p></div>`, `
+const draft = document.getElementById('draft');
+const caret = () => { const range = document.createRange(); range.selectNodeContents(draft.lastElementChild); range.collapse(false); const selection = getSelection(); selection.removeAllRanges(); selection.addRange(range); };
+draft.oninput = () => { let changed = false; for (const node of [...draft.childNodes]) { if (node.nodeType === Node.TEXT_NODE || node.nodeName === 'DIV') { const p = document.createElement('p'); p.textContent = node.textContent; node.replaceWith(p); changed = true; } }
+if (!draft.children.length) { draft.innerHTML = '<p><br></p>'; changed = true; }
+for (const p of [...draft.children]) { if (p.textContent.includes('\\n')) { const parts = p.textContent.split('\\n').map(text => { const block = document.createElement('p'); block.textContent = text; if (!text) block.append(document.createElement('br')); return block; }); p.replaceWith(...parts); changed = true; } }
+if (changed) caret(); };
+`);
         case '/fresh-dialog-transition':
             return layout('Entry workspace', '<h2>Entries</h2><div role="dialog" aria-label="Edit entry"><label>Alias<input value="Pending"></label><button>Cancel edit</button></div>');
         case '/fresh-effects':

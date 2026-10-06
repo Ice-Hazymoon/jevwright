@@ -356,3 +356,5 @@ a later pass or known product result. The run manifest lists failures carried ou
 An editor or selection action can be a necessary prerequisite that reveals a final control. It need not finish the whole step. Completion still requires every requested action and any necessary final control within the current step boundary.
 
 Missing authored input feedback does not wait for autosave. After the final allowed action, a declared request still receives the author’s bounded expectation wait. Helper output must be schema JSON with a short reason and an explicit nullable keyboard key. An output generation or parsing failure is `model`; it cannot establish completion.
+
+Rich editors with complete visible direct paragraph blocks expose a `paragraphs` list, including empty strings for empty paragraph nodes. Completion reviews distinguish these nodes from line breaks caused by rendered margins. This observation supplies action evidence; exact business verification still decides persistence and correctness. Secret and value-free views withhold the list.
