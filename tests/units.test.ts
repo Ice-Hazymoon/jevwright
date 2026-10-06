@@ -9,7 +9,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { insertedText, pageChange, repeatsBlock } from '../src/act.ts';
 import { launchBrowser, newTestContext, perform, settle } from '../src/browser.ts';
@@ -421,6 +421,22 @@ describe('spec templates and loop helpers', () => {
 });
 
 describe('models', () => {
+    it('sends the helper disabled reasoning policy to OpenRouter before its output budget is exhausted', async () => {
+        const nativeFetch = globalThis.fetch;
+        const requests: Array<Record<string, unknown>> = [];
+        const transport = vi.spyOn(globalThis, 'fetch').mockImplementation((_url, init) => {
+            expect(typeof init?.body).toBe('string');
+            requests.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+            return nativeFetch(`${app.origin}/api/helper-reasoning`, { method: 'POST', body: init?.body, headers: { 'content-type': 'application/json' }, signal: init?.signal });
+        });
+        try {
+            const models = createModels({ apiKey: 'offline', provider: 'openrouter' });
+            await expect(models.generate('Return schema JSON only', 'Supply the boolean ok', z.object({ ok: z.boolean() }), new AbortController().signal, 'test')).resolves.toEqual({ ok: true });
+            expect(requests).toHaveLength(1);
+            expect(requests[0]).toMatchObject({ reasoning: { enabled: false, effort: 'none' }, max_tokens: 1500 });
+        } finally { transport.mockRestore(); }
+    });
+
     it('prefers the OpenRouter key and falls back to the Vercel AI Gateway', () => {
         expect(gatewayFromEnv({ OPENROUTER_API_KEY: 'or', VERCEL_AI_GATEWAY_API_KEY: 'v' })).toEqual({ provider: 'openrouter', apiKey: 'or' });
         expect(gatewayFromEnv({ VERCEL_AI_GATEWAY_API_KEY: 'v' })).toEqual({ provider: 'vercel', apiKey: 'v' });

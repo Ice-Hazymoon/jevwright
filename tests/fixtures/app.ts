@@ -514,6 +514,13 @@ async function api(state: FixtureState, url: URL, request: IncomingMessage, resp
     const payload = await body(request);
     state.requests.push({ method: request.method ?? 'GET', path: url.pathname });
     const json = (status: number, value: unknown) => response.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(value));
+    if (url.pathname === '/api/helper-reasoning') {
+        const disabled = (payload.reasoning as { enabled?: boolean } | undefined)?.enabled === false;
+        const tokens = disabled ? 3 : Number(payload.max_tokens);
+        // Reasoning can exhaust a shared output budget before the helper writes its schema JSON.
+        json(200, { id: 'fixture-helper', object: 'chat.completion', created: 0, model: String(payload.model), choices: [{ index: 0, finish_reason: disabled ? 'stop' : 'length', message: { role: 'assistant', content: disabled ? '{"ok":true}' : null, ...(disabled ? {} : { reasoning: 'Output budget exhausted before JSON' }) } }], usage: { prompt_tokens: 1, completion_tokens: tokens, total_tokens: tokens + 1, completion_tokens_details: { reasoning_tokens: disabled ? 0 : tokens } } });
+        return;
+    }
     if (url.pathname === '/api/draft-validation') {
         json(bug === '500' ? 500 : !payload.draft || bug === '422' ? 422 : 200, { validation: 'draft required' });
         return;

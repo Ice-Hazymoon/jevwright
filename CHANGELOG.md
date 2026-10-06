@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Send the existing disabled-reasoning policy through OpenRouter helper model settings; retain the output budget and retry limits.
+
 - Preserve cancellation dialogs until their explicit next-step choice; navigation recovery must not choose an alternative merely to reach the destination first.
 
 - Preserve a newly opened dialog control explicitly named only in the next step before action-stage recovery; keep controls explicitly requested in both steps. Repair composed separators directly with an authorized whole-field template.

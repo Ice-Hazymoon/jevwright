@@ -250,7 +250,8 @@ function providerModels(provider: ModelProvider, apiKey: string, jevModel: strin
         return { evaluation: gateway.evaluationModel(jevModel), language: gateway.languageModel(llmModel) };
     }
     const openrouter = createOpenRouter({ apiKey, compatibility: 'strict', appName: 'jevwright', appUrl: 'https://github.com/Ice-Hazymoon/jevwright' });
-    return { evaluation: openrouter.evaluationModel(jevModel), language: openrouter.chat(llmModel) };
+    // This adapter reads reasoning from model settings, not the SDK's per-call reasoning option.
+    return { evaluation: openrouter.evaluationModel(jevModel), language: openrouter.chat(llmModel, { reasoning: { enabled: false, effort: 'none' } }) };
 }
 
 type EvaluationModel = Exclude<Experimental_EvaluationModel, string>;
