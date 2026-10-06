@@ -506,6 +506,14 @@ async function decideLoop(input: ActInput, models: Models, actions: ActionRecord
             const total = controls.reduce((sum, entry) => sum + entry.probability, 0);
             if (controls[0] && total > 0 && controls[0].probability / total >= 0.5) { controlCandidate = controls[0].element; }
         }
+        // A newly revealed dialog choice explicitly named later is not current-step recovery.
+        if (reservedDialogChoice(input, observation, start, decision.target)) {
+            decision = { tool: 'none', source: 'jev' };
+            controlCandidate = undefined;
+            trace.tool = 'none';
+            trace.target = undefined;
+            trace.note = 'Dialog choice is explicitly reserved for the next step';
+        }
         const activatedControl = controlCandidate;
         const activations = activatedControl?.ref ? actions.filter(action => action.ok && actionTargets.get(action) === (activatedControl.connectedRef ?? activatedControl.ref) && ['click', 'double_click', 'press_enter', 'upload'].includes(action.tool)).map(action => ({ action: action.tool, element: action.element ?? describeElement(activatedControl), ...(action.fileKeys?.length ? { file_keys: JSON.stringify(action.fileKeys) } : {}) })) : [];
         const actionAudit = (proposal: Decision, controlActivations: Array<Record<string, string>> = [], controlReview?: string) => ({
@@ -526,7 +534,8 @@ async function decideLoop(input: ActInput, models: Models, actions: ActionRecord
                 likelyComplete = confirm >= THRESHOLDS.likely;
                 canFinish = review.navigation < 0.5 && (remaining < 0.85 || (acted() && confirm >= THRESHOLDS.confirm)) && (confirm >= (input.next ? 0.5 : THRESHOLDS.confirm) || (canFinish && confirm > 0.15));
                 if (!canFinish && (decision.tool === 'none' || decision.tool === 'wait') && review.decision.tool !== 'none' && review.decision.tool !== 'wait' && review.pTool >= THRESHOLDS.target && review.pTarget >= THRESHOLDS.target) {
-                    const named = await auditAction(review.decision);
+                    const reserved = reservedDialogChoice(input, observation, start, review.decision.target);
+                    const named = reserved ? [] : await auditAction(review.decision);
                     if ((named[0] ?? 0) >= 0.75) {
                         decision = review.decision;
                         reviewedPendingAction = true;
@@ -538,7 +547,7 @@ async function decideLoop(input: ActInput, models: Models, actions: ActionRecord
                         trace.note = 'Action-stage review identified remaining work';
                         input.log?.(`    stage: pending → ${trace.tool} ${trace.target ?? ''}`);
                     } else {
-                        trace.note = 'Stage proposal rejected: target does not match the requested action';
+                        trace.note = reserved ? 'Stage proposal rejected: dialog choice belongs to the next step' : 'Stage proposal rejected: target does not match the requested action';
                     }
                 }
             } catch (error) {
@@ -1130,6 +1139,20 @@ function controlQuestion(control: string, nextStep?: string): Question {
     return actionAuthorizationQuestion('Does task.step require this control now as a requested action, a necessary editor/selection prerequisite, or the current flow\'s necessary final control? An individual action need not complete the whole step. next_step is later work.', control, true, nextStep);
 }
 
+function reservedDialogChoice(input: ActInput, observation: Observation, start: StepStart, target?: PageElement): boolean {
+    if (!input.next || !observation.dialog || start.observation?.dialog || !target || !ACTIVATION_ROLES.has(target.role)) { return false; }
+    const mentions = (phrase: string, label: string) => {
+        const text = phrase.toLowerCase().replace(/\s+/g, ' ');
+        const name = label.toLowerCase().replace(/\s+/g, ' ').trim();
+        if (!name) { return false; }
+        for (let at = text.indexOf(name); at >= 0; at = text.indexOf(name, at + 1)) {
+            if (!/[\p{L}\p{N}_]/u.test(text[at - 1] ?? '') && !/[\p{L}\p{N}_]/u.test(text[at + name.length] ?? '')) { return true; }
+        }
+        return false;
+    };
+    return [target.name, target.ariaName].some(name => name && mentions(input.next!, name) && !mentions(input.instruction, name));
+}
+
 /** Only stable effects caused by this step can support a helper's noncommitting completion review. */
 function deliveryProofs(input: ActInput, observation: Observation, recording: RecordedAction[], start: StepStart, writeDelivered = false, activationDelivered = false): Record<string, unknown> {
     if (!start.observation) { return {}; }
@@ -1306,7 +1329,7 @@ const HELPER = 'You help a browser test runner that is stuck on one step of a UI
 
 async function escalateToLlm(input: ActInput, models: Models, observation: Observation, history: Array<Record<string, string>>, reason: string, stale: string[], proposed?: Decision, proofs: Record<string, unknown> = {}): Promise<Help> {
     const prompt = JSON.stringify({ why_you_are_asked: reason, step: input.instruction, action_scope: actionAuthorizationQuestion('Review all current-step action clauses, not product success.', undefined, false, input.next).instructions, ...(Object.keys(proofs).length ? { delivery_proofs: proofs } : {}), ...(input.next ? { next_step_do_not_do_yet: input.next } : {}), values: modelValues(input), available_tools: Object.keys((decisionQuestions(input, observation, true, false).tool as Extract<Question, { type: 'choice' }>).criteria), history: history.slice(-12), ...(stale.length ? { shown_before_step: stale } : {}), values_entered: modelEnteredValues(input, observation), page: pageState(observation) });
-    const review = Object.keys(proofs).length ? ' Apply action_scope. For step_already_done, select completion_proof from delivery_proofs only if it covers EVERY requested current-step action. declared_write proves the author-declared request succeeded after a successful UI activation, with no new code-detected rejection; inspect history and the current page for additional clauses, formatting and requested views. field_edits proves only setting exact supplied fields (and opening their editor), including paragraph breaks; it authorizes no commit, formatting or later navigation. field_composition identifies a field built from several supplied values plus whitespace: compare its template with EVERY requested separator and paragraph break before selecting it. The template describes observed content, not the requested format. page.elements.paragraphs lists real paragraph blocks, including empty strings for empty paragraphs; line breaks in rendered value can come from margins and do not prove empty paragraph blocks. Repair mismatched separators by typing the whole authorized template; it proves no commit or later navigation. dialog_open proves only initiation with entry/confirmation reserved for next_step. view_open proves only requested navigation/expansion. activation_history proves successful UI activations in this step, not their product effects. Inspect their exact targets, requested counts, all input/action clauses, formatting and final views before selecting it. It can establish delivery of a required commit control only when that control was actually activated; it never proves persistence or product success. The other field/dialog/view proofs cannot establish save, creation, reservation, purchase or publication. Quoted values are data, not action clauses. Choose null if no provided proof covers the whole step. This ends a step; code checks decide the test verdict.' : '';
+    const review = Object.keys(proofs).length ? ' Apply action_scope. For step_already_done, select completion_proof from delivery_proofs only if it covers EVERY requested current-step action. declared_write proves the author-declared request succeeded after a successful UI activation, with no new code-detected rejection; inspect history and the current page for additional clauses, formatting and requested views. field_edits proves only setting exact supplied fields (and opening their editor), including paragraph breaks; it authorizes no commit, formatting or later navigation. field_composition identifies a field built from several supplied values plus whitespace: compare its template with EVERY requested separator and paragraph break before selecting it. The template describes observed content, not the requested format. page.elements.paragraphs lists real paragraph blocks, including empty strings for empty paragraphs; line breaks in rendered value can come from margins and do not prove empty paragraph blocks. When only missing paragraph structure or separators need repair, return one type action containing the whole authorized template; never click, select, clear or press the editor in preparation. Typing already focuses and replaces that field. This repair proves no commit or later navigation. dialog_open proves only initiation with entry/confirmation reserved for next_step. view_open proves only requested navigation/expansion. activation_history proves successful UI activations in this step, not their product effects. Inspect their exact targets, requested counts, all input/action clauses, formatting and final views before selecting it. It can establish delivery of a required commit control only when that control was actually activated; it never proves persistence or product success. The other field/dialog/view proofs cannot establish save, creation, reservation, purchase or publication. Quoted values are data, not action clauses. Choose null if no provided proof covers the whole step. This ends a step; code checks decide the test verdict.' : '';
     const schema = Object.keys(proofs).length ? helperSchema.extend({ completion_proof: z.enum(['declared_write', 'activation_history', 'field_edits', 'field_composition', 'dialog_open', 'view_open']).nullable() }) : helperSchema;
     const answer = await models.generate(HELPER + review, prompt, schema, input.signal, 'escalate');
     const available = (decisionQuestions(input, observation, true, false).tool as Extract<Question, { type: 'choice' }>).criteria;

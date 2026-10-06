@@ -64,6 +64,12 @@ ${url.searchParams.has('keypress') ? `document.getElementById('notes').addEventL
 ${url.searchParams.has('delay') ? `let editTimer; document.getElementById('notes').addEventListener('input', () => { clearTimeout(editTimer); editTimer = setTimeout(() => send('/api/profile', { nickname: document.getElementById('alias').value, bio: document.getElementById('notes').value }), 2400); });` : ''}
 document.getElementById('commit').onclick = async () => { document.getElementById('commits').textContent = String(Number(document.getElementById('commits').textContent) + 1); ${bug ? `await send('/api/profile', { nickname: document.getElementById('alias').value, bio: document.getElementById('notes').value }); ${bug === 'new-error' ? 'document.getElementById("error").innerHTML = \'<div role="alert">Entry failed validation</div>\';' : ''}` : ''}${url.searchParams.has('clear') ? 'document.getElementById("alias").value = ""; document.getElementById("notes").value = "";' : ''} };
 `);
+        case '/fresh-reserved-choice':
+            return layout('Entry draft', '<button id="browse">Browse entries</button><div id="choice" role="alertdialog" aria-label="Abandon entry?" hidden><button id="stay">Stay on draft</button><button id="discard">Discard draft</button></div><output id="choices">0</output>', `
+document.getElementById('browse').onclick = () => document.getElementById('choice').hidden = false;
+document.getElementById('stay').onclick = () => { document.getElementById('choices').textContent = String(Number(document.getElementById('choices').textContent) + 1); document.getElementById('choice').hidden = true; };
+document.getElementById('discard').onclick = () => document.querySelector('main').innerHTML = '<h1>Entries</h1>';
+`);
         case '/fresh-paragraphs':
             return layout('Document draft', `<div id="draft" role="textbox" aria-label="Draft" contenteditable="true"><p>${bug ? `Opening passage</p>${bug === 'empty' ? '<p><br></p>' : ''}<p>Final passage` : '<br>'}</p></div>`, `
 const draft = document.getElementById('draft');

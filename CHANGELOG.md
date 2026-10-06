@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Preserve a newly opened dialog control explicitly named only in the next step before action-stage recovery; keep controls explicitly requested in both steps. Repair composed separators directly with an authorized whole-field template.
+
 - Expose complete visible paragraph blocks in rich editors for composition reviews; rendered margins cannot establish an empty paragraph. Withhold paragraph values for secrets and value-free model views.
 
 - Preserve explicit repeated control-key gestures during helper normalization; accept complete control judgments with long explanations while requesting short JSON reasons.

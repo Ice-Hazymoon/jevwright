@@ -179,6 +179,43 @@ it('fresh distinguishes an empty paragraph from rendered spacing between rich-ed
     expect(result.attempts[0]?.steps[0]?.actions?.at(-1)?.source).toBe('llm');
 });
 
+it('fresh repairs a missing paragraph directly instead of clicking the already focused editor', async () => {
+    const spec: TestSpec<void> = { id: 'fresh-rich-paragraph-focus', title: 'Repair a missing empty paragraph', risk: 'A preparatory click consumes the repair review then incorrect completion passes', start: '/fresh-paragraphs', data: { first: 'Opening passage', second: 'Final passage' }, steps: () => [act('Replace Draft with {first}, then one empty paragraph, then {second}'), verify('exact three paragraphs', ({ page }) => page.getByRole('textbox', { name: 'Draft' }).locator('p').allTextContents().then(parts => JSON.stringify(parts) === JSON.stringify(['Opening passage', '', 'Final passage'])), { timeoutMs: 1 })] };
+    const policy = (view: View) => {
+        const target = (element: ViewElement) => element.name === 'Draft';
+        if (!view.history.some(entry => entry.value === 'first')) { return { tool: 'type', target, value: 'first' }; }
+        if (!view.history.some(entry => entry.action === 'press_enter')) { return { tool: 'press_enter', target }; }
+        if (!view.history.some(entry => entry.value === 'second')) { return { tool: 'type', target, value: 'second' }; }
+        return { done: 0.57, achieved: 0.57, needed: 0.5, tool: 'none' };
+    };
+    const result = (await suite([spec], { policy, helper: (view) => {
+        const field = view.elements.find(element => element.name === 'Draft');
+        if (view.history.some(entry => entry.action === 'click')) { return { outcome: 'step_already_done', completion_proof: 'field_composition', tool: null, element: null, value_key: null, text: null, reason: 'Rendered blank lines appear to match the expected paragraph separator' }; }
+        return /never click[^.]*in preparation/i.test(view.helperInstructions ?? '')
+            ? { outcome: 'act', tool: 'type', element: field?.i ?? null, value_key: null, text: 'Opening passage\n\nFinal passage', reason: 'Replace the whole value to supply the missing empty paragraph' }
+            : { outcome: 'act', tool: 'click', element: field?.i ?? null, value_key: null, text: null, reason: 'The missing empty paragraph needs repair; first focus the editor' };
+    } }).run).results[0]!;
+    expect(result.status, result.summary).toBe('passed');
+    expect(result.attempts[0]?.steps[0]?.actions?.some(action => action.tool === 'click')).toBe(false);
+});
+
+it('fresh reserves a newly opened dialog choice for its explicitly named next step', async () => {
+    const spec: TestSpec<void> = { id: 'fresh-reserved-dialog-choice', title: 'Attempt navigation then keep editing', risk: 'Independent scope review consumes the next-step dialog choice early', start: '/fresh-reserved-choice', steps: () => [act('Click Browse entries to leave for the entries list'), act('Choose Stay on draft'), verify('choice delivered once', async ({ page }) => !await page.getByRole('alertdialog').isVisible() && await page.locator('#choices').textContent() === '1', { timeoutMs: 1 })] };
+    const policy = (view: View) => view.dialog ? { done: 0.47, achieved: 0.27, needed: 0.9, remaining: 0.57, tool: 'click', target: (element: ViewElement) => element.name === 'Stay on draft', onTarget: 0.99 } : view.history.length ? { done: 0.99, needed: 0 } : { tool: 'click', target: (element: ViewElement) => element.name === 'Browse entries' };
+    const result = (await suite([spec], { policy, helper: view => ({ outcome: 'step_already_done', completion_proof: view.deliveryProofs?.includes('dialog_open') ? 'dialog_open' : 'activation_history', tool: null, element: null, value_key: null, text: null, reason: 'The requested navigation attempt opened the dialog; its choice belongs to the next step' }) }).run).results[0]!;
+    expect(result.status, result.summary).toBe('passed');
+    expect(result.attempts[0]?.steps[0]?.actions).toHaveLength(1);
+});
+
+it.each([false, true])('fresh retains a dialog choice explicitly requested in both current and next steps (%s)', async (quoted) => {
+    const instruction = quoted ? 'Click "Browse entries", then choose "Stay on draft"' : 'Click Browse entries, then choose Stay on draft';
+    const spec: TestSpec<void> = { id: `fresh-current-dialog-choice-${quoted}`, title: 'Choose a current dialog action twice', risk: 'A next-step mention cancels an explicitly requested current control', start: '/fresh-reserved-choice', steps: () => [act(instruction), act(instruction), verify('both requested choices delivered', ({ page }) => page.locator('#choices').textContent().then(count => count === '2'), { timeoutMs: 1 })] };
+    const policy = (view: View) => view.dialog ? { tool: 'click', target: (element: ViewElement) => element.name === 'Stay on draft', onTarget: 0.99 } : view.history.length ? { done: 0.99, needed: 0 } : { tool: 'click', target: (element: ViewElement) => element.name === 'Browse entries' };
+    const result = (await suite([spec], { policy, helper: view => view.control ? { activation: 'finished', reason: 'Both requested controls were delivered within this step' } : { outcome: 'step_already_done', completion_proof: 'activation_history', tool: null, element: null, value_key: null, text: null, reason: 'The current step already clicked both explicitly requested controls' } }).run).results[0]!;
+    expect(result.status, result.summary).toBe('passed');
+    expect(result.attempts[0]?.steps.filter(step => step.kind === 'act').map(step => step.actions?.length)).toEqual([2, 2]);
+});
+
 it('fresh does not force composition after intentional replacements in one field', async () => {
     const spec: TestSpec<void> = { id: 'fresh-intentional-replacement', title: 'Replace an intermediate draft value', risk: 'Input history incorrectly requires retaining superseded text', start: '/fresh-edit', data: { first: 'Intermediate passage', second: 'Final passage' }, steps: () => [act('Set Notes to {first}, then replace its entire value with {second}'), verify('only final replacement remains', ({ page }) => page.getByRole('textbox', { name: 'Notes' }).inputValue().then(value => value === 'Final passage'))] };
     const policy = (view: View) => {
