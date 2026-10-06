@@ -217,6 +217,20 @@ it('fresh uses the requested empty-paragraph count in a whole-field repair', asy
     expect(result.status, result.summary).toBe('passed');
 });
 
+it('fresh preserves completed composition when the helper proposes no further action', async () => {
+    const spec: TestSpec<void> = { id: 'fresh-completed-composition', title: 'Keep already complete paragraphs', risk: 'An unavailable helper answer rejects correctly delivered formatting', start: '/fresh-paragraphs', data: { first: 'Opening passage', second: 'Final passage' }, steps: () => [act('Replace Draft with {first}, then one empty paragraph, then {second}'), verify('exact three paragraphs', ({ page }) => page.getByRole('textbox', { name: 'Draft' }).locator('p').allTextContents().then(parts => JSON.stringify(parts) === JSON.stringify(['Opening passage', '', 'Final passage'])), { timeoutMs: 1 })] };
+    const policy = (view: View) => {
+        const target = (element: ViewElement) => element.name === 'Draft';
+        if (!view.history.some(entry => entry.value === 'first')) { return { tool: 'type', target, value: 'first' }; }
+        if (!view.history.some(entry => entry.action === 'press')) { return { tool: 'press', key: 'Enter', times: 2, target }; }
+        if (!view.history.some(entry => entry.value === 'second')) { return { tool: 'type', target, value: 'second' }; }
+        return { done: 0.99, achieved: 0.99, needed: 0, tool: 'none' };
+    };
+    const result = (await suite([spec], { policy }).run).results[0]!;
+    expect(result.status, result.summary).toBe('passed');
+    expect(result.attempts[0]?.steps[0]?.actions).toHaveLength(3);
+});
+
 it('fresh cannot finish after completion review rejects the required repair input', async () => {
     const spec: TestSpec<void> = { id: 'fresh-paragraph-unauthorized-repair', title: 'Keep an unauthorized repair out of product verification', risk: 'Completion succeeds despite a helper being unable to supply required input', start: '/fresh-paragraphs', data: { first: 'Opening passage', second: 'Final passage' }, steps: () => [act('Replace Draft with {first}, then one empty paragraph, then {second}'), verify('exact three paragraphs', ({ page }) => page.getByRole('textbox', { name: 'Draft' }).locator('p').allTextContents().then(parts => JSON.stringify(parts) === JSON.stringify(['Opening passage', '', 'Final passage'])), { timeoutMs: 1 })] };
     const policy = (view: View) => {

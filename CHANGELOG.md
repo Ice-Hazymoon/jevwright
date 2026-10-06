@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Match empty paragraph counts and JSON newline encoding in authorized repairs; a completion review that cannot perform required work fails the action instead of continuing to product verification.
+- Match empty paragraph counts and JSON newline encoding in authorized repairs; a code-rejected completion-review recovery action fails instead of continuing to product verification. Preserve existing completion guards when the helper proposes no further action.
 
 - Send the existing disabled-reasoning policy through OpenRouter helper model settings; retain the output budget and retry limits.
 
