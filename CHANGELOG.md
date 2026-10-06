@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Match empty paragraph counts and JSON newline encoding in authorized repairs; a completion review that cannot perform required work fails the action instead of continuing to product verification.
+
 - Send the existing disabled-reasoning policy through OpenRouter helper model settings; retain the output budget and retry limits.
 
 - Preserve cancellation dialogs until their explicit next-step choice; navigation recovery must not choose an alternative merely to reach the destination first.

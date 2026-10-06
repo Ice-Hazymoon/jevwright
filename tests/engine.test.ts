@@ -199,6 +199,40 @@ it('fresh repairs a missing paragraph directly instead of clicking the already f
     expect(result.attempts[0]?.steps[0]?.actions?.some(action => action.tool === 'click')).toBe(false);
 });
 
+it('fresh uses the requested empty-paragraph count in a whole-field repair', async () => {
+    const spec: TestSpec<void> = { id: 'fresh-paragraph-repair-count', title: 'Insert exactly one empty paragraph', risk: 'A helper adds an extra newline when repairing a missing paragraph', start: '/fresh-paragraphs', data: { first: 'Opening passage', second: 'Final passage' }, steps: () => [act('Replace Draft with {first}, then one empty paragraph, then {second}'), verify('exact three paragraphs', ({ page }) => page.getByRole('textbox', { name: 'Draft' }).locator('p').allTextContents().then(parts => JSON.stringify(parts) === JSON.stringify(['Opening passage', '', 'Final passage'])), { timeoutMs: 1 })] };
+    const policy = (view: View) => {
+        const target = (element: ViewElement) => element.name === 'Draft';
+        if (!view.history.some(entry => entry.value === 'first')) { return { tool: 'type', target, value: 'first' }; }
+        if (!view.history.some(entry => entry.action === 'press_enter')) { return { tool: 'press_enter', target }; }
+        if (!view.history.some(entry => entry.value === 'second')) { return { tool: 'type', target, value: 'second' }; }
+        return { done: 0.9, achieved: 0.9, needed: 0, tool: 'none' };
+    };
+    const result = (await suite([spec], { policy, helper: (view) => {
+        const field = view.elements.find(element => element.name === 'Draft');
+        if (field?.paragraphs?.length === 3) { return { outcome: 'step_already_done', completion_proof: 'field_composition', tool: null, element: null, value_key: null, text: null, reason: 'Exactly one empty paragraph is present' }; }
+        const text = field?.paragraphs?.length === 4 ? 'Opening passage\\n\\nFinal passage' : /N empty paragraphs[^.]*N\s*\+\s*1 newline/i.test(view.helperInstructions ?? '') ? 'Opening passage\n\nFinal passage' : 'Opening passage\n\n\nFinal passage';
+        return { outcome: 'act', tool: 'type', element: field?.i ?? null, value_key: null, text, reason: 'Repair the empty paragraph count with the whole supplied text' };
+    } }).run).results[0]!;
+    expect(result.status, result.summary).toBe('passed');
+});
+
+it('fresh cannot finish after completion review rejects the required repair input', async () => {
+    const spec: TestSpec<void> = { id: 'fresh-paragraph-unauthorized-repair', title: 'Keep an unauthorized repair out of product verification', risk: 'Completion succeeds despite a helper being unable to supply required input', start: '/fresh-paragraphs', data: { first: 'Opening passage', second: 'Final passage' }, steps: () => [act('Replace Draft with {first}, then one empty paragraph, then {second}'), verify('exact three paragraphs', ({ page }) => page.getByRole('textbox', { name: 'Draft' }).locator('p').allTextContents().then(parts => JSON.stringify(parts) === JSON.stringify(['Opening passage', '', 'Final passage'])), { timeoutMs: 1 })] };
+    const policy = (view: View) => {
+        const target = (element: ViewElement) => element.name === 'Draft';
+        if (!view.history.some(entry => entry.value === 'first')) { return { tool: 'type', target, value: 'first' }; }
+        if (!view.history.some(entry => entry.action === 'press_enter')) { return { tool: 'press_enter', target }; }
+        if (!view.history.some(entry => entry.value === 'second')) { return { tool: 'type', target, value: 'second' }; }
+        return { done: 0.9, achieved: 0.9, needed: 0, tool: 'none' };
+    };
+    const result = (await suite([spec], { policy, helper: view => ({ outcome: 'act', tool: 'type', element: view.elements.find(element => element.name === 'Draft')?.i ?? null, value_key: null, text: 'Opening passage\\n\\nFinal passage', reason: 'The missing empty paragraph needs repair' }) }).run).results[0]!;
+    expect(result.status).toBe('failed');
+    expect(result.cause, result.summary).toBe('agent');
+    expect(result.attempts[0]?.steps[0]?.status).toBe('failed');
+    expect(result.attempts[0]?.steps[0]?.actions).toHaveLength(3);
+});
+
 it('fresh reserves a newly opened dialog choice for its explicitly named next step', async () => {
     const spec: TestSpec<void> = { id: 'fresh-reserved-dialog-choice', title: 'Attempt navigation then keep editing', risk: 'Independent scope review consumes the next-step dialog choice early', start: '/fresh-reserved-choice', steps: () => [act('Click Browse entries to leave for the entries list'), act('Choose Stay on draft'), verify('choice delivered once', async ({ page }) => !await page.getByRole('alertdialog').isVisible() && await page.locator('#choices').textContent() === '1', { timeoutMs: 1 })] };
     const policy = (view: View) => view.dialog ? { done: 0.47, achieved: 0.27, needed: 0.9, remaining: 0.57, tool: 'click', target: (element: ViewElement) => element.name === 'Stay on draft', onTarget: 0.99 } : view.history.length ? { done: 0.99, needed: 0 } : { tool: 'click', target: (element: ViewElement) => element.name === 'Browse entries' };

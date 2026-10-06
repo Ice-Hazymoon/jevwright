@@ -364,3 +364,5 @@ A newly opened dialog control explicitly named only in the immediately following
 A next step can reserve cancellation as well as confirmation. A navigation attempt then ends at its newly opened dialog; recovery cannot resolve a different choice just to reach the destination first. Every other current-step clause still needs delivery, and explicitly requested current choices remain authorized.
 
 Helper generation requests disable reasoning and retain the 1500-token output budget. The OpenRouter adapter receives this policy through its model settings because it does not forward the SDK's per-call reasoning option. Empty or invalid output receives the existing single retry, then fails as `model`; it establishes no completion.
+
+A whole-field plain-text repair uses N + 1 newline characters between supplied values to create N empty paragraphs. JSON encodes these newlines once; literal backslash characters are not authorized separators. If the completion review cannot carry out required work, the action fails as `agent` before product verification.
