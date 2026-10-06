@@ -97,6 +97,24 @@ it('fresh recovery reads the pending field value before treating page instructio
     expect(result.status, result.summary).toBe('passed');
 });
 
+it.each([false, true])('fresh preserves an authorized pending view after a successful activation (%s)', async (empty) => {
+    let auditedView = false;
+    const spec: TestSpec<void> = { id: `fresh-activation-pending-view-${empty}`, title: 'Save before opening the destination view', risk: 'Redundant recovery replaces an authorized view action after a successful commit', start: `/completion-list?bug=review${empty ? '&empty=1' : ''}`, steps: () => [act('Save the entry, then open the Saved entries view'), verify('view opened', ({ page }) => page.locator('#tab').getAttribute('aria-pressed').then(value => value === 'true'), { timeoutMs: 1 }), verify('entry shown', ({ page }) => page.locator('#panel').textContent().then(text => text?.includes('Field notes') === true), { timeoutMs: 1 })] };
+    const policy = (view: View) => {
+        if (view.proposal) { auditedView ||= Boolean(view.proposal.element?.includes('Saved entries') && view.history.some(entry => entry.element?.includes('Save entry'))); return { onTarget: 0.99 }; }
+        if (view.control) { return { needed: 0 }; }
+        if (view.history.some(entry => entry.element?.includes('Saved entries'))) { return { done: 0.99, achieved: 0.99, remaining: 0, tool: 'none' }; }
+        if (view.history.some(entry => entry.element?.includes('Save entry'))) { return { done: view.review ? 0.09 : 0.54, achieved: 0.09, remaining: 0.9, navigation: 0.53, tool: view.review ? 'none' : 'click', pTool: 0.82, pTarget: 0.98, target: (element: ViewElement) => element.name?.startsWith('Saved entries') === true }; }
+        return { tool: 'click', target: (element: ViewElement) => element.name === 'Save entry' };
+    };
+    const result = (await suite([spec], { policy, helper: () => ({ outcome: 'act', tool: 'click', element: 999, value_key: null, text: null, reason: 'The requested destination is blocked by the stored receipt' }) }).run).results[0]!;
+    expect(result.status, result.summary).toBe(empty ? 'failed' : 'passed');
+    if (empty) { expect(result.cause, result.summary).toBe('product'); }
+    expect(result.attempts[0]?.steps[0]?.actions).toHaveLength(2);
+    expect(result.attempts[0]?.steps[1]?.status).toBe('passed');
+    expect(auditedView).toBe(true);
+});
+
 it('fresh preserves a confident independently authorized formatting control instead of asking recovery again', async () => {
     const spec: TestSpec<void> = { id: 'fresh-confident-format-control', title: 'Format the selected word', risk: 'A redundant helper intercepts a grounded remaining toolbar action', start: '/surface-editor', data: { text: 'ship confirmed' }, steps: () => [act('Type {text} in Document and make exactly confirmed bold'), verify('one bold word', ({ page }) => page.locator('#editor').innerHTML().then(html => html === 'ship <b>confirmed</b>'), { timeoutMs: 1 })] };
     const policy = (view: View) => view.proposal ? { onTarget: 0.99 } : !view.history.some(entry => entry.action === 'type') ? { tool: 'type', target: (element: ViewElement) => element.name === 'Document', value: 'text' } : !view.history.some(entry => entry.action === 'select_text') ? { done: 0.05, tool: 'select_text', target: (element: ViewElement) => element.name === 'Document', selectText: 'confirmed' } : !view.history.some(entry => entry.element?.includes('Bold')) ? { done: 0.07, tool: 'click', target: (element: ViewElement) => element.name === 'Bold', pTool: 0.94, pTarget: 0.88 } : { done: 0.99, achieved: 0.99, tool: 'none' };

@@ -118,9 +118,9 @@ document.getElementById('day').onclick = () => { document.getElementById('date')
 document.getElementById('confirm').onclick = () => { if (document.getElementById('date').value && ${JSON.stringify(bug)} !== 'missing') document.getElementById('receipt').textContent = 'Reservation confirmed'; };
 `);
         case '/completion-list':
-            return layout('Saved entries', '<button id="save">Save entry</button><button id="browse" aria-pressed="true">Browse</button><button id="tab" aria-pressed="false">Saved entries (0)</button><section id="panel"><h2>Browse</h2><p>Field notes</p></section>', `
-document.getElementById('save').onclick = () => { document.getElementById('save').textContent = 'Saved'; document.getElementById('tab').textContent = 'Saved entries (1)'; };
-document.getElementById('tab').onclick = () => { document.getElementById('browse').setAttribute('aria-pressed', 'false'); document.getElementById('tab').setAttribute('aria-pressed', 'true'); document.getElementById('panel').innerHTML = ${JSON.stringify(bug === 'empty' ? '<h2>Saved entries</h2><p>No entries</p>' : '<h2>Saved entries</h2><p>Field notes</p>')}; };
+            return layout('Saved entries', `<button id="save">Save entry</button><button id="browse" aria-pressed="true">Browse</button><button id="tab" aria-pressed="false">Saved entries (0)</button><section id="panel"><h2>Browse</h2><p>Field notes</p></section>${bug === 'review' ? '<output id="receipt" role="status" hidden></output>' : ''}`, `
+document.getElementById('save').onclick = () => { document.getElementById('save').textContent = 'Saved'; document.getElementById('tab').textContent = 'Saved entries (1)'; const receipt = document.getElementById('receipt'); if (receipt) { receipt.hidden = false; receipt.textContent = 'Entry stored'; } };
+document.getElementById('tab').onclick = () => { document.getElementById('browse').setAttribute('aria-pressed', 'false'); document.getElementById('tab').setAttribute('aria-pressed', 'true'); document.getElementById('panel').innerHTML = ${JSON.stringify(bug === 'empty' || url.searchParams.has('empty') ? '<h2>Saved entries</h2><p>No entries</p>' : '<h2>Saved entries</h2><p>Field notes</p>')}; };
 `);
         case '/integrity-audit':
             return layout('Draft editor', '<label>Draft<input id="draft"></label><label>Reference<input id="reference"></label><button id="store">Store draft</button>', `document.getElementById('store').onclick = () => send('/api/draft-validation', { draft: document.getElementById('draft').value });`);

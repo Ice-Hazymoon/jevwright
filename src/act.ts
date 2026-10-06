@@ -569,8 +569,8 @@ async function decideLoop(input: ActInput, models: Models, actions: ActionRecord
             const keys = new Set(recording.filter(action => action.tool === 'type' && action.valueKey && action.target && resolveTarget(action.target, observation, true)?.i === field.i).map(action => action.valueKey!));
             return keys.size > 1 && [...keys].some(key => input.values[key] && !field.value!.includes(input.values[key]!));
         });
-        // Exact field evidence cannot intercept a confident toolbar action independently authorized for remaining work.
-        if (!reviewedPendingAction && proposedAction && decision.target && ACTIVATION_ROLES.has(decision.target.role) && !activations.length && (proofs.field_edits || proofs.field_composition) && !overlappingInputs && !paragraphMismatches.length) {
+        // Delivered edits or activations cannot intercept an independently authorized, confident remaining control.
+        if (!reviewedPendingAction && proposedAction && decision.target && ACTIVATION_ROLES.has(decision.target.role) && !activations.length && (proofs.field_edits || proofs.field_composition || proofs.activation_history) && !overlappingInputs && !paragraphMismatches.length) {
             try {
                 const authorized = (await auditAction(decision))[0] ?? 0;
                 if (authorized >= 0.75) {
