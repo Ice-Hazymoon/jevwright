@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- End a single requested click at its causal deferred-choice dialog after an independent target audit; retain compound instructions, repetitions and uncertain target scope for normal recovery. Code checks still decide effects.
+
 - Preserve independently authorized, confident pending controls after successful UI activations as well as field edits; a stored summary cannot replace requested view navigation.
 
 - Enforce next-step dialog boundaries for fallback control candidates and final helper actions; retain explicitly requested current choices and review navigation delivery at the dialog only when that boundary is observed.

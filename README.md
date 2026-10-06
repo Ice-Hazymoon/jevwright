@@ -236,3 +236,5 @@ missing anchors. Confirm the cause with an auto run; a mismatch alone does not e
 ## License
 
 [MIT](https://github.com/Ice-Hazymoon/jevwright/blob/main/LICENSE)
+
+A single click can end at its newly opened dialog when the next act explicitly chooses a dialog control. This requires causal evidence and an independent target audit. Additional clauses and repeated clicks retain normal recovery. Later checks still verify the resulting behavior.

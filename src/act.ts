@@ -526,10 +526,26 @@ async function decideLoop(input: ActInput, models: Models, actions: ActionRecord
             context: { page: pageState(observation), target: proposal.target?.i, ...(input.previous ? { previous_step: input.previous } : {}), delivery_proofs: deliveryProofs(input, observation, recording, start), control_activations: controlActivations, ...(controlReview ? { control_review: controlReview } : {}) },
         });
         const auditAction = (proposal: Decision, controlActivations: Array<Record<string, string>> = [], controlReview?: string) => actedOnTarget(models, [actionAudit(proposal, controlActivations, controlReview)], input.signal, 0);
+        const dialogBoundary = observation.elements.some(element => reservedDialogChoice(input, observation, start, element));
+        // A single requested click ends at its causal dialog when the author assigns the choice to the next step.
+        if (dialogBoundary && singleClickInstruction(input.instruction) && actions.length === 1 && actions[0]!.ok && actions[0]!.tool === 'click' && saved && !missing.length && !paragraphMismatches.length && !input.expectError && errorShown < THRESHOLDS.error) {
+            const initiation = deliveryProofs(input, observation, recording, start, false, true);
+            if (initiation.dialog_open && !(await newReplayErrors(input.page, {}, start.observation, start.errors)).length) {
+                try {
+                    const authorized = (await actedOnTarget(models, [{ step: input.instruction, next_step: input.next, history: history.filter(entry => entry.action && !entry.error), context: { page: pageState(observation), delivery_proofs: initiation } }], input.signal, 0))[0] ?? 0;
+                    if (authorized >= 0.75) {
+                        trace.targetAudit = round2(authorized);
+                        trace.deliveryProof = 'dialog_open';
+                        trace.note = 'The requested single click opened the dialog reserved for the next step';
+                        return { status: 'likely-done', reason: 'The requested click opened its deferred dialog; later code checks verify effects' };
+                    }
+                } catch (error) { return { status: 'failed', failure: 'model', reason: error instanceof Error ? error.message : String(error) }; }
+            }
+        }
         const completionProposed = done >= 0.35 || decision.tool === 'none' || activations.length > 0;
         if (saved && !missing.length && completionProposed && (acted() || done < 0.9 || proposedAction)) {
             try {
-                const review = await confirmDone(input, models, observation, history, change, controlCandidate, activations, observation.elements.some(element => reservedDialogChoice(input, observation, start, element)));
+                const review = await confirmDone(input, models, observation, history, change, controlCandidate, activations, dialogBoundary);
                 reviewNeeded = review.needed;
                 const confirm = review.confidence;
                 trace.confirm = round2(confirm);
@@ -1211,6 +1227,14 @@ function bestOption(options: string[], wanted: string): string {
 
 function controlQuestion(control: string, nextStep?: string): Question {
     return actionAuthorizationQuestion('Does task.step require this control now as a requested action, a necessary editor/selection prerequisite, or the current flow\'s necessary final control? An individual action need not complete the whole step. next_step is later work.', control, true, nextStep);
+}
+
+/** Restrict causal initiation completion to one explicit click, without additional work or repetition. */
+function singleClickInstruction(instruction: string): boolean {
+    const text = instruction.trim().replace(/"(?:[^"\\]|\\.)*"|“[^”]*”/g, 'control');
+    if (!/^(?:click|tap)\s+\S/i.test(text) || /[;,]|\b(?:and|then|also|if|when|while|until|before|after|unless|using|without|except|followed|first|last|finally|again|repeatedly|twice|both|each|every|all|two|three|four|five|six|seven|eight|nine|ten|double|triple|times)\b|\b\d+\b/i.test(text)) { return false; }
+    const goal = text.split(/\s+to\s+/i);
+    return goal.length === 1 || (goal.length === 2 && /^(?:leave|open|view|reach|return|go|navigate)\b/i.test(goal[1]!) && !/\b(?:type|enter|fill|set|edit|change|mark|check|clear|replace|save|submit|publish|delete|confirm|click|tap|select)\b/i.test(goal[1]!));
 }
 
 function reservedDialogChoice(input: ActInput, observation: Observation, start: StepStart, target?: PageElement): boolean {

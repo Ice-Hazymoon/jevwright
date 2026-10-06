@@ -427,6 +427,37 @@ it('fresh cannot finish after completion review rejects the required repair inpu
     expect(result.attempts[0]?.steps[0]?.actions).toHaveLength(3);
 });
 
+it.each([false, true])('fresh ends a single click at its deferred dialog despite weak completion (%s)', async (joined) => {
+    const name = joined ? 'Browse entries and drafts' : 'Browse entries';
+    const instruction = joined ? `Click "${name}" to leave for the entries list` : `Click ${name} to leave for the entries list`;
+    const spec: TestSpec<void> = { id: `fresh-click-initiation-${joined}`, title: 'Open the deferred choice once', risk: 'Recovery resolves a later choice to reach a destination', start: `/fresh-reserved-choice?bug=initiation${joined ? '&joined=1' : ''}`, steps: () => [act(instruction), act('Choose Stay on draft'), verify('choice delivered once', ({ page }) => page.locator('#choices').textContent().then(count => count === '1'), { timeoutMs: 1 })] };
+    const policy = (view: View) => {
+        if (view.dialog) { return view.step?.startsWith('Click') ? { done: 0.3, achieved: 0.18, remaining: 0.57, needed: 0.67, tool: 'none', pTarget: 0.98, target: (element: ViewElement) => element.name === 'Stay on draft', onTarget: 0.99 } : { tool: 'click', target: (element: ViewElement) => element.name === 'Stay on draft' }; }
+        return view.history.length ? { done: 0.99, needed: 0 } : { tool: 'click', target: (element: ViewElement) => element.name === name };
+    };
+    const result = (await suite([spec], { policy, helper: view => ({ outcome: 'act', tool: 'click', element: view.elements.find(element => element.name === 'Discard draft')?.i ?? null, value_key: null, text: null, reason: 'Resolve the choice to reach the destination' }) }).run).results[0]!;
+    expect(result.status, result.summary).toBe('passed');
+    expect(result.attempts[0]?.steps.filter(step => step.kind === 'act').map(step => step.actions?.length)).toEqual([1, 1]);
+});
+
+it.each(['Click Browse entries twice', 'Click Browse entries and mark Read the details', 'Click Browse entries to fill Notes'])('fresh does not end deferred initiation with unfinished clauses (%s)', async (instruction) => {
+    const spec: TestSpec<void> = { id: 'fresh-click-initiation-incomplete', title: 'Retain unfinished current work', risk: 'One delivered click hides additional current actions', start: '/fresh-reserved-choice?bug=initiation', steps: () => [act(instruction), act('Choose Stay on draft')] };
+    const policy = (view: View) => view.dialog ? { done: 0.3, achieved: 0.18, remaining: 0.57, needed: 0.67, tool: 'none', pTarget: 0.98, target: (element: ViewElement) => element.name === 'Stay on draft', onTarget: 0.99 } : { tool: 'click', target: (element: ViewElement) => element.name === 'Browse entries' };
+    const result = (await suite([spec], { policy, helper: view => ({ outcome: 'act', tool: 'click', element: view.elements.find(element => element.name === 'Discard draft')?.i ?? null, value_key: null, text: null, reason: 'Resolve the choice to finish the current work' }) }).run).results[0]!;
+    expect(result.status).toBe('failed');
+    expect(result.cause, result.summary).toBe('agent');
+    expect(result.attempts[0]?.steps[0]?.actions).toHaveLength(1);
+});
+
+it.each([0.01, 0.59])('fresh does not end deferred initiation without a confident delivered-target audit (%s)', async (onTarget) => {
+    const spec: TestSpec<void> = { id: 'fresh-click-initiation-uncertain', title: 'Audit the delivered control', risk: 'Opening a dialog alone proves the requested target was clicked', start: '/fresh-reserved-choice?bug=initiation', steps: () => [act('Click Browse entries'), act('Choose Stay on draft')] };
+    const policy = (view: View) => view.dialog ? { done: 0.3, achieved: 0.18, remaining: 0.57, needed: 0.67, tool: 'none', pTarget: 0.98, target: (element: ViewElement) => element.name === 'Stay on draft', onTarget } : { tool: 'click', target: (element: ViewElement) => element.name === 'Browse entries', onTarget };
+    const result = (await suite([spec], { policy, helper: view => ({ outcome: 'act', tool: 'click', element: view.elements.find(element => element.name === 'Discard draft')?.i ?? null, value_key: null, text: null, reason: 'Reach the destination by resolving the dialog' }) }).run).results[0]!;
+    expect(result.status).toBe('failed');
+    expect(result.cause, result.summary).toBe('agent');
+    expect(result.attempts[0]?.steps[0]?.actions).toHaveLength(1);
+});
+
 it('fresh reserves fallback dialog controls despite a permissive independent audit', async () => {
     const spec: TestSpec<void> = { id: 'fresh-deferred-fallback', title: 'Keep a dialog choice in its own step', risk: 'A none proposal becomes an early fallback activation', start: '/fresh-reserved-choice?bug=deferred', steps: () => [act('Click Browse entries to leave for the entries list'), act('Choose Stay on draft'), verify('choice delivered once', ({ page }) => page.locator('#choices').textContent().then(count => count === '1'), { timeoutMs: 1 })] };
     const policy = (view: View) => {
@@ -441,7 +472,7 @@ it('fresh reserves fallback dialog controls despite a permissive independent aud
 });
 
 it('fresh rejects an alternative helper dialog choice reserved for a later step', async () => {
-    const spec: TestSpec<void> = { id: 'fresh-deferred-helper-alternative', title: 'Keep the pending cancellation available', risk: 'Helper resolves another choice after the actor proposal is rejected', start: '/fresh-reserved-choice?bug=deferred', steps: () => [act('Click Browse entries to leave for the entries list'), act('Choose Stay on draft')] };
+    const spec: TestSpec<void> = { id: 'fresh-deferred-helper-alternative', title: 'Keep the pending cancellation available', risk: 'Helper resolves another choice after the actor proposal is rejected', start: '/fresh-reserved-choice?bug=deferred', steps: () => [act('Click Browse entries twice'), act('Choose Stay on draft')] };
     const policy = (view: View) => view.dialog ? { done: 0.49, achieved: 0.21, needed: 0.67, remaining: 0.57, tool: 'none', pTarget: 0.98, target: (element: ViewElement) => element.name === 'Stay on draft', onTarget: 0.99 } : view.history.length ? { done: 0.99, needed: 0 } : { tool: 'click', target: (element: ViewElement) => element.name === 'Browse entries' };
     const result = (await suite([spec], { policy, helper: view => ({ outcome: 'act', tool: 'click', element: view.elements.find(element => element.name === 'Discard draft')?.i ?? null, value_key: null, text: null, reason: 'Discard first to reach the requested destination' }) }).run).results[0]!;
     expect(result.status).toBe('failed');
