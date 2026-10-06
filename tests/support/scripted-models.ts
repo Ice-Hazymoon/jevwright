@@ -20,6 +20,7 @@ export interface View {
     instructions?: string;
     actionScope?: string;
     proposal?: Record<string, string>;
+    pendingProposal?: { action: string; element?: string; text?: string; value_key?: string; template?: string; key?: string; times?: number; file_keys?: string[] };
     change?: Record<string, unknown>;
     /** The following act step, when the engine shares it. */
     next?: string | null;
@@ -126,13 +127,13 @@ export function scriptedModels(policy: (view: View) => Belief, helper?: (view: V
         doGenerate: async ({ prompt, responseFormat }) => {
             const text = JSON.stringify(prompt);
             const payload = JSON.parse(extractJson(text)) as Record<string, unknown>;
-            const view = { ...toView({ task: { step: payload.step, values: payload.values, history: payload.history, next_step: payload.next_step }, page: payload.page, claim: payload.claim, prior_actions: payload.prior_actions, control: payload.control, control_activations: payload.control_activations }), helperKeyRequired: responseFormat?.type === 'json' && Array.isArray(responseFormat.schema?.required) && responseFormat.schema.required.includes('key'), helperInstructions: prompt.filter(message => message.role === 'system').map(message => typeof message.content === 'string' ? message.content : JSON.stringify(message.content)).join('\n'), deliveryProofs: Object.keys((payload.delivery_proofs as Record<string, unknown> | undefined) ?? {}) };
+            const view = { ...toView({ task: { step: payload.step, values: payload.values, history: payload.history, next_step: payload.next_step }, page: payload.page, claim: payload.claim, prior_actions: payload.prior_actions, control: payload.control, control_activations: payload.control_activations }), pendingProposal: payload.proposed_action as View['pendingProposal'], helperKeyRequired: responseFormat?.type === 'json' && Array.isArray(responseFormat.schema?.required) && responseFormat.schema.required.includes('key'), helperInstructions: prompt.filter(message => message.role === 'system').map(message => typeof message.content === 'string' ? message.content : JSON.stringify(message.content)).join('\n'), deliveryProofs: Object.keys((payload.delivery_proofs as Record<string, unknown> | undefined) ?? {}) };
             const proofs = payload.delivery_proofs as Record<string, unknown> | undefined;
-            const output = proofs && (policy(view).delivered ?? 0) >= 0.5
+            const output = proofs && !payload.control && (policy(view).delivered ?? 0) >= 0.5
                 ? { reason: 'The current step requests only the code-observed delivery', completion_proof: Object.keys(proofs)[0], outcome: 'step_already_done', tool: null, element: null, value_key: null, text: null }
                 : helper?.(view, String(payload.why_you_are_asked ?? '')) ?? (payload.control ? { reason: 'The fixture policy requested no pending activation of this control', activation: 'finished' } : { outcome: 'impossible', tool: null, element: null, value_key: null, text: null, reason: 'scripted helper has no answer' });
             return {
-                content: [{ type: 'text', text: typeof output === 'string' ? output : JSON.stringify({ ...(view.helperKeyRequired ? { key: null } : {}), ...(proofs ? { completion_proof: null } : {}), ...output }) }],
+                content: [{ type: 'text', text: typeof output === 'string' ? output : JSON.stringify({ ...(view.helperKeyRequired ? { key: null } : {}), ...(proofs && !payload.control ? { completion_proof: null } : {}), ...output }) }],
                 finishReason: { unified: 'stop', raw: 'stop' },
                 usage: { inputTokens: { total: 500, noCache: 500, cacheRead: 0, cacheWrite: 0 }, outputTokens: { total: 40, text: 40, reasoning: 0 } },
                 warnings: [],

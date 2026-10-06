@@ -72,6 +72,46 @@ it.each([false, true])('fresh respects exact field edits without losing a reques
     expect(result.attempts[0]?.steps[0]?.actions).toHaveLength(commit ? 3 : 2);
 });
 
+it('fresh retains a proposed exact selection during completion recovery', async () => {
+    const spec: TestSpec<void> = { id: 'fresh-pending-selection', title: 'Format one requested word', risk: 'Recovery selects the whole supplied field instead of the requested word', start: '/surface-editor', data: { text: 'ship confirmed' }, steps: () => [act('Type {text} in Document and make exactly confirmed bold'), verify('one bold word', ({ page }) => page.locator('#editor').innerHTML().then(html => html === 'ship <b>confirmed</b>'), { timeoutMs: 1 })] };
+    const policy = (view: View) => !view.history.some(entry => entry.action === 'type') ? { tool: 'type', target: (element: ViewElement) => element.name === 'Document', value: 'text' } : !view.history.some(entry => entry.action === 'select_text') ? { done: 0.05, achieved: 0.05, tool: 'select_text', target: (element: ViewElement) => element.name === 'Document', selectText: 'confirmed' } : !view.history.some(entry => entry.element?.includes('Bold')) ? { tool: 'click', target: (element: ViewElement) => element.name === 'Bold' } : { done: 0.99, achieved: 0.99, tool: 'none' };
+    const result = (await suite([spec], { policy, helper: view => !view.history.some(entry => entry.action === 'select_text') ? { outcome: 'act', tool: 'select_text', element: view.elements.find(element => element.name === 'Document')?.i ?? null, value_key: null, text: view.pendingProposal?.text === 'confirmed' ? 'confirmed' : 'ship confirmed', reason: 'Select the supplied text before applying its requested formatting' } : { outcome: 'act', tool: 'click', element: view.elements.find(element => element.name === 'Bold')?.i ?? null, value_key: null, text: null, reason: 'Apply bold to the selected text' } }).run).results[0]!;
+    expect(result.status, result.summary).toBe('passed');
+    expect(result.attempts[0]?.steps[0]?.actions?.[1]?.value).toBe('"confirmed"');
+});
+
+it.each([false, true])('fresh shows the undelivered view proposal to completion recovery (%s)', async (broken) => {
+    const spec: TestSpec<void> = { id: `fresh-pending-view-${broken}`, title: 'Save then open the requested view', risk: 'A renamed save summary is mistaken for an already opened view', start: `/completion-list${broken ? '?bug=empty' : ''}`, steps: () => [act('Save the entry, then open the Saved entries view'), verify('view actually opened', ({ page }) => page.locator('#tab').getAttribute('aria-pressed').then(value => value === 'true'), { timeoutMs: 1 }), verify('entry present in that view', ({ page }) => page.locator('#panel').textContent().then(value => value === 'Saved entriesField notes'), { timeoutMs: 1 })] };
+    const policy = (view: View) => view.history.some(entry => entry.element?.includes('Saved entries')) ? { done: 0.99, achieved: 0.99, needed: 0, tool: 'none' } : view.history.length ? { done: 0.79, achieved: 0.23, remaining: 0.71, needed: 0.71, tool: 'click', target: (element: ViewElement) => element.name?.startsWith('Saved entries') === true } : { tool: 'click', target: (element: ViewElement) => element.name === 'Save entry' };
+    const result = (await suite([spec], { policy, helper: view => view.pendingProposal?.element?.includes('Saved entries') ? { outcome: 'act', tool: 'click', element: view.elements.find(element => element.name?.startsWith('Saved entries'))?.i ?? null, value_key: null, text: null, reason: 'The proposed view action is pending, not part of successful history' } : { outcome: 'step_already_done', completion_proof: 'activation_history', tool: null, element: null, value_key: null, text: null, reason: 'The save summary appears to show that the requested view is open' } }).run).results[0]!;
+    expect(result.status, result.summary).toBe(broken ? 'failed' : 'passed');
+    expect(result.attempts[0]?.steps[0]?.actions).toHaveLength(2);
+    if (broken) { expect(result.cause).toBe('product'); expect(result.summary).toContain('entry present in that view'); }
+});
+
+it('fresh retains the pending input when recovery reads page instructions', async () => {
+    const spec: TestSpec<void> = { id: 'fresh-pending-page-input', title: 'Enter before submitting', risk: 'A helper submits instead of resolving the missing authorized page value', start: '/surface-labels', steps: () => [act('Store the entry as the page instructs'), verify('stored', ({ page }) => page.locator('#status').textContent().then(value => value === 'Entry stored'), { timeoutMs: 1 })] };
+    const policy = (view: View) => view.notices.includes('Entry stored') ? { done: 0.99 } : view.elements.some(element => element.name === 'Cost' && element.value === '17.25') ? { tool: 'click', target: (element: ViewElement) => element.name === 'Store entry' } : { tool: 'type', target: (element: ViewElement) => element.name === 'Cost', inputSource: 'step' as const, error: view.notices.includes('Could not store entry') ? 0.96 : 0 };
+    const result = (await suite([spec], { policy, helper: view => view.pendingProposal?.action === 'type' ? { outcome: 'act', tool: 'type', element: view.elements.find(element => element.name === 'Cost')?.i ?? null, value_key: null, text: '17.25', reason: 'Resolve the pending input from the exact instructions on the page' } : { outcome: 'act', tool: 'click', element: view.elements.find(element => element.name === 'Store entry')?.i ?? null, value_key: null, text: null, reason: 'Perform the required final submission' } }).run).results[0]!;
+    expect(result.status, result.summary).toBe('passed');
+    expect(result.attempts[0]?.steps[0]?.actions?.[0]?.tool).toBe('type');
+});
+
+it('fresh provides exact field delivery proofs during an uncertain extra-control review', async () => {
+    const spec: TestSpec<void> = { id: 'fresh-control-field-evidence', title: 'Edit fields without committing', risk: 'An uncertain unrelated control negates code-observed field edits', start: '/fresh-edit', data: { alias: 'Pending alias', notes: 'Opening passage\n\nFinal passage' }, steps: () => [act('Change Alias to {alias} and Notes to {notes}'), verify('exact uncommitted fields', async ({ page }) => await page.getByRole('textbox', { name: 'Alias' }).inputValue() === 'Pending alias' && await page.getByRole('textbox', { name: 'Notes' }).inputValue() === 'Opening passage\n\nFinal passage' && await page.locator('#commits').textContent() === '0', { timeoutMs: 1 })] };
+    const policy = (view: View) => {
+        if (view.proposal) { return { onTarget: 0.49 }; }
+        if (view.control) { return { needed: 0.01 }; }
+        if (view.history.filter(entry => entry.action === 'type').length < 2) { return { ...freshEditPolicy(view), delivered: 0 }; }
+        const weight = (element: ViewElement) => element.role === 'textbox' && element.name === 'Notes' ? 0.48 : element.role === 'textbox' && element.name === 'Alias' ? 0.32 : element.name === 'Commit entry' ? 0.14 : 0.01;
+        const total = Object.keys(JSON.parse(view.instructions ?? '{}').target?.criteria ?? {}).reduce((sum, key) => sum + weight(view.elements.find(element => element.i === Number(key))!), 0);
+        return { done: 0.96, achieved: 0.94, remaining: 0.04, needed: 0.01, tool: 'none', targetProbability: (element: ViewElement) => weight(element) / total };
+    };
+    const result = (await suite([spec], { policy, helper: view => view.control ? { activation: view.deliveryProofs?.includes('field_edits') ? 'finished' : 'activate', reason: 'Review whether the exact field edits require this final control' } : { outcome: 'step_already_done', tool: null, element: null, value_key: null, text: null, reason: 'Both fields already contain the requested values' } }).run).results[0]!;
+    expect(result.status, result.summary).toBe('passed');
+    expect(result.attempts[0]?.steps[0]?.actions).toHaveLength(2);
+});
+
 it('fresh reviews an already delivered UI activation without requiring a declared write', async () => {
     const spec: TestSpec<void> = { id: 'fresh-delivered-activation', title: 'Commit once after editing', risk: 'Missing a declared request proof repeats a delivered final control', start: '/fresh-edit', data: { alias: 'Pending alias', notes: 'Entry notes' }, steps: () => [act('Change Alias to {alias} and Notes to {notes}, then commit the entry'), verify('one commit', ({ page }) => page.locator('#commits').textContent().then(text => text === '1'))] };
     const policy = (view: View) => view.history.some(entry => entry.element?.includes('Commit entry')) ? { done: 0.83, achieved: 0.63, remaining: 0.57, needed: 0.32, tool: 'click', target: (element: ViewElement) => element.name === 'Commit entry', delivered: 0.01 } : freshEditPolicy(view);

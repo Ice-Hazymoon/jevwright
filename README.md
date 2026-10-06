@@ -189,6 +189,7 @@ A helper output generation or parsing failure is reported as `model`. Review the
 | Secret input fails with a password-purpose message | Use a password field, or declare `secret(value, { purpose: 'any' })` for an API key or another editable field. |
 | Fresh replay misses transient or form-value anchors | Re-record with the current engine. New anchors exclude toast children, clipped identities and fields the step did not edit. |
 | A recorded edit submits or adds an extra paragraph | Record again with `--mode ai`. Current completion reviews check exact edits, real paragraph blocks, successful UI activations and declared requests before further work; requested commits and later views remain separate action clauses. |
+| Recovery formats the whole field or submits before entering a page value | Record again with `--mode ai`. Recovery now receives the pending input or exact selection separately from successful history. Keep code `verify` checks for exact formatting and persisted values. |
 | `check` steps show as unverified | The recording lacks sufficient direct evidence, the claim changed, or it uses a runtime reference. Run in auto mode to judge it; use `verify` for exact absence or reference checks. |
 | `env` is `unknown` in fixtures | Declare its type once through `Register`; see [Starting the app per run](https://github.com/Ice-Hazymoon/jevwright/blob/main/docs/configuration.md#starting-the-app-per-run). |
 
