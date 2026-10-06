@@ -272,10 +272,18 @@ it('fresh preserves an authorized repeat before a different pending control', as
 
 it.each([0.29, 0.89])('fresh rejects an unrequested commit when a finished stage still proposes activation (%s)', async (done) => {
     const spec: TestSpec<void> = { id: `fresh-competing-commit-${Math.round(done * 100)}`, title: 'Edit a draft', risk: 'An activation overrides a completed edit stage', start: '/fresh-edit', data: { alias: 'Pending alias', notes: 'Opening passage\n\nFinal passage' }, steps: () => [act('Change Alias to {alias} and Notes to {notes}'), verify('draft remains uncommitted', ({ page }) => page.locator('#commits').textContent().then(text => text === '0'), { timeoutMs: 1 })] };
-    const policy = (view: View) => view.history.some(entry => entry.value === 'notes') ? { done, achieved: done < 0.5 ? 0.2 : 0.79, remaining: 0.51, needed: 0.59, tool: 'click', target: (element: ViewElement) => element.name === 'Commit entry', delivered: 0.99 } : freshEditPolicy(view);
+    let auditedFields = false;
+    const policy = (view: View) => {
+        if (view.proposal) {
+            auditedFields = Boolean(view.auditContext?.delivery_proofs?.field_edits);
+            return { onTarget: auditedFields ? 0.01 : 0.59 };
+        }
+        return view.history.some(entry => entry.value === 'notes') ? { done, achieved: done < 0.5 ? 0.2 : 0.79, remaining: 0.51, needed: 0.59, tool: 'click', target: (element: ViewElement) => element.name === 'Commit entry', delivered: 0.99 } : freshEditPolicy(view);
+    };
     const result = (await suite([spec], { policy }).run).results[0]!;
     expect(result.status, result.summary).toBe('passed');
     expect(result.attempts[0]?.steps[0]?.actions).toHaveLength(2);
+    expect(auditedFields).toBe(true);
 });
 
 it('fresh reviews an exact authored literal without requiring a data key', async () => {
