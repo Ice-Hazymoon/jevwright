@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Audit a top-ranked untouched control as a pending activation when Jev answers none but the completion review still wants an activation, so a helper "already done" cannot skip a requested view (for example "save, then open the list").
+
 - Reject punctuation-separated actions in single-click initiation completion so a later dialog choice cannot hide unfinished current work.
 
 - End a single requested click at its causal deferred-choice dialog after an independent target audit; retain compound instructions, repetitions and uncertain target scope for normal recovery. Code checks still decide effects.

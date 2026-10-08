@@ -612,9 +612,12 @@ async function decideLoop(input: ActInput, models: Models, actions: ActionRecord
                     const pendingTarget = decision.target;
                     const concreteActivation = pendingTarget && ACTIVATION_ROLES.has(pendingTarget.role) && ['click', 'double_click', 'press_enter', 'select'].includes(decision.tool) && targetConfidence >= priority;
                     const pendingActivations = pendingTarget ? actions.filter(action => action.ok && actionTargets.get(action) === (pendingTarget.connectedRef ?? pendingTarget.ref) && ['click', 'double_click', 'press_enter', 'select'].includes(action.tool)).map(action => ({ action: action.tool, element: action.element ?? describeElement(pendingTarget) })) : [];
-                    const authorized = concreteActivation && !pendingActivations.length ? (await auditAction(decision, pendingActivations))[0] ?? 0 : 0;
+                    // Jev may rank an untouched control first while answering none; after earlier activations, a review that still wants one makes it a pending candidate. Field-edit proofs request no commit.
+                    const inferred = !concreteActivation && decision.tool === 'none' && (help.proof === 'activation_history' || help.proof === 'declared_write') && controlCandidate && !activations.length && (reviewNeeded ?? 0) >= 0.5 ? { tool: 'click' as const, target: controlCandidate, source: 'jev' as const } : undefined;
+                    const authorized = concreteActivation && !pendingActivations.length ? (await auditAction(decision, pendingActivations))[0] ?? 0 : inferred ? (await auditAction(inferred))[0] ?? 0 : 0;
                     // A selected code proof cannot erase a separately authorized, undelivered current-step control.
                     if (authorized >= 0.75) {
+                        if (inferred) { decision = inferred; trace.tool = 'click'; trace.target = describeElement(inferred.target); trace.pTool = 1; trace.pTarget = round2(target?.probabilities[String(inferred.target.i)] ?? 0); }
                         canFinish = false;
                         reviewedPendingAction = true;
                         controlCandidate = undefined;

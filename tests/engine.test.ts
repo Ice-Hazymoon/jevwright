@@ -185,6 +185,30 @@ it('fresh provides exact field delivery proofs during an uncertain extra-control
     expect(result.attempts[0]?.steps[0]?.actions).toHaveLength(2);
 });
 
+it.each(['healthy', 'empty', 'uncertain', 'unrequested', 'delivered'])('fresh audits a grounded none candidate before helper completion (%s)', async (variant) => {
+    const spec: TestSpec<void> = { id: `fresh-none-pending-${variant}`, title: 'Save before opening the requested list', risk: 'A none tool lets helper completion erase a grounded pending view', start: `/completion-list?bug=fallback${variant === 'empty' ? '&empty=1' : ''}`, steps: () => [act(variant === 'unrequested' ? 'Save the entry' : 'Save the entry, then open the Saved entries view'), verify('view boundary', ({ page }) => page.locator('#tab').getAttribute('aria-pressed').then(value => value === (variant === 'unrequested' ? 'false' : 'true')), { timeoutMs: 1 }), ...(variant === 'unrequested' ? [] : [verify('entry in opened view', ({ page }) => page.locator('#panel').textContent().then(value => value === 'Saved entriesField notes'), { timeoutMs: 1 })])] };
+    const policy = (view: View) => {
+        if (view.proposal) { return { onTarget: variant === 'uncertain' ? 0.49 : variant === 'unrequested' ? 0.01 : view.proposal.element?.includes('Saved entries') ? 0.99 : 0.01 }; }
+        const opened = view.history.some(entry => entry.element?.includes('Saved entries'));
+        if (opened && variant !== 'delivered') { return { done: 0.99, achieved: 0.99, needed: 0, tool: 'none' }; }
+        if (!view.history.length) { return { tool: 'click', target: (element: ViewElement) => element.name === 'Save entry' }; }
+        return { done: 0.9, achieved: 0.41, remaining: 0.52, needed: 0.67, tool: variant === 'delivered' && !opened ? 'click' : 'none', pTool: 0.9, pTarget: 0.89, target: (element: ViewElement) => element.name?.startsWith('Saved entries') === true };
+    };
+    const result = (await suite([spec], { policy, helper: () => ({ outcome: 'step_already_done', completion_proof: 'activation_history', tool: null, element: null, value_key: null, text: null, reason: 'The successful save and page title appear to prove the list is open' }) }).run).results[0]!;
+    expect(result.status, result.summary).toBe(['healthy', 'unrequested', 'delivered'].includes(variant) ? 'passed' : 'failed');
+    expect(result.attempts[0]?.steps[0]?.actions).toHaveLength(['uncertain', 'unrequested'].includes(variant) ? 1 : 2);
+    if (variant === 'uncertain') { expect(result.cause).toBe('agent'); }
+    if (variant === 'empty') { expect(result.cause).toBe('product'); expect(result.summary).toContain('entry in opened view'); }
+});
+
+it('fresh does not infer a none activation for an already satisfied checked state', async () => {
+    const spec: TestSpec<void> = { id: 'fresh-none-satisfied-state', title: 'Retain an already enabled setting', risk: 'A high-ranked target toggles a satisfied state after another action', start: '/completion-list?bug=fallback&checked=1', steps: () => [act('Save the entry, then ensure Digest notices is checked'), verify('setting retained', ({ page }) => page.locator('#digest').isChecked(), { timeoutMs: 1 })] };
+    const policy = (view: View) => view.proposal ? { onTarget: 0.99 } : view.history.length ? { done: 0.9, achieved: 0.41, remaining: 0.52, needed: 0.09, tool: 'none', pTarget: 0.89, target: (element: ViewElement) => element.name === 'Digest notices' } : { tool: 'click', target: (element: ViewElement) => element.name === 'Save entry' };
+    const result = (await suite([spec], { policy, helper: () => ({ outcome: 'step_already_done', completion_proof: 'activation_history', tool: null, element: null, value_key: null, text: null, reason: 'The entry is saved and the requested checked state was already satisfied' }) }).run).results[0]!;
+    expect(result.status, result.summary).toBe('passed');
+    expect(result.attempts[0]?.steps[0]?.actions).toHaveLength(1);
+});
+
 it.each(['healthy', 'empty', 'uncertain', 'unrequested'])('fresh audits a concrete pending control before accepting helper completion (%s)', async (variant) => {
     const spec: TestSpec<void> = { id: `fresh-helper-completion-audit-${variant}`, title: 'Keep completion behind pending controls', risk: 'A helper completion bypasses an undelivered requested view', start: `/completion-list${variant === 'empty' ? '?bug=empty' : ''}`, steps: () => [act(variant === 'unrequested' ? 'Save the entry' : 'Save the entry, then open the Saved entries view'), verify('view boundary', ({ page }) => page.locator('#tab').getAttribute('aria-pressed').then(value => value === (variant === 'unrequested' ? 'false' : 'true')), { timeoutMs: 1 }), ...(variant === 'unrequested' ? [] : [verify('entry in opened view', ({ page }) => page.locator('#panel').textContent().then(value => value === 'Saved entriesField notes'), { timeoutMs: 1 })])] };
     const policy = (view: View) => {
