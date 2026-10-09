@@ -617,6 +617,10 @@ async function decideLoop(input: ActInput, models: Models, actions: ActionRecord
                     // Jev's own confident input into an untouched field is pending work, not something a helper summary can declare unnecessary.
                     const typedTarget = decision.tool === 'type' && proposedAction && decision.target && (decision.valueKey !== undefined || decision.literal !== undefined || decision.template !== undefined) ? decision.target : undefined;
                     const pendingInput = typedTarget && !actions.some(action => action.ok && action.tool === 'type' && actionTargets.get(action) === (typedTarget.connectedRef ?? typedTarget.ref));
+                    // A confident input with no authorized value yet is unresolved work; the helper summary cannot turn it into a product verdict.
+                    if (noInput && proposedAction && decision.target && !actions.some(action => action.ok && action.tool === 'type' && actionTargets.get(action) === (decision.target!.connectedRef ?? decision.target!.ref))) {
+                        return { status: 'failed', failure: 'ambiguous', reason: 'Helper completion conflicts with a confident pending input whose value is unresolved' };
+                    }
                     const authorized = concreteActivation && !pendingActivations.length ? (await auditAction(decision, pendingActivations))[0] ?? 0 : inferred ? (await auditAction(inferred))[0] ?? 0 : pendingInput ? (await auditAction(decision))[0] ?? 0 : 0;
                     // A selected code proof cannot erase a separately authorized, undelivered current-step control.
                     if (authorized >= 0.75) {
@@ -1449,7 +1453,8 @@ async function escalateToLlm(input: ActInput, models: Models, observation: Obser
     if (answer.tool && !Object.hasOwn(available, answer.tool)) { return { outcome: 'impossible', rejectedAction: answer.outcome === 'act', reason: 'Helper chose an unavailable tool' }; }
     if (answer.outcome !== 'act' || !answer.tool) { return { outcome: answer.outcome === 'step_already_done' ? 'done' : 'impossible', rejectedAction: answer.outcome === 'act', reason: answer.reason, ...(answer.completion_proof && Object.hasOwn(proofs, answer.completion_proof) ? { proof: answer.completion_proof } : {}) }; }
     const target = answer.element !== null ? observation.elements[answer.element] : undefined;
-    if (TARGETED.has(answer.tool) && ((!target?.ref && !target?.reveal) || target.disabled)) { return { outcome: 'impossible', rejectedAction: true, reason: `helper chose an unusable element: ${answer.reason}` }; }
+    // A wrong element index is a retryable recovery mistake; only authorization rejections end the step.
+    if (TARGETED.has(answer.tool) && ((!target?.ref && !target?.reveal) || target.disabled)) { return { outcome: 'impossible', reason: `helper chose an unusable element: ${answer.reason}` }; }
     if (answer.tool === 'press') {
         // A supplied control-key name has no text operand; do not infer a key from prose or private data.
         if (!answer.key && answer.value_key === null && ['Enter', 'Escape'].includes(answer.text ?? '') && !input.redact?.contains(answer.text ?? '')) {

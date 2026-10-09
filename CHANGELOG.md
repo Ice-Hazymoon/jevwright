@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Treat a helper's wrong element choice as a retryable recovery mistake again; only authorization rejections end the step. A helper "already done" no longer overrides a confident pending input whose value is unresolved; that step fails as agent.
 - Keep Jev's confident, audited input into an untouched field ahead of a helper "already done" (for example "delete it, then search for its name").
 - Audit a top-ranked untouched control as a pending activation when Jev answers none but the completion review still wants an activation, so a helper "already done" cannot skip a requested view (for example "save, then open the list").
 
