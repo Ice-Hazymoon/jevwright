@@ -1,6 +1,16 @@
 # Changelog
 
-## Unreleased
+## 0.7.0
+
+Highlights:
+
+- Breaking: `--mode replay` no longer passes skipped checks. A check passes in replay only when its recorded evidence is still visible; checks without evidence report `unverified` and fail the run unless `--allow-unverified` is passed. Re-record with an auto run to add evidence. Recordings from 0.1.x–0.6.0 replay with their original end-state semantics.
+- Breaking: `secret(value)` defaults to password fields only; use `secret(value, { purpose: 'any' })` for other fields.
+- Replay integrity: every recorded end-state anchor must hold and must be caused by the replayed step; routes are bound to the run's baseURL; new errors during replay fail the step; volatile content (toasts, truncated IDs, counters, fields the step did not edit) is not recorded as an anchor.
+- Reach: arbitrary key chords, text selection, drag with pointer sequences, React/Vue delegated gestures, scroll search inside windowed lists, visible-label precedence.
+- One action-authorization rule for decisions, audits and helper recovery: named elements, the necessary final control for a requested committed result, requested views and blocking overlays.
+
+Details:
 
 - Apply a helper's authorized input to Jev's grounded field when the helper names an unusable element for the same typing action.
 - Treat a helper's wrong element choice as a retryable recovery mistake again; only authorization rejections end the step. A helper "already done" no longer overrides a confident pending input whose value is unresolved; that step fails as agent.
