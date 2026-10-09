@@ -201,6 +201,20 @@ it.each(['healthy', 'empty', 'uncertain', 'unrequested', 'delivered'])('fresh au
     if (variant === 'empty') { expect(result.cause).toBe('product'); expect(result.summary).toContain('entry in opened view'); }
 });
 
+it('fresh keeps an audited pending input ahead of helper completion', async () => {
+    const variant = 'requested' as string;
+    const spec: TestSpec<void> = { id: `fresh-pending-input-${variant}`, title: 'Search after saving', risk: 'A helper completion skips a confident, undelivered requested input', start: '/completion-list?bug=fallback&search=1', data: { query: 'Field notes' }, steps: () => [act(variant === 'requested' ? 'Save the entry, then search for {query}' : 'Save the entry'), verify('search boundary', ({ page }) => page.locator('#search').inputValue().then(value => value === (variant === 'requested' ? 'Field notes' : '')), { timeoutMs: 1 })] };
+    const policy = (view: View) => {
+        if (view.proposal) { return { onTarget: variant === 'requested' ? 0.99 : 0.01 }; }
+        if (!view.history.length) { return { tool: 'click', target: (element: ViewElement) => element.name === 'Save entry' }; }
+        if (view.history.some(entry => entry.action === 'type')) { return { done: 0.99, achieved: 0.99, needed: 0, tool: 'none' }; }
+        return { done: 0.93, achieved: 0.41, remaining: 0.52, needed: 0.1, tool: 'type', pTool: 0.93, pTarget: 0.99, target: (element: ViewElement) => element.name === 'Search entries', value: 'query' };
+    };
+    const result = (await suite([spec], { policy, helper: () => ({ outcome: 'step_already_done', completion_proof: 'activation_history', tool: null, element: null, value_key: null, text: null, reason: 'The entry is saved, so no search is needed' }) }).run).results[0]!;
+    expect(result.status, result.summary).toBe('passed');
+    expect(result.attempts[0]?.steps[0]?.actions).toHaveLength(variant === 'requested' ? 2 : 1);
+});
+
 it('fresh does not infer a none activation for an already satisfied checked state', async () => {
     const spec: TestSpec<void> = { id: 'fresh-none-satisfied-state', title: 'Retain an already enabled setting', risk: 'A high-ranked target toggles a satisfied state after another action', start: '/completion-list?bug=fallback&checked=1', steps: () => [act('Save the entry, then ensure Digest notices is checked'), verify('setting retained', ({ page }) => page.locator('#digest').isChecked(), { timeoutMs: 1 })] };
     const policy = (view: View) => view.proposal ? { onTarget: 0.99 } : view.history.length ? { done: 0.9, achieved: 0.41, remaining: 0.52, needed: 0.09, tool: 'none', pTarget: 0.89, target: (element: ViewElement) => element.name === 'Digest notices' } : { tool: 'click', target: (element: ViewElement) => element.name === 'Save entry' };
