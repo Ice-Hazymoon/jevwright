@@ -1453,6 +1453,11 @@ async function escalateToLlm(input: ActInput, models: Models, observation: Obser
     if (answer.tool && !Object.hasOwn(available, answer.tool)) { return { outcome: 'impossible', rejectedAction: answer.outcome === 'act', reason: 'Helper chose an unavailable tool' }; }
     if (answer.outcome !== 'act' || !answer.tool) { return { outcome: answer.outcome === 'step_already_done' ? 'done' : 'impossible', rejectedAction: answer.outcome === 'act', reason: answer.reason, ...(answer.completion_proof && Object.hasOwn(proofs, answer.completion_proof) ? { proof: answer.completion_proof } : {}) }; }
     const target = answer.element !== null ? observation.elements[answer.element] : undefined;
+    // A wrong index for the same input keeps Jev's grounded field; the value still passes authorization.
+    if (answer.tool === 'type' && proposed?.tool === 'type' && proposed.target && FIELD_ROLES.has(proposed.target.role) && (!target || (!target.ref && !target.reveal) || target.disabled)) {
+        const authorized = helperText(answer, input, observation);
+        if (Object.keys(authorized).length) { return { outcome: 'act', decision: { ...proposed, ...authorized, source: 'llm' }, reason: 'Helper input applied to the proposed editable field' }; }
+    }
     // A wrong element index is a retryable recovery mistake; only authorization rejections end the step.
     if (TARGETED.has(answer.tool) && ((!target?.ref && !target?.reveal) || target.disabled)) { return { outcome: 'impossible', reason: `helper chose an unusable element: ${answer.reason}` }; }
     if (answer.tool === 'press') {
