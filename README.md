@@ -122,6 +122,7 @@ Each run writes a directory under `.jevwright/runs/`:
 | `junit.xml` | CI test results grouped by module; flaky evidence remains in system-out |
 | `report.md` | Failures grouped by cause, each with a command that reproduces it |
 | `summary.json`, `run.json` | Results and the run manifest: git commit, mode, models, command |
+| `run.log` | The console log with time offsets, written while the run goes, so a run that was killed still shows where it was |
 | `<test>/attempt-N/` | Per-step screenshots, `result.json`, and `trace.zip` (`npx playwright show-trace`) |
 
 | Cause | Meaning | Look first at |
@@ -177,6 +178,7 @@ A helper output generation or parsing failure is reported as `model`. Review the
 
 | Message or symptom | What to do |
 | --- | --- |
+| A run seems stuck | After 60 seconds without output the run logs which tests are running and the last thing each did; `run.log` in the run directory holds the same. A test never outlives its `timeoutMs`; a slow `setup` reports itself every 30 seconds. |
 | `Nothing answers at http://…` | Start the app, correct `baseURL`, or give the config a `setup` function that starts it. |
 | `Playwright's Chromium is not installed` | Run `npx playwright install chromium` (in CI, add `--with-deps`). |
 | `No model key found` | Set `OPENROUTER_API_KEY` or `VERCEL_AI_GATEWAY_API_KEY`, or pass `--env-file`. `--mode replay` and `--dry-run` need no key. |

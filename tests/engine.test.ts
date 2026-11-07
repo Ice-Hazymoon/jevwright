@@ -11,6 +11,7 @@ import { runFailureExitCode } from '../src/cli.ts';
 import { act, check, reload, run, runSuite, secret, verify } from '../src/index.ts';
 import { describePageValue, pageValueChoices, readPageValue } from '../src/page-values.ts';
 import { createRedactor } from '../src/secrets.ts';
+import { artifactDirectory } from '../src/suite.ts';
 import { startFixtureApp } from './fixtures/app.ts';
 import { deferredPolicy, fixturePolicy, freshEditPolicy, freshSectionPolicy, gestureNavigationPolicy, integrityPolicy, reservationPolicy, reservationScopePolicy, savedViewPolicy, singlePageSearchPolicy } from './support/fixture-policy.ts';
 import { scriptedModels } from './support/scripted-models.ts';
@@ -2746,4 +2747,43 @@ it('does not replay positive fragments as proof of a negative clause', async () 
     expect(seeded.status, seeded.summary).toBe('passed');
     const replayed = (await suite([spec(true)], { recordingsDir: directory, mode: 'replay' }).run).results[0]!;
     expect(replayed.status, replayed.summary).toBe('unverified');
+});
+
+describe('hard attempt deadline', () => {
+    const hung = (id: string, overrides: Partial<TestSpec<void>>): TestSpec<void> => ({ id, title: 'Hang', risk: 'A stuck call keeps the run from ever finishing', start: '/profile', timeoutMs: 3000, steps: () => [verify('never runs', () => true)], ...overrides });
+    const finishes = async (spec: TestSpec<void>) => {
+        const started = Date.now();
+        const result = (await suite([spec]).run).results[0]!;
+        return { result, seconds: (Date.now() - started) / 1000 };
+    };
+
+    it('ends a test whose verify callback never settles', async () => {
+        const { result, seconds } = await finishes(hung('hang-verify', { steps: () => [verify('answers eventually', () => new Promise<boolean>(() => {}))] }));
+        expect(result.status).toBe('failed');
+        expect(result.cause, result.summary).toBe('timeout');
+        expect(result.summary).toContain('step 1');
+        expect(result.summary).toContain('answers eventually');
+        expect(result.attempts[0]?.steps[0]).toMatchObject({ status: 'failed', failure: 'timeout' });
+        expect(seconds).toBeLessThan(20);
+    });
+
+    it('keeps a run log in the run directory', async () => {
+        const summary = await suite([hung('logged', {})]).run;
+        const log = await readFile(join(artifactDirectory(summary), 'run.log'), 'utf8');
+        expect(log).toMatch(/s ▶ logged\n/);
+        expect(log).toContain('[logged]   1. Verify: never runs');
+    });
+
+    it('ends a test whose fixture never settles', async () => {
+        const { result, seconds } = await finishes(hung('hang-fixture', { fixture: () => new Promise<void>(() => {}) }));
+        expect(result.cause, result.summary).toBe('timeout');
+        expect(result.summary).toContain('fixture');
+        expect(seconds).toBeLessThan(20);
+    });
+
+    it('ends a test whose page stops answering', async () => {
+        const { result, seconds } = await finishes(hung('hang-frozen-page', { start: '/frozen' }));
+        expect(result.cause, result.summary).toBe('timeout');
+        expect(seconds).toBeLessThan(25);
+    });
 });

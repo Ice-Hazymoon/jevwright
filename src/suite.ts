@@ -11,12 +11,14 @@ import { join, relative } from 'node:path';
 import { promisify } from 'node:util';
 import { writeArtifact } from './artifacts.ts';
 import { launchBrowser } from './browser.ts';
+import { TIMED_OUT, within } from './deadline.ts';
 import { resolveDevice } from './devices.ts';
 import { JevwrightError } from './errors.ts';
 import { resolveFiles } from './files.ts';
 import { addUsage, createRunBudget, emptyUsage, modelIds, runBudgetMessage } from './models.ts';
 import { assertReachable, checkedOrigin } from './origin.ts';
 import { changedActionSteps, createRecordingStore, learnedRecording } from './recording.ts';
+import { createRunLog } from './progress.ts';
 import { writeReports } from './report.ts';
 import { createRedactor, forResults } from './secrets.ts';
 import { assertValidTests, testSelectionKey } from './select.ts';
@@ -177,7 +179,8 @@ export async function runSuite(specs: ReadonlyArray<TestSpec<unknown>>, options:
     const runBudget = models && options.maxCostUsd !== undefined ? createRunBudget(options.maxCostUsd) : undefined;
     const store = createRecordingStore(options.recordingsDir);
     const output = options.log ?? ((line: string) => process.stderr.write(`${line}\n`));
-    const log = (line: string) => output(redact.text(line));
+    const runLog = createRunLog(output);
+    const log = (line: string) => runLog.log(redact.text(line));
     const signal = options.signal ?? new AbortController().signal;
     const startedAt = new Date().toISOString();
     const git = await gitState();
@@ -187,6 +190,14 @@ export async function runSuite(specs: ReadonlyArray<TestSpec<unknown>>, options:
     log(`jevwright run ${runId} (${mode}, ${specs.length} tests) → ${relative(process.cwd(), directory)}`);
 
     const blocked: string[] = [];
+    // Written as the run goes, so a run that hangs or is killed still leaves its log behind.
+    let logged = '';
+    const flushLog = async () => {
+        const text = runLog.text();
+        if (text !== logged) { logged = text; await writeArtifact(join(directory, 'run.log'), text, redact).catch(() => undefined); }
+    };
+    const heartbeat = setInterval(() => { runLog.heartbeat(); void flushLog(); }, 15_000);
+    heartbeat.unref();
     const { browser, close } = await launchBrowser({ allowedOrigins: [origin, ...allowedOrigins], headless: options.headless, onBlocked: url => blocked.push(url) });
     const results: TestResult[] = [];
     const summary = (): RunSummary => ({ manifest, results: [...results], totals: totals(results), directory });
@@ -213,7 +224,10 @@ export async function runSuite(specs: ReadonlyArray<TestSpec<unknown>>, options:
         };
         await Promise.all(Array.from({ length: Math.max(1, Math.min(manifest.concurrency, specs.length)) }, worker));
     } finally {
-        await close();
+        clearInterval(heartbeat);
+        // A wedged browser must not keep the run from reporting; the CLI's exit grace reaps what is left.
+        if (await within(close(), 15_000).catch(() => undefined) === TIMED_OUT) { log('browser did not close within 15 s; continuing'); }
+        await flushLog();
         manifest.finishedAt = new Date().toISOString();
         if (signal.aborted) { manifest.cancelled = true; }
         if (blocked.length) { manifest.blockedRequests = [...new Set(blocked)].slice(0, 50); }
@@ -266,7 +280,7 @@ export async function runSuite(specs: ReadonlyArray<TestSpec<unknown>>, options:
 
     /** One logged attempt; whatever it learned (AI or healed steps) is saved to the recording. */
     async function runAttempt(spec: TestSpec<unknown>, recording: TestRecording | undefined, attempt: number, fresh: boolean): Promise<{ result: AttemptResult; saved: boolean; changed: number[] }> {
-        log(`▶ ${spec.id}${attempt > 1 ? ` (attempt ${attempt})` : ''}`);
+        runLog.begin(spec.id, redact.text(`▶ ${spec.id}${attempt > 1 ? ` (attempt ${attempt})` : ''}`));
         const { result, recording: steps, recordedSteps } = await runTestAttempt(spec, {
             browser,
             redact,
@@ -291,8 +305,8 @@ export async function runSuite(specs: ReadonlyArray<TestSpec<unknown>>, options:
             locale: options.locale,
             timezone: options.timezone,
             failOnIssues: options.failOnIssues,
-            log: line => log(`[${spec.id}] ${line}`),
-        });
+            log: line => runLog.test(spec.id, redact.text(line)),
+        }).finally(() => runLog.end(spec.id));
         log(`${result.status === 'passed' ? '✓' : '✗'} ${spec.id} ${result.status}${result.cause ? ` (${result.cause})` : ''} ${(result.durationMs / 1000).toFixed(1)}s — ${result.summary}`);
         // Step indices, not recording positions: unrecorded steps leave gaps in the recording.
         const changed = steps ? changedActionSteps(recording, steps).map(position => recordedSteps![position]!) : [];

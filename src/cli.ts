@@ -6,6 +6,7 @@ import { basename, dirname, join, relative, resolve } from 'node:path';
 import { parseArgs, parseEnv } from 'node:util';
 import { writeArtifact } from './artifacts.ts';
 import { loadConfig } from './config.ts';
+import { TIMED_OUT, untilAborted, within } from './deadline.ts';
 import { resolveDevice } from './devices.ts';
 import { JevwrightError } from './errors.ts';
 import { lastFailedIds } from './last-failed.ts';
@@ -162,8 +163,11 @@ async function runCommand(flags: Flags, io: CliIO): Promise<number> {
     const redact = createRedactor(tests.flatMap(test => Object.values(test.secrets ?? {})));
     const log = (line: string) => io.stderr(`${redact.text(line)}\n`);
     const controller = new AbortController();
-    const unbind = bindCancellationSignals(controller, log);
     let teardown: SetupResult['teardown'];
+    let stopped: Promise<void> | undefined;
+    // Once only: a forced stop (second Ctrl-C) and the normal exit path may both reach it.
+    const stopApp = (limitMs = TEARDOWN_MS) => stopped ??= teardown ? runTeardown(teardown, log, limitMs) : Promise.resolve();
+    const unbind = bindCancellationSignals(controller, log, () => stopApp(FORCED_TEARDOWN_MS));
     try {
         const translationKeys = await loadTranslationKeys(loaded);
         const app = await startApp(loaded, flags, tests, controller.signal, log, (stop) => { teardown = stop; });
@@ -179,7 +183,7 @@ async function runCommand(flags: Flags, io: CliIO): Promise<number> {
         if (error instanceof Error) { error.message = redact.text(error.message); if (error.stack) { error.stack = redact.text(error.stack); } }
         throw error instanceof Error ? error : new Error(redact.text(String(error)));
     } finally {
-        if (teardown) { await runTeardown(teardown, log); }
+        await stopApp();
         unbind();
     }
 }
@@ -239,6 +243,10 @@ function suiteOptions(loaded: LoadedConfig, flags: Flags, app: Omit<SetupResult,
 
 /** How long teardown may take before the CLI stops waiting; a hung stop must not hang the run. */
 const TEARDOWN_MS = 30_000;
+/** Teardown's share after a second Ctrl-C: the user asked to stop now. */
+const FORCED_TEARDOWN_MS = 10_000;
+/** How often a slow `setup` reports that it is still running. */
+const SETUP_NOTICE_MS = 30_000;
 
 /**
  * `--base-url`, else the config's `setup`, else its `baseURL`. A teardown is handed to `onTeardown` as soon as
@@ -250,11 +258,16 @@ async function startApp(loaded: LoadedConfig, flags: Flags, tests: LoadedConfig[
     if (config.setup) {
         log('Starting the app (config setup)…');
         let result: SetupResult | undefined;
+        const started = Date.now();
+        const notice = setInterval(() => log(`Still starting the app (${Math.round((Date.now() - started) / 1000)} s)…`), SETUP_NOTICE_MS);
         try {
-            result = await config.setup({ tests, signal, log });
+            // Ctrl-C must stop the wait even when setup ignores its signal.
+            result = await untilAborted(config.setup({ tests, signal, log }), signal);
         } catch (error) {
             if (signal.aborted) { throw error; }
             throw new JevwrightError(`setup failed: ${error instanceof Error ? error.message : String(error)}`);
+        } finally {
+            clearInterval(notice);
         }
         if (typeof result?.teardown === 'function') { onTeardown(result.teardown); }
         return { baseURL: checkedOrigin(result?.baseURL, 'setup() baseURL'), env: result?.env, serverLog: result?.serverLog, metadata: result?.metadata };
@@ -263,16 +276,11 @@ async function startApp(loaded: LoadedConfig, flags: Flags, tests: LoadedConfig[
     throw new JevwrightError(`${basename(loaded.file)} needs a baseURL (an app that is already running) or a setup function that starts one; or pass --base-url.`);
 }
 
-async function runTeardown(teardown: NonNullable<SetupResult['teardown']>, log: (line: string) => void): Promise<void> {
-    let timer: NodeJS.Timeout | undefined;
-    const timeout = new Promise<'timeout'>((resolve) => { timer = setTimeout(resolve, TEARDOWN_MS, 'timeout'); });
+async function runTeardown(teardown: NonNullable<SetupResult['teardown']>, log: (line: string) => void, limitMs: number): Promise<void> {
     try {
-        const outcome = await Promise.race([Promise.resolve().then(teardown), timeout]);
-        if (outcome === 'timeout') { log(`teardown did not finish within ${TEARDOWN_MS / 1000} s; continuing without it`); }
+        if (await within(async () => teardown(), limitMs) === TIMED_OUT) { log(`teardown did not finish within ${limitMs / 1000} s; continuing without it`); }
     } catch (error) {
         log(`teardown failed: ${error instanceof Error ? error.message : String(error)}`);
-    } finally {
-        clearTimeout(timer);
     }
 }
 

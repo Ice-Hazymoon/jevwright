@@ -275,7 +275,7 @@ Every failed attempt gets one cause:
 | `agent` | No control matches the step; repeated actions without progress; a stale or missing recording in replay mode; an action on the wrong control |
 | `environment` | The fixture fails, the start page does not load, test code throws, a recording file is corrupt, or the app stops answering or fails to load its own code |
 | `model` | Gateway errors, or the call or cost budget ran out, including tests the run budget kept from starting |
-| `timeout` | The test exceeded `timeoutMs` (default 240 s) |
+| `timeout` | The test exceeded `timeoutMs` (default 240 s). The limit is enforced even on work that ignores it, such as a `verify` callback whose query never returns or a page whose main thread is stuck: the attempt is cut off, its browser context closed, and the summary names the step or phase still running |
 
 Thrown Node assertions and Playwright matcher errors inside `verify` are product assertions. Other
 exceptions remain environment failures; classification uses error types and matcher metadata.

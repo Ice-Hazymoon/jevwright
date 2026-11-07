@@ -75,7 +75,8 @@ export default defineConfig({
 ```
 
 - `tests` holds the tests this run selected; use it to warm up only their start pages.
-- `signal` aborts on Ctrl-C. A second Ctrl-C exits at once, without waiting for `teardown`.
+- `signal` aborts on Ctrl-C. The CLI stops waiting for `setup` at the first Ctrl-C even if it ignores `signal`, and logs `Still starting the app (N s)…` every 30 seconds while it runs.
+- A second Ctrl-C stops waiting for the tests and runs `teardown` (up to 10 seconds), so a server `setup` started is not left behind. A third exits at once.
 - `log` writes a progress line to stderr.
 - `--base-url <url>` skips `setup` and tests an app that is already running.
 

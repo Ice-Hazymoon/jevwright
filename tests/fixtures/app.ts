@@ -57,6 +57,9 @@ function escapeHtml(text: string): string {
 function pages(state: FixtureState, url: URL): string | undefined {
     const bug = url.searchParams.get('bug');
     switch (url.pathname) {
+        case '/frozen':
+            // Loads, then blocks the renderer's main thread for good: page.evaluate never answers.
+            return layout('Frozen page', '<p>Loaded</p>', 'setTimeout(() => { for (;;) { /* never yields */ } }, 50);');
         case '/fresh-edit':
             return layout('Entry draft', `<label>Alias<input id="alias" value="Initial"></label><label>Notes<textarea id="notes"></textarea></label>${url.searchParams.has('mirror') ? '<div id="mirror" style="white-space:pre-wrap"></div>' : ''}<button id="commit">Commit entry</button><output id="commits">0</output>${url.searchParams.has('keypress') ? '<output id="keys">0</output>' : ''}${bug ? '<div role="alert" data-type="warning">Review delivery preferences</div><div id="error"></div>' : ''}`, `
 ${url.searchParams.has('mirror') ? 'document.getElementById(\'notes\').oninput = () => { document.getElementById(\'mirror\').textContent = document.getElementById(\'notes\').value; };' : ''}

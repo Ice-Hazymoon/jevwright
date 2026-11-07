@@ -14,9 +14,11 @@ import { z } from 'zod';
 import { insertedText, pageChange, repeatsBlock } from '../src/act.ts';
 import { launchBrowser, newTestContext, perform, settle } from '../src/browser.ts';
 import { main } from '../src/cli.ts';
+import { TIMED_OUT, untilAborted, within } from '../src/deadline.ts';
 import { createModels, gatewayFromEnv } from '../src/models.ts';
 import { createMonitor, matchesWrite } from '../src/monitor.ts';
 import { buildObservation, observe } from '../src/observe.ts';
+import { createRunLog } from '../src/progress.ts';
 import { describeTarget, resolveTarget, stepKey } from '../src/recording.ts';
 import { serveReport } from '../src/serve.ts';
 import { fillTemplate, templateKeys } from '../src/spec.ts';
@@ -1818,5 +1820,41 @@ it('merge does not split protected editable values into formatted text fragments
         expect(named(observation, 'textbox', 'Document')[0]).not.toHaveProperty('formatting');
         expect(JSON.stringify(observation)).not.toContain('private-');
         expect(JSON.stringify(observation)).not.toContain('sequence-829173');
+    });
+});
+
+describe('bounded waits', () => {
+    it('stops waiting on work that ignores the abort signal', async () => {
+        const controller = new AbortController();
+        const waiting = untilAborted(new Promise(() => {}), controller.signal);
+        controller.abort(new Error('deadline'));
+        await expect(waiting).rejects.toThrow('deadline');
+    });
+
+    it('passes through work that settles before the abort', async () => {
+        await expect(untilAborted(async () => 'done', new AbortController().signal)).resolves.toBe('done');
+        await expect(untilAborted(Promise.reject(new Error('own failure')), new AbortController().signal)).rejects.toThrow('own failure');
+    });
+
+    it('gives best-effort work a time limit', async () => {
+        await expect(within(new Promise(() => {}), 20)).resolves.toBe(TIMED_OUT);
+        await expect(within(async () => 7, 1000)).resolves.toBe(7);
+    });
+});
+
+describe('run log', () => {
+    it('names the running test and its last line once the run goes quiet', () => {
+        const output: string[] = [];
+        const log = createRunLog(line => output.push(line), 1000);
+        log.begin('profile-save', '▶ profile-save');
+        log.test('profile-save', '  2. Save the profile');
+        log.heartbeat(Date.now() + 500);
+        expect(output).toHaveLength(2);
+        log.heartbeat(Date.now() + 2500);
+        expect(output.at(-1)).toMatch(/no output for [23]s; still running: profile-save \([23]s since "2\. Save the profile"\)/);
+        log.end('profile-save');
+        log.heartbeat(Date.now() + 9000);
+        expect(output.at(-1)).toContain('still running: between tests');
+        expect(log.text()).toContain('[profile-save]   2. Save the profile');
     });
 });

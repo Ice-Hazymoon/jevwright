@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Fix: a test could run forever and keep the CLI from exiting. `timeoutMs` was only checked between steps and by model calls, so a `fixture`, `ready`, `verify`, `run` or invariant callback that never settled, or a page whose main thread froze (`page.evaluate` has no timeout), hung the run. The attempt is now cut off at its deadline, its context closed, and the timeout summary names the step or phase still running; the step is recorded as a failed `timeout`.
+- Bound the remaining shutdown waits: trace saving (30 s), downloads (5 s), browser close (15 s).
+- `run.log` in each run directory: the console log with time offsets, rewritten every 15 seconds during the run.
+- After 60 seconds without output the run logs which tests are running and the last line each printed; a slow `setup` logs `Still starting the app` every 30 seconds, and the first Ctrl-C stops waiting for a `setup` that ignores its signal.
+- Ctrl-C ladder: the second press now runs `teardown` (up to 10 seconds) before exiting, so a dev server started by `setup` is not orphaned; the third exits at once.
+
 ## 0.7.0
 
 Highlights:
