@@ -177,8 +177,7 @@ async function runCommand(flags: Flags, io: CliIO): Promise<number> {
     const loaded = await loadConfig({ cwd: io.cwd, path: flags.config });
     const passes = passesFor(flags, parseMode(flags.mode), loaded.config.retries ?? 1);
     const { tests, leftOut } = await selectedTests(loaded, flags, io.env);
-    for (const test of leftOut?.tests ?? []) { io.stderr(`Left out ${test.id}: ${test.reason}\n`); }
-    if (!tests.length) { io.stdout(leftOut ? `0 tests affected by the changes since ${leftOut.changedSince}\n` : '0 tests selected\n'); return 0; }
+    if (nothingToRun(tests, leftOut, io)) { return 0; }
     const models = requiredModels(loaded, flags, passes, io.env);
     const redact = createRedactor(tests.flatMap(test => Object.values(test.secrets ?? {})));
     const log = (line: string) => io.stderr(`${redact.text(line)}\n`);
@@ -192,7 +191,7 @@ async function runCommand(flags: Flags, io: CliIO): Promise<number> {
         const translationKeys = await loadTranslationKeys(loaded);
         const app = await startApp(loaded, flags, tests, controller.signal, log, (stop) => { teardown = stop; });
         if (controller.signal.aborted) { return 130; }
-        const options = suiteOptions(loaded, flags, app, { ...(models ? { models } : {}), ...(leftOut ? { leftOut } : {}), translationKeys, signal: controller.signal, log });
+        const options = suiteOptions(loaded, flags, app, { ...(models ? { models } : {}), leftOut, translationKeys, signal: controller.signal, log });
         if (flags['last-failed']) {
             const selected = new Set(tests.flatMap(test => [test.id, testSelectionKey(test.id)]));
             options.carriedFailures = [...await lastFailedIds(loaded.outputDir)].filter(key => !selected.has(key));
@@ -206,6 +205,14 @@ async function runCommand(flags: Flags, io: CliIO): Promise<number> {
         await stopApp();
         unbind();
     }
+}
+
+/** Reports what a change-based selection left out; true when no test is left to run. */
+function nothingToRun(tests: readonly unknown[], leftOut: SuiteOptions['leftOut'], io: CliIO): boolean {
+    for (const test of leftOut?.tests ?? []) { io.stderr(`Left out ${test.id}: ${test.reason}\n`); }
+    if (tests.length) { return false; }
+    io.stdout(leftOut ? `0 tests affected by the changes since ${leftOut.changedSince}\n` : '0 tests selected\n');
+    return true;
 }
 
 /** The model settings a run needs: none when every pass replays or it is a dry run; otherwise a missing key is an error. */

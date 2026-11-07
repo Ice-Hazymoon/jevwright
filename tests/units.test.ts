@@ -1,6 +1,6 @@
 import type { MonitorOptions } from '../src/monitor.ts';
-import type { TestSpec } from '../src/spec.ts';
 import type { Observation, PageElement } from '../src/observe.ts';
+import type { TestSpec } from '../src/spec.ts';
 import type { AddressInfo } from 'node:net';
 import type { Browser, Page } from 'playwright';
 import { Experimental_EvaluationMockModelV4, MockLanguageModelV4 } from 'ai/test';
@@ -1963,7 +1963,7 @@ describe('change selection', () => {
         const decisions = await decideChanged(tests, await changesSince('main', repo), { configFile: join(repo, 'jevwright.config.ts'), models, signal: new AbortController().signal });
         expect(decisions.map(decision => [decision.id, decision.run])).toEqual([['checkout-total', true], ['profile-save', false]]);
         expect(JSON.stringify(calls[0])).toContain('a + b + 1');
-        await commit('jevwright/profile.ts', "export const profile = { id: 'profile-save' };\n");
+        await commit('jevwright/profile.ts', 'export const profile = { id: \'profile-save\' };\n');
         const named = await decideChanged(tests, await changesSince('main', repo), { configFile: join(repo, 'jevwright.config.ts'), models, signal: new AbortController().signal });
         expect(named.find(decision => decision.id === 'profile-save')).toMatchObject({ run: true, reason: 'named in jevwright/profile.ts' });
     });
