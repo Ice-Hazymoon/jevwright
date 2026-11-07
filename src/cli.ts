@@ -161,6 +161,13 @@ async function listCommand(flags: Flags, io: CliIO): Promise<number> {
 
 interface Pass { mode: RunMode; retries: number; record: boolean }
 
+/** How long teardown may take before the CLI stops waiting; a hung stop must not hang the run. */
+const TEARDOWN_MS = 30_000;
+/** Teardown's share after a second Ctrl-C: the user asked to stop now. */
+const FORCED_TEARDOWN_MS = 10_000;
+/** How often a slow `setup` reports that it is still running. */
+const SETUP_NOTICE_MS = 30_000;
+
 async function runCommand(flags: Flags, io: CliIO): Promise<number> {
     const loaded = await loadConfig({ cwd: io.cwd, path: flags.config });
     const passes = passesFor(flags, parseMode(flags.mode), loaded.config.retries ?? 1);
@@ -249,13 +256,6 @@ function suiteOptions(loaded: LoadedConfig, flags: Flags, app: Omit<SetupResult,
         ...(app.metadata ? { metadata: app.metadata } : {}),
     };
 }
-
-/** How long teardown may take before the CLI stops waiting; a hung stop must not hang the run. */
-const TEARDOWN_MS = 30_000;
-/** Teardown's share after a second Ctrl-C: the user asked to stop now. */
-const FORCED_TEARDOWN_MS = 10_000;
-/** How often a slow `setup` reports that it is still running. */
-const SETUP_NOTICE_MS = 30_000;
 
 /**
  * `--base-url`, else the config's `setup`, else its `baseURL`. A teardown is handed to `onTeardown` as soon as
@@ -356,7 +356,7 @@ function parseCount(raw: string | undefined, flag: string, min: number): number 
 /** `90s`, `30m`, `1h`, or a bare number of minutes, in milliseconds. */
 export function parseDuration(raw: string | undefined): number | undefined {
     if (raw === undefined) { return undefined; }
-    const match = /^(\d+(?:\.\d+)?)\s*(s|m|h)?$/.exec(raw.trim());
+    const match = /^(\d+(?:\.\d+)?)\s*([smh])?$/.exec(raw.trim());
     const value = match ? Number(match[1]) * { s: 1000, m: 60_000, h: 3_600_000 }[(match[2] ?? 'm') as 's' | 'm' | 'h'] : Number.NaN;
     if (!(value > 0)) { throw new JevwrightError(`--max-duration must be a positive time such as 90s, 30m or 1h, got "${raw}"`); }
     return Math.round(value);

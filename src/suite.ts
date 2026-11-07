@@ -17,8 +17,8 @@ import { JevwrightError } from './errors.ts';
 import { resolveFiles } from './files.ts';
 import { addUsage, createRunBudget, emptyUsage, modelIds, runBudgetMessage } from './models.ts';
 import { assertReachable, checkedOrigin } from './origin.ts';
-import { changedActionSteps, createRecordingStore, learnedRecording } from './recording.ts';
 import { createRunLog } from './progress.ts';
+import { changedActionSteps, createRecordingStore, learnedRecording } from './recording.ts';
 import { writeReports } from './report.ts';
 import { createRedactor, forResults } from './secrets.ts';
 import { assertValidTests, testSelectionKey } from './select.ts';
@@ -508,7 +508,6 @@ function stepTotals(results: TestResult[]): StepTotals {
     }
     return steps;
 }
-
 
 async function gitState(): Promise<RunManifest['git']> {
     const run = promisify(execFile);
