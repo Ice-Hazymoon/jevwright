@@ -27,6 +27,17 @@ import { VERSION } from './version.ts';
 
 const artifactDirectories = new WeakMap<RunSummary, string>();
 
+/**
+ * How each test's final attempt resolved its act steps: replayed from the recording, healed after the recording
+ * missed (with why), or grounded by AI without one. Heals cost model calls; a rising count means re-record.
+ */
+export interface StepTotals {
+    replayed: number;
+    healed: number;
+    ai: number;
+    misses: Partial<Record<import('./act.ts').ReplayMissKind, number>>;
+}
+
 /** `known`: failed on the product the way the test's `knownIssue` describes; it does not fail the run. */
 export type TestStatus = 'passed' | 'failed' | 'flaky' | 'known' | 'skipped' | 'unverified' | 'interrupted';
 
@@ -83,7 +94,7 @@ export interface RunManifest {
 export interface RunSummary {
     manifest: RunManifest;
     results: TestResult[];
-    totals: Record<TestStatus, number> & { tests: number; issues: number; models: ModelUsage; durationMs: number };
+    totals: Record<TestStatus, number> & { tests: number; issues: number; models: ModelUsage; durationMs: number; steps?: StepTotals };
     directory: string;
 }
 
@@ -485,8 +496,19 @@ function totals(results: TestResult[]): RunSummary['totals'] {
         issues: results.reduce((sum, result) => sum + result.issues.length, 0),
         models: usage,
         durationMs: results.reduce((sum, result) => sum + result.durationMs, 0),
+        steps: stepTotals(results),
     };
 }
+
+function stepTotals(results: TestResult[]): StepTotals {
+    const steps: StepTotals = { replayed: 0, healed: 0, ai: 0, misses: {} };
+    for (const step of results.flatMap(result => result.attempts.at(-1)?.steps ?? []).filter(step => step.kind === 'act')) {
+        if (step.source === 'replay') { steps.replayed++; } else if (step.source === 'healed') { steps.healed++; } else if (step.source === 'ai') { steps.ai++; }
+        if (step.replayMissKind) { steps.misses[step.replayMissKind] = (steps.misses[step.replayMissKind] ?? 0) + 1; }
+    }
+    return steps;
+}
+
 
 async function gitState(): Promise<RunManifest['git']> {
     const run = promisify(execFile);

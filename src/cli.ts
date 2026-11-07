@@ -12,7 +12,7 @@ import { JevwrightError } from './errors.ts';
 import { lastFailedIds } from './last-failed.ts';
 import { gatewayFromEnv } from './models.ts';
 import { checkedOrigin } from './origin.ts';
-import { loadSummary, writeReports } from './report.ts';
+import { describeStepTotals, loadSummary, writeReports } from './report.ts';
 import { createRedactor } from './secrets.ts';
 import { selectTests, testSelectionKey } from './select.ts';
 import { serveReport } from './serve.ts';
@@ -382,7 +382,8 @@ function summaryLine(summary: RunSummary, label: string, cwd: string): string {
     const budget = manifest.maxCostUsd !== undefined && totals.models.cost >= manifest.maxCostUsd ? ` · run budget of $${manifest.maxCostUsd} reached` : '';
     const counts = [`${totals.passed} passed`, `${totals.failed} failed`, totals.flaky && `${totals.flaky} flaky`, totals.known && `${totals.known} known`, totals.skipped && `${totals.skipped} skipped`, totals.unverified && `${totals.unverified} unverified`, totals.interrupted && `${totals.interrupted} interrupted`].filter(Boolean).join(', ');
     const models = totals.models.jevCalls + totals.models.llmCalls ? ` · ${totals.models.jevCalls} Jev / ${totals.models.llmCalls} LLM calls · $${totals.models.cost.toFixed(4)}` : '';
-    return `\n${label}${counts} · ${totals.issues} issue${totals.issues === 1 ? '' : 's'}${models}${budget}\nReport: ${relative(cwd, join(summary.directory, 'report.html'))}\n`;
+    const steps = describeStepTotals(totals.steps);
+    return `\n${label}${counts} · ${totals.issues} issue${totals.issues === 1 ? '' : 's'}${models}${budget}${steps ? `\n${steps}` : ''}\nReport: ${relative(cwd, join(summary.directory, 'report.html'))}\n`;
 }
 
 async function reportCommand(directory: string | undefined, io: CliIO): Promise<number> {

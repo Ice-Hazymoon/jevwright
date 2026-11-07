@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Replay misses are machine-readable: each step carries `replayMissKind` (`target-not-found`, `page-value`, `value-undefined`, `action-failed`, `expectation`, `end-mismatch`), and run totals count act steps as replayed, healed (by miss kind) or AI. The CLI summary, `report.md` and the HTML report show them, so silent healing in auto mode is visible.
 - Exit code 5 when every failure has cause `environment` or `model`, so CI and coding agents can tell "rerun or fix the setup" from "the app is wrong" (still 1 when any failure is `product`, `agent` or `timeout`).
 - `--max-duration` / `maxDurationMs` and `--max-failures` / `maxFailures`: stop starting tests after a time budget or a number of failures. Tests a time limit leaves out fail with cause `timeout`; tests after the failure limit are skipped. `run.json` records `stoppedEarly`.
 - Fix: a test could run forever and keep the CLI from exiting. `timeoutMs` was only checked between steps and by model calls, so a `fixture`, `ready`, `verify`, `run` or invariant callback that never settled, or a page whose main thread froze (`page.evaluate` has no timeout), hung the run. The attempt is now cut off at its deadline, its context closed, and the timeout summary names the step or phase still running; the step is recorded as a failed `timeout`.

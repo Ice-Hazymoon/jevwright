@@ -48,6 +48,7 @@ export interface StepResult {
     /** Why a product-looking failure here was attributed to the agent instead. */
     misstep?: string;
     replayMiss?: string;
+    replayMissKind?: import('./act.ts').ReplayMissKind;
     end?: EndCheck;
     endMismatch?: true;
     replayOnTarget?: true;
@@ -513,7 +514,7 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
                 result.end = outcome.end;
                 if (outcome.endMismatch) { result.endMismatch = true; }
                 if (outcome.replayOnTarget) { result.replayOnTarget = true; }
-                if (outcome.replayMiss) { result.replayMiss = outcome.replayMiss; }
+                if (outcome.replayMiss) { result.replayMiss = outcome.replayMiss; if (outcome.replayMissKind) { result.replayMissKind = outcome.replayMissKind; } }
                 if (outcome.status === 'likely-done') { result.likely = true; }
                 if (outcome.status === 'failed') {
                     result.status = 'failed';

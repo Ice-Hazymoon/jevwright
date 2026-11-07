@@ -5,6 +5,8 @@ import { AssertionError } from 'node:assert';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { chromium } from 'playwright';
 import { expect as playwrightExpect } from 'playwright/test';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runFailureExitCode } from '../src/cli.ts';
@@ -1721,6 +1723,28 @@ describe('end state attribution', () => {
         expect(healed.status).toBe('passed');
         expect(healed.attempts[0]?.steps[0]?.source).toBe('healed');
         expect(healed.recordingUpdated).toBe(true);
+    });
+
+    it('counts how each act step was resolved, with a machine-readable reason for every heal', async () => {
+        const recordingsDir = join(root, 'step-totals');
+        const seed = await suite([effectTest()], { recordingsDir, policy: effectPolicy }).run;
+        expect(seed.totals.steps).toEqual({ replayed: 0, healed: 0, ai: 1, misses: {} });
+        const replayed = await suite([effectTest()], { recordingsDir, policy: effectPolicy }).run;
+        expect(replayed.totals.steps).toEqual({ replayed: 1, healed: 0, ai: 0, misses: {} });
+        const healed = await suite([effectTest('/effects?bug=swapped')], { recordingsDir, policy: effectPolicy }).run;
+        expect(healed.totals.steps).toEqual({ replayed: 0, healed: 1, ai: 0, misses: { 'end-mismatch': 1 } });
+        expect(healed.results[0]?.attempts[0]?.steps[0]?.replayMissKind).toBe('end-mismatch');
+        const report = await readFile(join(artifactDirectory(healed), 'report.md'), 'utf8');
+        expect(report).toContain('act steps: 0 replayed, 1 healed (end-mismatch 1), 0 AI');
+        const browser = await chromium.launch();
+        try {
+            const page = await browser.newPage();
+            const errors: string[] = [];
+            page.on('pageerror', error => errors.push(error.message));
+            await page.goto(pathToFileURL(join(artifactDirectory(healed), 'report.html')).href);
+            await playwrightExpect(page.getByText('0 replayed / 1 healed / 0 AI steps')).toHaveAttribute('title', 'Healed because: end-mismatch 1');
+            expect(errors).toEqual([]);
+        } finally { await browser.close(); }
     });
 
     it('replays a recorded end state that appears only after a slow backend answers', async () => {

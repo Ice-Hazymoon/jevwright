@@ -237,6 +237,11 @@ Healing receives the actual missing conditions and current route. A cached route
 not establish a missing product effect when all other recorded conditions match.
 Legacy recordings without end states still verify action delivery; their missing evidence is not reconstructed.
 
+- Every miss is recorded on the step as `replayMiss` (text) and `replayMissKind`: `target-not-found`,
+  `page-value`, `value-undefined`, `action-failed`, `expectation` or `end-mismatch`. `summary.json`
+  totals count how each test's final attempt resolved its act steps (`steps.replayed`, `healed`, `ai`,
+  `misses` by kind); the CLI, `report.md` and the HTML report show the same line. Heals cost model calls,
+  so a run that keeps healing the same steps should be re-recorded.
 - In auto mode a missing target or mismatched end state triggers AI healing from the current page.
   Healing must perform a new successful action before it counts. A step healed after a mismatched end
   state is then dropped from the recording rather than saved: its actions started from a page the

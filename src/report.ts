@@ -44,6 +44,8 @@ export function markdownReport(summary: RunSummary): string {
     if (manifest.command) { lines.push('', `Command: \`${manifest.command}\``); }
     lines.push('');
     lines.push(`**${totals.tests} tests**: ${totals.passed} passed, ${totals.failed} failed, ${totals.flaky} flaky, ${totals.known ?? 0} known, ${totals.skipped} skipped, ${totals.unverified ?? 0} unverified, ${totals.interrupted ?? 0} interrupted · ${totals.issues} implicit issues · model calls ${totals.models.jevCalls} Jev / ${totals.models.llmCalls} LLM · ${totals.models.inputTokens.toLocaleString('en-US')} input tokens${totals.models.cost ? ` · $${totals.models.cost.toFixed(4)}` : ''} · test time ${seconds(totals.durationMs)}`);
+    const stepLine = describeStepTotals(totals.steps);
+    if (stepLine) { lines.push('', stepLine); }
     lines.push('');
     lines.push(...budgetLines(manifest, totals));
     lines.push(...failuresSection(results, manifest));
@@ -250,6 +252,7 @@ for (const [key, label] of [['all', t.tests + ' tests'], ['passed', t.passed + '
   totals.append(el('button', { class: 'chip', 'aria-pressed': String(key === 'all'), onclick: e => { filter = key; for (const c of totals.querySelectorAll('.chip')) c.setAttribute('aria-pressed', String(c === e.currentTarget)); render(); } }, label));
 }
 totals.append(el('span', { class: 'chip' }, t.models.jevCalls + ' Jev / ' + t.models.llmCalls + ' LLM calls · ' + t.models.inputTokens.toLocaleString() + ' input tokens' + (t.models.cost ? ' · $' + t.models.cost.toFixed(4) : '')));
+if (t.steps && t.steps.replayed + t.steps.healed + t.steps.ai) totals.append(el('span', { class: 'chip' + (t.steps.healed ? ' s-flaky' : ''), title: t.steps.healed ? 'Healed because: ' + Object.entries(t.steps.misses).map(([k, n]) => k + ' ' + n).join(', ') : undefined }, t.steps.replayed + ' replayed / ' + t.steps.healed + ' healed / ' + t.steps.ai + ' AI steps'));
 if (m.maxCostUsd !== undefined && t.models.cost >= m.maxCostUsd) totals.append(el('span', { class: 'chip s-failed' }, 'Run budget of $' + m.maxCostUsd + ' reached'));
 if (data.issues.length) {
   const box = document.getElementById('issues');
@@ -299,4 +302,11 @@ render();
 </body>
 </html>
 `;
+}
+
+/** One line for the CLI and report.md, e.g. `act steps: 40 replayed, 2 healed (target-not-found 2), 1 AI`. */
+export function describeStepTotals(steps: import('./suite.ts').StepTotals | undefined): string | undefined {
+    if (!steps || !(steps.replayed + steps.healed + steps.ai)) { return undefined; }
+    const misses = Object.entries(steps.misses).map(([kind, count]) => `${kind} ${count}`).join(', ');
+    return `act steps: ${steps.replayed} replayed, ${steps.healed} healed${misses ? ` (${misses})` : ''}, ${steps.ai} AI`;
 }
