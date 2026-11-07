@@ -62,9 +62,9 @@ jobs:
                     (cd site && python3 -m http.server 4173 --bind 127.0.0.1 > /dev/null 2>&1 &)
                     sleep 1
                     npx jevwright run --dry-run --base-url http://127.0.0.1:4173
-                    # The example test has no recording yet: replay must fail it, not pass it.
+                    # The example test has no recording yet: replay must fail it, with 4 (only recordings missing).
                     set +e; npx jevwright run --mode replay --base-url http://127.0.0.1:4173; code=$?; set -e
-                    test "$code" -eq 1
+                    test "$code" -eq 4
 
     bun:
         name: Bun
