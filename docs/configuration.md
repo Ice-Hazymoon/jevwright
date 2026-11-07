@@ -22,6 +22,7 @@ export default defineConfig({
 | `tests` | required | The tests, in report order. |
 | `baseURL` | — | The origin of an app that is already running, such as `http://localhost:3000`. Paths belong in each test's `start`. |
 | `setup` | — | Starts the app for a run; takes precedence over `baseURL`. See [below](#starting-the-app-per-run). |
+| `server` | — | `{ command, url, cwd?, env?, timeoutMs? }`: start the app from a shell command and stop it after the run. Use either `server` or `setup`. See [below](#starting-the-app-from-a-command). |
 | `allowedOrigins` | `[]` | Further origins of your app, such as an API or auth server on another port. The browser may reach them, and their requests are monitored like the app's own. Every other origin is blocked. |
 | `recordingsDir` | `jevwright/recordings` | Recordings to commit, one JSON file per test. |
 | `outputDir` | `.jevwright/runs` | One directory per run, with reports, screenshots and traces. |
@@ -46,6 +47,25 @@ Unknown fields are errors. So are the following, all reported before anything st
 - a duplicate or non-kebab-case test id;
 - a `start` that is not a path;
 - a `{key}` that the test's `data` lacks.
+
+## Starting the app from a command
+
+When starting the app is all a run needs, give `server` a command and the URL it serves:
+
+```ts
+export default defineConfig({
+    server: { command: 'npm run preview -- --port 4173', url: 'http://127.0.0.1:4173' },
+    tests: allTests,
+});
+```
+
+- The command runs in a shell, in its own process group, from `cwd` (relative to the config file).
+- The run starts once `url` answers with a 2xx, 3xx, or a 400–403 or 405 status, as Playwright's `webServer` counts it. It waits up to `timeoutMs` (default 120 s).
+- Its output is saved as `server.log`. If the command exits first or never answers, the error includes its last lines.
+- If something already answers at `url`, the run stops with an error. It never tests a server another session left running.
+- After the run the whole group gets SIGTERM, then SIGKILL after 5 seconds, so watchers and workers the command started stop too. A forced exit (a third Ctrl-C) still kills the group.
+
+Inside your own `setup`, `startServer(options, { signal, log })` does the same and returns `{ baseURL, serverLog, teardown }`.
 
 ## Starting the app per run
 

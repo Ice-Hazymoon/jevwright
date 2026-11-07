@@ -21,6 +21,7 @@ import { buildObservation, observe } from '../src/observe.ts';
 import { createRunLog } from '../src/progress.ts';
 import { describeTarget, resolveTarget, stepKey } from '../src/recording.ts';
 import { serveReport } from '../src/serve.ts';
+import { startServer } from '../src/server.ts';
 import { fillTemplate, templateKeys } from '../src/spec.ts';
 import { VERSION } from '../src/version.ts';
 import { startFixtureApp } from './fixtures/app.ts';
@@ -1863,5 +1864,55 @@ describe('run limit flags', () => {
     it('reads --max-duration as seconds, minutes or hours, and minutes when bare', () => {
         expect([parseDuration('90s'), parseDuration('30m'), parseDuration('1h'), parseDuration('2.5'), parseDuration(undefined)]).toEqual([90_000, 1_800_000, 3_600_000, 150_000, undefined]);
         for (const bad of ['soon', '0', '-5m', '10d']) { expect(() => parseDuration(bad)).toThrow('--max-duration'); }
+    });
+});
+
+describe('startServer', () => {
+    const freePort = async () => new Promise<number>((done) => { const probe = createServer().listen(0, '127.0.0.1', () => { const { port } = probe.address() as AddressInfo; probe.close(() => done(port)); }); });
+    const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+    const script = (port: number) => `node -e "const c = require('child_process').spawn('sleep', ['300'], { stdio: 'ignore' }); console.log('worker ' + c.pid); require('http').createServer((q, s) => s.end('ok')).listen(${port}, '127.0.0.1')"`;
+
+    it('waits for the app, then stops its whole process group', async () => {
+        const port = await freePort();
+        const server = await startServer({ command: script(port), url: `http://127.0.0.1:${port}/` });
+        expect(server.baseURL).toBe(`http://127.0.0.1:${port}`);
+        expect(await (await fetch(server.baseURL)).text()).toBe('ok');
+        const worker = Number(/worker (\d+)/.exec(await server.serverLog!())?.[1]);
+        expect(worker).toBeGreaterThan(0);
+        expect(alive(worker)).toBe(true);
+        await server.teardown();
+        await vi.waitFor(() => expect(alive(worker)).toBe(false), { timeout: 3000 });
+        await expect(fetch(server.baseURL)).rejects.toThrow();
+    });
+
+    it('refuses a port that already answers instead of testing someone else\'s server', async () => {
+        const port = await freePort();
+        const other = createServer((_, response) => response.end('other')).listen(port, '127.0.0.1');
+        try {
+            await expect(startServer({ command: 'true', url: `http://127.0.0.1:${port}` })).rejects.toThrow('Something already answers');
+        } finally { other.close(); }
+    });
+
+    it('runs a CLI suite against a config server and stops it afterwards', async () => {
+        const port = await freePort();
+        const dir = await mkdtemp(join(tmpdir(), 'jevwright-server-'));
+        try {
+            await writeFile(join(dir, 'jevwright.config.mjs'), `export default {
+    server: { command: ${JSON.stringify(`node -e "console.log('booted'); require('http').createServer((q, s) => s.end('<h1>Home</h1>')).listen(${port}, '127.0.0.1')"`)}, url: 'http://127.0.0.1:${port}' },
+    tests: [{ id: 'home', title: 'Home', risk: 'Home is down', start: '/', steps: () => [{ kind: 'verify', name: 'heading', check: async ({ page }) => (await page.textContent('h1')) === 'Home' }] }],
+};
+`);
+            const io = { cwd: dir, env: {}, stdout: () => undefined, stderr: () => undefined };
+            expect(await main(['run', '--mode', 'replay'], io)).toBe(0);
+            const runs = join(dir, '.jevwright', 'runs');
+            const run = join(runs, readdirSync(runs)[0]!);
+            expect(readFileSync(join(run, 'server.log'), 'utf8')).toContain('booted');
+            await expect(fetch(`http://127.0.0.1:${port}`)).rejects.toThrow();
+        } finally { await rm(dir, { recursive: true, force: true }); }
+    });
+
+    it('reports a command that exits before answering, with its output', async () => {
+        const port = await freePort();
+        await expect(startServer({ command: 'echo missing module >&2; exit 3', url: `http://127.0.0.1:${port}` })).rejects.toThrow(/exited \(3\)[\s\S]*missing module/);
     });
 });

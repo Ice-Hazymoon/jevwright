@@ -58,6 +58,11 @@ export interface JevwrightConfig {
     /** Starts the app for a run (and seeds or warms it up). Takes precedence over `baseURL`. */
     setup?: (context: SetupContext) => Promise<SetupResult>;
     /**
+     * Starts the app from a shell command and stops its whole process group after the run, like Playwright's
+     * `webServer`. Use it instead of `setup` when starting the app is all setup would do.
+     */
+    server?: import('./server.ts').ServerOptions;
+    /**
      * Further origins of the app, such as an API or auth server on another port. The browser may reach them, and
      * their requests are monitored like the app's own. Every other origin is blocked.
      */
@@ -121,6 +126,13 @@ const schema = z.object({
     tests: z.array(z.unknown(), 'expected an array of tests (`tests: [...]`)'),
     baseURL: origin.optional(),
     setup: fn.optional(),
+    server: z.object({
+        command: z.string().min(1),
+        url: z.url(),
+        cwd: z.string().min(1).optional(),
+        env: z.record(z.string(), z.string()).optional(),
+        timeoutMs: positiveInt.optional(),
+    }).strict().optional(),
     allowedOrigins: z.array(origin).optional(),
     recordingsDir: z.string().min(1).optional(),
     outputDir: z.string().min(1).optional(),
@@ -178,6 +190,7 @@ export async function loadConfig(options: { cwd?: string; path?: string } = {}):
         const problems = parsed.error.issues.map(issue => `${issue.path.length ? issue.path.join('.') : 'config'}: ${issue.message}`);
         throw new JevwrightError(`Invalid config in ${file}:\n  ${problems.join('\n  ')}\nThe config file must \`export default defineConfig({ ... })\`.`);
     }
+    if (parsed.data.setup && parsed.data.server) { throw new JevwrightError(`Invalid config in ${file}: use either setup or server, not both; start the server from setup with startServer() when setup does more.`); }
     const config = loaded as JevwrightConfig;
     assertValidTests(config.tests);
     const root = dirname(file);

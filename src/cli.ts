@@ -1,4 +1,4 @@
-import type { LoadedConfig, SetupResult } from './config.ts';
+import type { LoadedConfig, SetupContext, SetupResult } from './config.ts';
 import type { RunMode, RunSummary, SuiteOptions } from './suite.ts';
 import { existsSync, readFileSync } from 'node:fs';
 import { appendFile, mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
@@ -16,6 +16,7 @@ import { describeStepTotals, loadSummary, writeReports } from './report.ts';
 import { createRedactor } from './secrets.ts';
 import { selectTests, testSelectionKey } from './select.ts';
 import { serveReport } from './serve.ts';
+import { startServer } from './server.ts';
 import { bindCancellationSignals } from './signals.ts';
 import { artifactDirectory, runSuite } from './suite.ts';
 import { VERSION } from './version.ts';
@@ -263,14 +264,17 @@ const SETUP_NOTICE_MS = 30_000;
 async function startApp(loaded: LoadedConfig, flags: Flags, tests: LoadedConfig['config']['tests'], signal: AbortSignal, log: (line: string) => void, onTeardown: (teardown: SetupResult['teardown']) => void): Promise<Omit<SetupResult, 'teardown'>> {
     const { config } = loaded;
     if (flags['base-url']) { return { baseURL: checkedOrigin(flags['base-url'], '--base-url') }; }
-    if (config.setup) {
-        log('Starting the app (config setup)…');
+    // A relative server cwd, like other config paths, is relative to the config file.
+    const server = config.server && { ...config.server, cwd: resolve(dirname(loaded.file), config.server.cwd ?? '.') };
+    const setup = config.setup ?? (server ? (context: SetupContext) => startServer(server, context) : undefined);
+    if (setup) {
+        log(server ? `Starting the app: ${server.command}` : 'Starting the app (config setup)…');
         let result: SetupResult | undefined;
         const started = Date.now();
         const notice = setInterval(() => log(`Still starting the app (${Math.round((Date.now() - started) / 1000)} s)…`), SETUP_NOTICE_MS);
         try {
             // Ctrl-C must stop the wait even when setup ignores its signal.
-            result = await untilAborted(config.setup({ tests, signal, log }), signal);
+            result = await untilAborted(setup({ tests, signal, log }), signal);
         } catch (error) {
             if (signal.aborted) { throw error; }
             throw new JevwrightError(`setup failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -281,7 +285,7 @@ async function startApp(loaded: LoadedConfig, flags: Flags, tests: LoadedConfig[
         return { baseURL: checkedOrigin(result?.baseURL, 'setup() baseURL'), env: result?.env, serverLog: result?.serverLog, metadata: result?.metadata };
     }
     if (config.baseURL) { return { baseURL: config.baseURL }; }
-    throw new JevwrightError(`${basename(loaded.file)} needs a baseURL (an app that is already running) or a setup function that starts one; or pass --base-url.`);
+    throw new JevwrightError(`${basename(loaded.file)} needs a baseURL (an app that is already running), a server command or a setup function that starts one; or pass --base-url.`);
 }
 
 async function runTeardown(teardown: NonNullable<SetupResult['teardown']>, log: (line: string) => void, limitMs: number): Promise<void> {

@@ -15,6 +15,8 @@ export { selectTests } from './select.ts';
 export type { TestFilter } from './select.ts';
 
 export { serveReport } from './serve.ts';
+export { startServer } from './server.ts';
+export type { ServerOptions } from './server.ts';
 export { act, back, check, defineTest, goto, reload, run, verify } from './spec.ts';
 
 export type { ActStep, CheckOutcome, CheckStep, Env, Expectation, FixtureContext, GotoStep, Invariant, MaybePromise, NavigationStep, Register, RunContext, RunStep, Step, TestSpec, Values, Verdict, VerifyStep, WriteExpectation, WriteRecord } from './spec.ts';
