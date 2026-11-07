@@ -385,7 +385,7 @@ document.getElementById('echo').onclick = () => { document.getElementById('help'
             if (bug === 'swapped') { entries.reverse(); }
             return layout('Recorded effects', `<table><tbody>${entries.map(entry => `<tr><td>Entry ${entry.date}</td><td><button data-name="${entry.name}">Choose</button></td></tr>`).join('')}</tbody></table><h2 id="choice">No selection</h2>`, `
 for (const button of document.querySelectorAll('button[data-name]')) button.addEventListener('click', () => {
-  ${bug === 'no-effect' ? 'return;' : 'document.getElementById(\'choice\').textContent = button.dataset.name + \' chosen\';'}
+  ${bug === 'no-effect' ? 'return;' : url.searchParams.has('late') ? `fetch('/api/slow?ms=${Number(url.searchParams.get('late'))}', { method: 'POST' }).then(() => { document.getElementById('choice').textContent = button.dataset.name + ' chosen'; });` : 'document.getElementById(\'choice\').textContent = button.dataset.name + \' chosen\';'}
   ${url.searchParams.has('confirm') && bug !== 'no-effect' ? 'const c = document.createElement(\'button\'); c.textContent = \'Confirm choice\'; c.addEventListener(\'click\', () => { document.getElementById(\'choice\').textContent += \' and confirmed\'; }); document.body.append(c);' : ''}
 });`);
         }
@@ -528,6 +528,8 @@ async function api(state: FixtureState, url: URL, request: IncomingMessage, resp
         json(bug === '500' ? 500 : !payload.draft || bug === '422' ? 422 : 200, { validation: 'draft required' });
         return;
     }
+    // A backend that answers late, as on a loaded machine.
+    if (url.pathname === '/api/slow') { await new Promise(resolve => setTimeout(resolve, Number(url.searchParams.get('ms')))); json(200, { ok: true }); return; }
     if (url.pathname === '/api/integrity') { json(500, { error: 'storage unavailable' }); return; }
     if (url.pathname === '/api/integrity-validation') { json(422, { validation: 'record invalid' }); return; }
     if (url.pathname === '/api/profile') {

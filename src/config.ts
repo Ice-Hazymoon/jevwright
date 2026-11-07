@@ -72,6 +72,10 @@ export interface JevwrightConfig {
     retries?: number;
     /** Stop a run once its model cost reaches this many US dollars. Default 1. */
     maxCostUsd?: number;
+    /** Start no test after the run has lasted this long; running tests finish within their `timeoutMs`. */
+    maxDurationMs?: number;
+    /** Start no test after this many tests have failed. */
+    maxFailures?: number;
     /** Default 1280×900. */
     viewport?: { width: number; height: number };
     device?: Device;
@@ -123,6 +127,8 @@ const schema = z.object({
     concurrency: positiveInt.optional(),
     retries: z.number().int().min(0).optional(),
     maxCostUsd: z.number().positive().optional(),
+    maxDurationMs: positiveInt.optional(),
+    maxFailures: positiveInt.optional(),
     viewport: z.object({ width: positiveInt, height: positiveInt }).optional(),
     device: deviceSchema.optional(),
     locale: z.string().min(1).optional(),

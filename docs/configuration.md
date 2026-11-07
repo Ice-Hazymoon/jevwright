@@ -28,6 +28,8 @@ export default defineConfig({
 | `concurrency` | `2` | Tests in parallel, each in its own browser context. |
 | `retries` | `1` | Extra attempts for a failed test. |
 | `maxCostUsd` | `1` | Stop a run once its model cost reaches this. |
+| `maxDurationMs` | none | Start no test after the run has lasted this long. Running tests finish within their `timeoutMs`; tests left out fail with cause `timeout`. |
+| `maxFailures` | none | Start no test after this many tests have failed; the rest are skipped. |
 | `viewport` | `{ width: 1280, height: 900 }` | Browser viewport. |
 | `locale` | `en-US` | Browser locale. |
 | `timezone` | `UTC` | Browser time zone. |
@@ -145,6 +147,8 @@ jevwright <command> [options]
 | `--retries <n>` | Override `retries`. |
 | `--concurrency <n>` | Override `concurrency`. |
 | `--max-cost <usd>` | Override `maxCostUsd`. |
+| `--max-duration <time>` | Override `maxDurationMs`: `90s`, `30m`, `1h`, or a bare number of minutes. |
+| `--max-failures <n>` | Override `maxFailures`. |
 | `--allow-unverified` | Allow unverified checks to leave exit code 0; reports still count them separately. |
 | `--no-record` | Do not write recordings. |
 | `--base-url <origin>` | Test an app already running at this origin instead of calling `setup`. |
@@ -170,6 +174,7 @@ jevwright <command> [options]
 | `2` | A usage, config or setup error, including an app that does not answer at the base URL; the message says what to fix. |
 | `3` | An internal error. Please [report it](https://github.com/Ice-Hazymoon/jevwright/issues). |
 | `4` | A standalone replay failed only because steps lack recordings. Record them in auto mode. The replay pass of `--new` still returns 1. |
+| `5` | Every failed test failed with cause `environment` or `model`: fixtures, the start page, the app's own loading, the model gateway or the budget. Nothing points at the app's behavior; fix the setup or rerun. |
 | `130` | Interrupted. |
 
 ## CI selection and JUnit

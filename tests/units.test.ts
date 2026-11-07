@@ -13,7 +13,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { insertedText, pageChange, repeatsBlock } from '../src/act.ts';
 import { launchBrowser, newTestContext, perform, settle } from '../src/browser.ts';
-import { main } from '../src/cli.ts';
+import { main, parseDuration } from '../src/cli.ts';
 import { TIMED_OUT, untilAborted, within } from '../src/deadline.ts';
 import { createModels, gatewayFromEnv } from '../src/models.ts';
 import { createMonitor, matchesWrite } from '../src/monitor.ts';
@@ -1856,5 +1856,12 @@ describe('run log', () => {
         log.heartbeat(Date.now() + 9000);
         expect(output.at(-1)).toContain('still running: between tests');
         expect(log.text()).toContain('[profile-save]   2. Save the profile');
+    });
+});
+
+describe('run limit flags', () => {
+    it('reads --max-duration as seconds, minutes or hours, and minutes when bare', () => {
+        expect([parseDuration('90s'), parseDuration('30m'), parseDuration('1h'), parseDuration('2.5'), parseDuration(undefined)]).toEqual([90_000, 1_800_000, 3_600_000, 150_000, undefined]);
+        for (const bad of ['soon', '0', '-5m', '10d']) { expect(() => parseDuration(bad)).toThrow('--max-duration'); }
     });
 });

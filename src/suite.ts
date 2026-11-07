@@ -74,6 +74,8 @@ export interface RunManifest {
     command?: string;
     /** Requests the browser tried to make outside the allowed origins. */
     blockedRequests?: string[];
+    /** Why the run stopped starting tests early (`maxDurationMs`, `maxFailures`). */
+    stoppedEarly?: string;
     metadata?: Record<string, unknown>;
     carriedFailures?: string[];
 }
@@ -118,6 +120,13 @@ export interface SuiteOptions {
      * call, all with cause `model`; neither is retried. Unbounded when omitted (the CLI defaults to $1); replay mode makes no calls.
      */
     maxCostUsd?: number;
+    /**
+     * No test starts once the run has lasted this long; tests already running finish within their `timeoutMs`.
+     * Tests left out fail with cause `timeout`, so a cut-short run never looks green.
+     */
+    maxDurationMs?: number;
+    /** No test starts once this many tests have failed; the rest are skipped (the run already fails). */
+    maxFailures?: number;
     /** Also ask Jev on every decision whether the page looks broken. */
     probe?: boolean;
     /** Validate fixtures and start pages only; no steps, no model calls, no recordings. */
@@ -208,10 +217,17 @@ export async function runSuite(specs: ReadonlyArray<TestSpec<unknown>>, options:
     };
     try {
         const queue = [...specs];
+        const limits = runLimits(options, Date.now(), () => results.filter(result => result.status === 'failed').length);
         const worker = async () => {
             for (let spec = queue.shift(); spec; spec = queue.shift()) {
                 if (signal.aborted) {
                     results.push({ ...unrun(spec), status: 'interrupted', summary: 'Run cancelled before this test started' });
+                    continue;
+                }
+                const stop = limits();
+                if (stop) {
+                    if (!manifest.stoppedEarly) { manifest.stoppedEarly = stop.reason; log(`Starting no more tests: ${stop.reason}`); }
+                    results.push(stop.skip ? skipped(spec, `Not run: ${stop.reason}`) : notRun(spec, 'timeout', `Not run: ${stop.reason}`));
                     continue;
                 }
                 // Not a pass: the run did not test it. Charged to the model budget like a test it stopped mid-way.
@@ -417,6 +433,22 @@ function buildManifest({ runId, startedAt, git, mode, models, runBudget, specs, 
 
 function skipped(spec: TestSpec<unknown>, reason: string): TestResult {
     return { ...unrun(spec), status: 'skipped', summary: reason, skipReason: reason };
+}
+
+/**
+ * The run-wide limits, checked before each test starts. A duration limit fails what it leaves out; a failure
+ * limit skips it, since the run already fails. Bounded like tester-army/e2e `--max-duration`/`--max-failures`.
+ */
+function runLimits(options: Pick<SuiteOptions, 'maxDurationMs' | 'maxFailures'>, startedAt: number, failures: () => number): () => { reason: string; skip: boolean } | undefined {
+    return () => {
+        if (options.maxDurationMs !== undefined && Date.now() - startedAt >= options.maxDurationMs) {
+            return { reason: `the run reached its time limit of ${Math.round(options.maxDurationMs / 1000)} s`, skip: false };
+        }
+        if (options.maxFailures !== undefined && failures() >= options.maxFailures) {
+            return { reason: `${failures()} test(s) failed, the limit of ${options.maxFailures}`, skip: true };
+        }
+        return undefined;
+    };
 }
 
 /** A test that could not start: it fails the run, with the cause that stopped it. */

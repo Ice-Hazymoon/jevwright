@@ -1704,7 +1704,7 @@ describe('recorded effects and fresh retries', () => {
 });
 
 function effectTest(start = '/effects'): TestSpec<void> {
-    return { id: 'choose-entry', title: 'Choose the entry dated 2026-01-01', risk: 'The wrong dated row is selected', start, ready: async ({ page }) => { await page.evaluate(() => { const url = new URL(location.href); url.searchParams.delete('bug'); history.replaceState({}, '', url); }); }, steps: () => [act('Choose the entry dated 2026-01-01', { maxActions: 2 }), verify('Alpha selected', async ({ page }) => page.getByRole('heading', { name: 'Alpha chosen', exact: true }).isVisible())] };
+    return { id: 'choose-entry', title: 'Choose the entry dated 2026-01-01', risk: 'The wrong dated row is selected', start, ready: async ({ page }) => { await page.evaluate(() => { const url = new URL(location.href); url.searchParams.delete('bug'); url.searchParams.delete('late'); history.replaceState({}, '', url); }); }, steps: () => [act('Choose the entry dated 2026-01-01', { maxActions: 2 }), verify('Alpha selected', async ({ page }) => page.getByRole('heading', { name: 'Alpha chosen', exact: true }).isVisible())] };
 }
 const effectPolicy = (view: View) => view.text.includes('Alpha chosen') ? { done: 0.99, tool: 'none' } : { tool: 'click', target: (element: { name?: string; in?: string }) => element.name === 'Choose' && Boolean(element.in?.includes('2026-01-01')) };
 
@@ -1721,6 +1721,15 @@ describe('end state attribution', () => {
         expect(healed.status).toBe('passed');
         expect(healed.attempts[0]?.steps[0]?.source).toBe('healed');
         expect(healed.recordingUpdated).toBe(true);
+    });
+
+    it('replays a recorded end state that appears only after a slow backend answers', async () => {
+        const recordingsDir = join(root, 'late-effects');
+        const seed = (await suite([effectTest('/effects?single=1')], { recordingsDir, policy: effectPolicy }).run).results[0]!;
+        expect(seed.status, seed.summary).toBe('passed');
+        const replay = (await suite([effectTest('/effects?single=1&late=7000')], { recordingsDir, mode: 'replay' }).run).results[0]!;
+        expect(replay.status, replay.summary).toBe('passed');
+        expect(replay.attempts[0]?.steps[0]?.endMismatch).toBeUndefined();
     });
 
     it('keeps failed duplicate-control healing attributed to the agent', async () => {
@@ -2785,5 +2794,33 @@ describe('hard attempt deadline', () => {
         const { result, seconds } = await finishes(hung('hang-frozen-page', { start: '/frozen' }));
         expect(result.cause, result.summary).toBe('timeout');
         expect(seconds).toBeLessThan(25);
+    });
+});
+
+describe('run limits and exit codes', () => {
+    const quick = (id: string, passed: boolean, pauseMs = 0): TestSpec<void> => ({ id, title: id, risk: 'Run limits ignore what already happened', start: '/profile', steps: () => [run('take a moment', () => new Promise<void>(resolve => setTimeout(resolve, pauseMs))), verify('outcome', () => passed, { timeoutMs: 100 })] });
+
+    it('skips the remaining tests once the failure limit is reached', async () => {
+        const summary = await suite([quick('first-fails', false), quick('second', true), quick('third', true)], { maxFailures: 1 }).run;
+        expect(statusOf(summary)).toEqual({ 'first-fails': 'failed:product', 'second': 'skipped:undefined', 'third': 'skipped:undefined' });
+        expect(summary.results[1]?.summary).toContain('the limit of 1');
+        expect(summary.manifest.stoppedEarly).toContain('the limit of 1');
+        expect(runFailureExitCode(summary)).toBe(1);
+    });
+
+    it('fails the tests a time limit leaves out, so a cut-short run is never green', async () => {
+        const summary = await suite([quick('slow', true, 600), quick('left-out', true)], { maxDurationMs: 300 }).run;
+        expect(statusOf(summary)).toEqual({ 'slow': 'passed', 'left-out': 'failed:timeout' });
+        expect(summary.results[1]?.summary).toContain('time limit');
+        expect(runFailureExitCode(summary)).toBe(1);
+    });
+
+    it('exits 5 when every failure is the environment, not the app', async () => {
+        const broken = { ...quick('broken-fixture', true), fixture: () => Promise.reject(new Error('database is down')) };
+        const summary = await suite([broken]).run;
+        expect(statusOf(summary)).toEqual({ 'broken-fixture': 'failed:environment' });
+        expect(runFailureExitCode(summary)).toBe(5);
+        const mixed = await suite([broken, quick('wrong-total', false)]).run;
+        expect(runFailureExitCode(mixed)).toBe(1);
     });
 });

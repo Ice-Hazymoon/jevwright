@@ -46,6 +46,9 @@ Run options:
   --retries <n>        Extra attempts for a failed test (config default 1)
   --concurrency <n>    Tests in parallel (config default 2)
   --max-cost <usd>     Stop once the run's model cost reaches this (config default 1)
+  --max-duration <t>   Start no test after the run has lasted this long: 90s, 30m, 1h (bare number: minutes);
+                       tests left out fail
+  --max-failures <n>   Start no test after n tests have failed; the rest are skipped
   --dry-run            Run fixtures, open start pages and check initial invariants only
   --no-record          Do not write recordings
   --allow-unverified   Allow checks without replay evidence to leave exit code 0; still reported separately
@@ -62,7 +65,8 @@ Global options:
   -v, --version        Show the version
 
 Exit codes: 0 no test failed, 1 a test failed, 2 usage, config or setup error, 3 internal error,
-            4 replay failed only because recordings are missing, 130 interrupted.
+            4 replay failed only because recordings are missing, 5 every failure was the environment
+            or the model service (rerun or fix the setup, not the app), 130 interrupted.
 Docs: https://github.com/Ice-Hazymoon/jevwright#readme
 `;
 
@@ -79,6 +83,8 @@ const OPTIONS = {
     'retries': { type: 'string' },
     'concurrency': { type: 'string' },
     'max-cost': { type: 'string' },
+    'max-duration': { type: 'string' },
+    'max-failures': { type: 'string' },
     'dry-run': { type: 'boolean' },
     'no-record': { type: 'boolean' },
     'base-url': { type: 'string' },
@@ -224,6 +230,8 @@ function suiteOptions(loaded: LoadedConfig, flags: Flags, app: Omit<SetupResult,
         recordingsDir: loaded.recordingsDir,
         concurrency: parseCount(flags.concurrency, '--concurrency', 1) ?? config.concurrency,
         maxCostUsd: parseCost(flags['max-cost']) ?? config.maxCostUsd ?? 1,
+        maxDurationMs: parseDuration(flags['max-duration']) ?? config.maxDurationMs,
+        maxFailures: parseCount(flags['max-failures'], '--max-failures', 1) ?? config.maxFailures,
         headless: !flags.headed,
         probe: flags.probe,
         dryRun: flags['dry-run'],
@@ -339,6 +347,15 @@ function parseCount(raw: string | undefined, flag: string, min: number): number 
     const value = Number(raw);
     if (!Number.isInteger(value) || value < min) { throw new JevwrightError(`${flag} must be a whole number ≥ ${min}, got "${raw}"`); }
     return value;
+}
+
+/** `90s`, `30m`, `1h`, or a bare number of minutes, in milliseconds. */
+export function parseDuration(raw: string | undefined): number | undefined {
+    if (raw === undefined) { return undefined; }
+    const match = /^(\d+(?:\.\d+)?)\s*(s|m|h)?$/.exec(raw.trim());
+    const value = match ? Number(match[1]) * { s: 1000, m: 60_000, h: 3_600_000 }[(match[2] ?? 'm') as 's' | 'm' | 'h'] : Number.NaN;
+    if (!(value > 0)) { throw new JevwrightError(`--max-duration must be a positive time such as 90s, 30m or 1h, got "${raw}"`); }
+    return Math.round(value);
 }
 
 function parseCost(raw: string | undefined): number | undefined {
@@ -467,9 +484,10 @@ export function runFailureExitCode(summary: RunSummary, standalone = true, allow
     if (summary.totals.unverified && !allowUnverified) { return 1; }
     const failed = summary.results.filter(result => result.status === 'failed');
     if (!failed.length) { return 0; }
-    return standalone && summary.manifest.mode === 'replay' && !failed.some(result => result.attempts.some(attempt => attempt.steps.some(step => step.endMismatch))) && failed.every(result => result.attempts.length > 0 && result.attempts.every(attempt => attempt.steps.some(step => step.failure === 'not-recorded') && attempt.steps.filter(step => step.status === 'failed').every(step => step.failure === 'not-recorded')))
-        ? 4
-        : 1;
+    const onlyMissingRecordings = standalone && summary.manifest.mode === 'replay' && !failed.some(result => result.attempts.some(attempt => attempt.steps.some(step => step.endMismatch))) && failed.every(result => result.attempts.length > 0 && result.attempts.every(attempt => attempt.steps.some(step => step.failure === 'not-recorded') && attempt.steps.filter(step => step.status === 'failed').every(step => step.failure === 'not-recorded')));
+    if (onlyMissingRecordings) { return 4; }
+    // Nothing here says the app is wrong: CI and agents should rerun or fix the setup instead of filing a bug.
+    return failed.every(result => result.cause === 'environment' || result.cause === 'model') ? 5 : 1;
 }
 
 function cliDevice(value: string): 'desktop' | 'mobile' {

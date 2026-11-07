@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Exit code 5 when every failure has cause `environment` or `model`, so CI and coding agents can tell "rerun or fix the setup" from "the app is wrong" (still 1 when any failure is `product`, `agent` or `timeout`).
+- `--max-duration` / `maxDurationMs` and `--max-failures` / `maxFailures`: stop starting tests after a time budget or a number of failures. Tests a time limit leaves out fail with cause `timeout`; tests after the failure limit are skipped. `run.json` records `stoppedEarly`.
 - Fix: a test could run forever and keep the CLI from exiting. `timeoutMs` was only checked between steps and by model calls, so a `fixture`, `ready`, `verify`, `run` or invariant callback that never settled, or a page whose main thread froze (`page.evaluate` has no timeout), hung the run. The attempt is now cut off at its deadline, its context closed, and the timeout summary names the step or phase still running; the step is recorded as a failed `timeout`.
 - Bound the remaining shutdown waits: trace saving (30 s), downloads (5 s), browser close (15 s).
 - `run.log` in each run directory: the console log with time offsets, rewritten every 15 seconds during the run.
