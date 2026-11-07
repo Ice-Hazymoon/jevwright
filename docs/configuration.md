@@ -154,6 +154,7 @@ jevwright <command> [options]
 | `--tag <names>` | Tests with any of the tags. |
 | `--shard <i/n>` | The i-th of n stable partitions of the filtered tests (see [CI selection and JUnit](#ci-selection-and-junit)). |
 | `--last-failed` | Unresolved failed, flaky or unverified tests from completed, uninterrupted runs. |
+| `--changed-since <ref>` | Leave out tests the change since the merge base with `<ref>` cannot affect. See [Running only affected tests](#running-only-affected-tests). |
 
 **Run options**
 
@@ -196,6 +197,27 @@ jevwright <command> [options]
 | `4` | A standalone replay failed only because steps lack recordings. Record them in auto mode. The replay pass of `--new` still returns 1. |
 | `5` | Every failed test failed with cause `environment` or `model`: fixtures, the start page, the app's own loading, the model gateway or the budget. Nothing points at the app's behavior; fix the setup or rerun. |
 | `130` | Interrupted. |
+
+## Running only affected tests
+
+On a pull request, `--changed-since origin/main` leaves out the tests the change cannot affect:
+
+```yaml
+- uses: actions/checkout@v4
+  with: { fetch-depth: 0 }   # the base branch and merge base must be in the checkout
+- run: npx jevwright run ${{ github.event_name == 'pull_request' && format('--changed-since origin/{0}', github.base_ref) || '' }}
+  env: { OPENROUTER_API_KEY: '${{ secrets.OPENROUTER_API_KEY }}' }
+```
+
+- The change is every file that differs from the merge base of `<ref>` and `HEAD`, including uncommitted and untracked files. Jev reads the committed diff, plus each test's title, risk, start page and step wording. Uncommitted files reach it by name only.
+- Every test runs when nothing changed, when the config, a `package.json` or a lockfile changed, or when the committed diff is over 60 kB.
+- A test runs without asking the model when a changed file contains its id as a quoted string (its definition), or is its recording.
+- Otherwise one Jev request covers eight tests. A test is left out only when Jev rates the change under 20% likely to affect it.
+- A missing key or a failed request keeps the tests it covered. Git failing to measure the change (no merge base, a missing ref) is an error, never "nothing changed".
+- `--last-failed` ignores `--changed-since`, so `jevwright run || jevwright run --last-failed` reruns the failures whatever changed.
+- `jevwright list --changed-since <ref>` previews the selection and prints each left-out test with its reason. `run.json` records them under `leftOut`.
+
+Never pass it on `pull_request_target`: that run holds your secrets, and a fork's diff could talk the model into leaving tests out. Leave it off pushes to main and scheduled runs, so they run everything.
 
 ## CI selection and JUnit
 

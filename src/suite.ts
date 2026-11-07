@@ -89,6 +89,8 @@ export interface RunManifest {
     stoppedEarly?: string;
     metadata?: Record<string, unknown>;
     carriedFailures?: string[];
+    /** Tests `--changed-since` left out, with why; the run says nothing about them. */
+    leftOut?: { changedSince: string; base: string; tests: Array<{ id: string; reason: string }> };
 }
 
 export interface RunSummary {
@@ -171,6 +173,8 @@ export interface SuiteOptions {
     /** A CLI-only exit override; reports still count unresolved checks separately. */
     allowUnverified?: boolean;
     carriedFailures?: string[];
+    /** Recorded in run.json: tests a change-based selection left out. */
+    leftOut?: RunManifest['leftOut'];
 }
 
 /**
@@ -441,6 +445,7 @@ function buildManifest({ runId, startedAt, git, mode, models, runBudget, specs, 
         ...(options.command ? { command: options.command } : {}),
         ...(options.metadata ? { metadata: options.metadata } : {}),
         ...(options.carriedFailures?.length ? { carriedFailures: options.carriedFailures } : {}),
+        ...(options.leftOut?.tests.length ? { leftOut: options.leftOut } : {}),
     };
 }
 

@@ -5,12 +5,13 @@ import { appendFile, mkdir, readdir, readFile, stat, writeFile } from 'node:fs/p
 import { basename, dirname, join, relative, resolve } from 'node:path';
 import { parseArgs, parseEnv } from 'node:util';
 import { writeArtifact } from './artifacts.ts';
+import { changesSince, decideChanged } from './changes.ts';
 import { loadConfig } from './config.ts';
 import { TIMED_OUT, untilAborted, within } from './deadline.ts';
 import { resolveDevice } from './devices.ts';
 import { JevwrightError } from './errors.ts';
 import { lastFailedIds } from './last-failed.ts';
-import { gatewayFromEnv } from './models.ts';
+import { createModels, gatewayFromEnv } from './models.ts';
 import { checkedOrigin } from './origin.ts';
 import { describeStepTotals, loadSummary, writeReports } from './report.ts';
 import { createRedactor } from './secrets.ts';
@@ -38,6 +39,8 @@ Filters:
   --tag <names>        Comma-separated tags
   --shard <i/n>        Select a stable hash partition (also supported by list)
   --last-failed        Select unresolved failed, flaky and unverified tests from completed runs
+  --changed-since <ref>  Leave out tests Jev judges the change since the merge base with <ref> cannot affect;
+                       fails open (keeps tests) on any doubt. Never use on pull_request_target
 
 Run options:
   --mode <mode>        auto (default) | replay: recordings only, no model calls, checks recheck evidence
@@ -78,6 +81,7 @@ const OPTIONS = {
     'tag': { type: 'string' },
     'shard': { type: 'string' },
     'last-failed': { type: 'boolean' },
+    'changed-since': { type: 'string' },
     'allow-unverified': { type: 'boolean' },
     'mode': { type: 'string' },
     'new': { type: 'boolean' },
@@ -147,8 +151,9 @@ function loadEnvFile(file: string, env: CliIO['env']): void {
 
 async function listCommand(flags: Flags, io: CliIO): Promise<number> {
     const loaded = await loadConfig({ cwd: io.cwd, path: flags.config });
-    const tests = await selectedTests(loaded, flags);
+    const { tests, leftOut } = await selectedTests(loaded, flags, io.env);
     const redact = createRedactor(tests.flatMap(test => Object.values(test.secrets ?? {})));
+    for (const test of leftOut?.tests ?? []) { io.stdout(`left out ${test.id}: ${test.reason}\n`); }
     const rows = tests.map(test => [test.id, test.module ?? '', (test.tags ?? []).join(','), test.title]);
     // Only columns some test fills, each as wide as its longest cell.
     const widths = [0, 1, 2].map(column => Math.max(...rows.map(row => row[column]!.length)));
@@ -171,8 +176,9 @@ const SETUP_NOTICE_MS = 30_000;
 async function runCommand(flags: Flags, io: CliIO): Promise<number> {
     const loaded = await loadConfig({ cwd: io.cwd, path: flags.config });
     const passes = passesFor(flags, parseMode(flags.mode), loaded.config.retries ?? 1);
-    const tests = await selectedTests(loaded, flags);
-    if (!tests.length) { io.stdout('0 tests selected\n'); return 0; }
+    const { tests, leftOut } = await selectedTests(loaded, flags, io.env);
+    for (const test of leftOut?.tests ?? []) { io.stderr(`Left out ${test.id}: ${test.reason}\n`); }
+    if (!tests.length) { io.stdout(leftOut ? `0 tests affected by the changes since ${leftOut.changedSince}\n` : '0 tests selected\n'); return 0; }
     const models = requiredModels(loaded, flags, passes, io.env);
     const redact = createRedactor(tests.flatMap(test => Object.values(test.secrets ?? {})));
     const log = (line: string) => io.stderr(`${redact.text(line)}\n`);
@@ -186,7 +192,7 @@ async function runCommand(flags: Flags, io: CliIO): Promise<number> {
         const translationKeys = await loadTranslationKeys(loaded);
         const app = await startApp(loaded, flags, tests, controller.signal, log, (stop) => { teardown = stop; });
         if (controller.signal.aborted) { return 130; }
-        const options = suiteOptions(loaded, flags, app, { ...(models ? { models } : {}), translationKeys, signal: controller.signal, log });
+        const options = suiteOptions(loaded, flags, app, { ...(models ? { models } : {}), ...(leftOut ? { leftOut } : {}), translationKeys, signal: controller.signal, log });
         if (flags['last-failed']) {
             const selected = new Set(tests.flatMap(test => [test.id, testSelectionKey(test.id)]));
             options.carriedFailures = [...await lastFailedIds(loaded.outputDir)].filter(key => !selected.has(key));
@@ -228,7 +234,7 @@ async function runPasses(tests: LoadedConfig['config']['tests'], passes: readonl
 }
 
 /** What every pass of `run` shares: the config and flags, resolved against the started app. */
-function suiteOptions(loaded: LoadedConfig, flags: Flags, app: Omit<SetupResult, 'teardown'>, run: Pick<SuiteOptions, 'models' | 'translationKeys' | 'signal' | 'log'>): Omit<SuiteOptions, 'mode' | 'retries' | 'updateRecordings'> {
+function suiteOptions(loaded: LoadedConfig, flags: Flags, app: Omit<SetupResult, 'teardown'>, run: Pick<SuiteOptions, 'models' | 'leftOut' | 'translationKeys' | 'signal' | 'log'>): Omit<SuiteOptions, 'mode' | 'retries' | 'updateRecordings'> {
     const { config } = loaded;
     return {
         ...run,
@@ -479,11 +485,25 @@ Next:
     return 0;
 }
 
-async function selectedTests(loaded: LoadedConfig, flags: Flags) {
+async function selectedTests(loaded: LoadedConfig, flags: Flags, env: CliIO['env']): Promise<{ tests: LoadedConfig['config']['tests']; leftOut?: SuiteOptions['leftOut'] }> {
     const tests = selectTests(loaded.config.tests, flags);
-    if (!flags['last-failed']) { return tests; }
-    const ids = await lastFailedIds(loaded.outputDir);
-    return tests.filter(test => ids.has(test.id) || ids.has(testSelectionKey(test.id)));
+    // A rerun of failures runs them whatever changed, so `run || run --last-failed` stays safe.
+    if (flags['last-failed']) {
+        const ids = await lastFailedIds(loaded.outputDir);
+        return { tests: tests.filter(test => ids.has(test.id) || ids.has(testSelectionKey(test.id))) };
+    }
+    return flags['changed-since'] ? changeSelection(loaded, flags['changed-since'], tests, env) : { tests };
+}
+
+/** The tests the change since `ref` can affect; one Jev request per eight tests, bounded to two minutes. */
+async function changeSelection(loaded: LoadedConfig, ref: string, tests: LoadedConfig['config']['tests'], env: CliIO['env']): Promise<{ tests: LoadedConfig['config']['tests']; leftOut: NonNullable<SuiteOptions['leftOut']> }> {
+    const changes = await changesSince(ref, dirname(loaded.file));
+    const settings = modelOptions(loaded, env);
+    const redact = createRedactor(tests.flatMap(test => Object.values(test.secrets ?? {})));
+    const models = settings ? createModels({ ...settings, maxCallsPerTest: Math.ceil(tests.length / 8) + 1 }, undefined, redact) : undefined;
+    const decisions = await decideChanged(tests, changes, { configFile: loaded.file, models, signal: AbortSignal.timeout(120_000) });
+    const kept = new Set(decisions.filter(decision => decision.run).map(decision => decision.id));
+    return { tests: tests.filter(test => kept.has(test.id)), leftOut: { changedSince: ref, base: changes.base, tests: decisions.filter(decision => !decision.run).map(({ id, reason }) => ({ id, reason })) } };
 }
 
 /** Missing recordings alone are a maintenance outcome; missing targets can be real regressions. */

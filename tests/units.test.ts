@@ -1,4 +1,5 @@
 import type { MonitorOptions } from '../src/monitor.ts';
+import type { TestSpec } from '../src/spec.ts';
 import type { Observation, PageElement } from '../src/observe.ts';
 import type { AddressInfo } from 'node:net';
 import type { Browser, Page } from 'playwright';
@@ -13,6 +14,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { insertedText, pageChange, repeatsBlock } from '../src/act.ts';
 import { launchBrowser, newTestContext, perform, settle } from '../src/browser.ts';
+import { changesSince, decideChanged } from '../src/changes.ts';
 import { main, parseDuration } from '../src/cli.ts';
 import { TIMED_OUT, untilAborted, within } from '../src/deadline.ts';
 import { createModels, gatewayFromEnv } from '../src/models.ts';
@@ -1914,5 +1916,67 @@ describe('startServer', () => {
     it('reports a command that exits before answering, with its output', async () => {
         const port = await freePort();
         await expect(startServer({ command: 'echo missing module >&2; exit 3', url: `http://127.0.0.1:${port}` })).rejects.toThrow(/exited \(3\)[\s\S]*missing module/);
+    });
+});
+
+describe('change selection', () => {
+    const run = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8' });
+    const spec = (id: string, title: string): TestSpec<unknown> => ({ id, title, risk: `${title} breaks`, start: '/', steps: () => [{ kind: 'act', instruction: title }] as never });
+    const tests = [spec('checkout-total', 'Pay for the cart'), spec('profile-save', 'Save the profile')];
+    const jev = (answer: (state: Record<string, unknown>) => Record<string, number> | Error) => {
+        const calls: Array<Record<string, unknown>> = [];
+        const evaluation = new Experimental_EvaluationMockModelV4({
+            doEvaluate: async ({ state, questions }) => {
+                calls.push(state as Record<string, unknown>);
+                const result = answer(state as Record<string, unknown>);
+                if (result instanceof Error) { throw result; }
+                return { answers: Object.fromEntries(Object.keys(questions).map(id => [id, { type: 'boolean' as const, probability: result[id] ?? 0.9 }])), usage: { inputTokens: 1, outputTokens: 1 }, warnings: [] };
+            },
+        });
+        return { models: createModels({ models: { evaluation, language: new MockLanguageModelV4() }, maxCallsPerTest: 10 }), calls };
+    };
+    let repo: string;
+    beforeAll(async () => {
+        repo = await mkdtemp(join(tmpdir(), 'jevwright-changes-'));
+        run(repo, 'init', '-q', '-b', 'main');
+        run(repo, 'config', 'user.email', 'test@example.com');
+        run(repo, 'config', 'user.name', 'Test');
+        await mkdir(join(repo, 'src'));
+        await writeFile(join(repo, 'src', 'cart.ts'), 'export const total = (a: number, b: number) => a + b;\n');
+        await writeFile(join(repo, 'jevwright.config.ts'), 'export default {};\n');
+        run(repo, 'add', '.');
+        run(repo, 'commit', '-qm', 'base');
+        run(repo, 'checkout', '-qb', 'feature');
+    });
+    afterAll(async () => { if (repo) { await rm(repo, { recursive: true, force: true }); } });
+    const commit = async (file: string, text: string) => { await mkdir(dirname(join(repo, file)), { recursive: true }); await writeFile(join(repo, file), text); run(repo, 'add', '.'); run(repo, 'commit', '-qm', file); };
+
+    it('runs everything when nothing changed, and fails on a ref git cannot measure', async () => {
+        const decisions = await decideChanged(tests, await changesSince('main', repo), { configFile: join(repo, 'jevwright.config.ts'), signal: new AbortController().signal });
+        expect(decisions.every(decision => decision.run)).toBe(true);
+        await expect(changesSince('no-such-branch', repo)).rejects.toThrow('--changed-since no-such-branch');
+    });
+
+    it('leaves out only what Jev judges unaffected, and keeps tests a changed file names', async () => {
+        await commit('src/cart.ts', 'export const total = (a: number, b: number) => a + b + 1;\n');
+        const { models, calls } = jev(state => (state.tests as Record<string, { title: string }>).t1?.title === 'Save the profile' ? { affected_1: 0.04 } : {} as Record<string, number>);
+        const decisions = await decideChanged(tests, await changesSince('main', repo), { configFile: join(repo, 'jevwright.config.ts'), models, signal: new AbortController().signal });
+        expect(decisions.map(decision => [decision.id, decision.run])).toEqual([['checkout-total', true], ['profile-save', false]]);
+        expect(JSON.stringify(calls[0])).toContain('a + b + 1');
+        await commit('jevwright/profile.ts', "export const profile = { id: 'profile-save' };\n");
+        const named = await decideChanged(tests, await changesSince('main', repo), { configFile: join(repo, 'jevwright.config.ts'), models, signal: new AbortController().signal });
+        expect(named.find(decision => decision.id === 'profile-save')).toMatchObject({ run: true, reason: 'named in jevwright/profile.ts' });
+    });
+
+    it('fails open: a failed call, a missing key or a lockfile change keeps every test', async () => {
+        const changes = await changesSince('main', repo);
+        const failing = jev(() => new Error('gateway down'));
+        const failed = await decideChanged(tests, changes, { configFile: join(repo, 'jevwright.config.ts'), models: failing.models, signal: new AbortController().signal });
+        expect(failed.every(decision => decision.run)).toBe(true);
+        expect(failed.find(decision => decision.id === 'checkout-total')?.reason).toContain('could not judge the change');
+        expect((await decideChanged(tests, changes, { configFile: join(repo, 'jevwright.config.ts'), signal: new AbortController().signal })).every(decision => decision.run && decision.reason === 'no model key to judge the change')).toBe(true);
+        await commit('package-lock.json', '{}\n');
+        const locked = await decideChanged(tests, await changesSince('main', repo), { configFile: join(repo, 'jevwright.config.ts'), models: jev(() => ({ affected_0: 0, affected_1: 0 })).models, signal: new AbortController().signal });
+        expect(locked.every(decision => decision.run && decision.reason === 'package-lock.json changed')).toBe(true);
     });
 });

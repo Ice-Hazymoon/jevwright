@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `--changed-since <ref>` (run and list): leave out tests the change since the merge base cannot affect, judged by Jev over the committed diff (one request per eight tests, left out below 20%). It fails open: no change, a config, manifest or lockfile change, a diff over 60 kB, a missing key or a failed call keeps the tests; a test whose id or recording a changed file contains always runs. `run.json` records `leftOut` with reasons. Modeled on tester-army/e2e's decision filter.
 - `server: { command, url }` config and `startServer()`: start the app from a command in its own process group, wait until `url` answers, save its output as `server.log`, refuse a port that already answers, and stop the whole group after the run (also on a forced exit), so dev servers and watchers are never left behind.
 - Replay misses are machine-readable: each step carries `replayMissKind` (`target-not-found`, `page-value`, `value-undefined`, `action-failed`, `expectation`, `end-mismatch`), and run totals count act steps as replayed, healed (by miss kind) or AI. The CLI summary, `report.md` and the HTML report show them, so silent healing in auto mode is visible.
 - Exit code 5 when every failure has cause `environment` or `model`, so CI and coding agents can tell "rerun or fix the setup" from "the app is wrong" (still 1 when any failure is `product`, `agent` or `timeout`).
