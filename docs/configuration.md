@@ -206,7 +206,8 @@ On a pull request, `--changed-since origin/main` leaves out the tests the change
 - uses: actions/checkout@v4
   with: { fetch-depth: 0 }   # the base branch and merge base must be in the checkout
 - run: npx jevwright run ${{ github.event_name == 'pull_request' && format('--changed-since origin/{0}', github.base_ref) || '' }}
-  env: { OPENROUTER_API_KEY: '${{ secrets.OPENROUTER_API_KEY }}' }
+  env:
+    OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
 ```
 
 - The change is every file that differs from the merge base of `<ref>` and `HEAD`, including uncommitted and untracked files. Jev reads the committed diff, plus each test's title, risk, start page and step wording. Uncommitted files reach it by name only.
