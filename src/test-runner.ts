@@ -217,174 +217,177 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
         step: stepIndex,
     });
 
+    /** Fixture, start page and steps: everything the deadline may cut off. */
+    const attemptSteps = async (): Promise<void> => {
+        const fixtureContext: FixtureContext = { browser: options.browser, context, origin: options.origin, env: options.env as Env, signal, runId: options.runId, defer: cleanup => cleanups.push(cleanup) };
+        activity = { phase: 'fixture setup' };
+        try {
+            fixture = spec.fixture ? await spec.fixture(fixtureContext) : undefined as F;
+        } catch (error) {
+            throw new AttemptError('environment', `Fixture setup failed: ${message(error)}`);
+        }
+        activity = { phase: 'start page' };
+        page = await context.newPage();
+        monitor.setStep(-1);
+        try {
+            await page.goto(new URL(spec.start, options.origin).toString(), { waitUntil: 'domcontentloaded', timeout: 60_000 });
+            if (spec.ready) { await spec.ready(runContext(-1)); }
+            await settle(page, monitor);
+        } catch (error) {
+            throw new AttemptError('environment', `Start page did not become ready: ${message(error)}`);
+        }
+        await monitor.scanText(page);
+        const loadIssue = monitor.issues().find(issue => issue.severity === 'high');
+        if (loadIssue && options.failOnIssues !== false) {
+            throw new AttemptError(issueCause(loadIssue), `${loadIssue.kind} while loading ${spec.start}: ${loadIssue.message}`);
+        }
+        activity = { phase: 'initial invariants' };
+        for (const invariant of spec.invariants ?? []) {
+            const outcome = await evaluateCheck(() => invariant.check(runContext(-1)));
+            invariants.push({ name: invariant.name, step: -1, passed: outcome.passed, evidence: outcome.evidence });
+            if (!outcome.passed) { throw new AttemptError('environment', `Invariant "${invariant.name}" does not hold before the test starts`); }
+        }
+
+        const definition = spec.steps(fixture as F);
+        for (const [index, step] of definition.entries()) {
+            if (step.kind !== 'act' && step.kind !== 'check') { continue; }
+            const identity = step.kind === 'act' ? step : { instruction: `check:${step.assertion}` };
+            const base = stepKey(identity);
+            const occurrence = (occurrences.get(base) ?? 0) + 1;
+            occurrences.set(base, occurrence);
+            keysByIndex.set(index, { key: stepKey(identity, occurrence), occurrence });
+        }
+        const secretProblems = secretCheckProblems(definition, secrets);
+        if (secretProblems.length) { throw new JevwrightError(secretProblems.join('; ')); }
+        for (const [index, step] of definition.entries()) {
+            if (step.kind === 'act' && step.expectError) { monitor.expectDuring(index, writeRules(step.expect)); }
+        }
+        if (options.dryRun) {
+            const observation = await observe(page, { redact });
+            // The signature hashes raw page content; beside redacted text it would allow guessing a short secret.
+            const { signature, ...withoutSignature } = observation;
+            await writeArtifact(join(directory, 'start-observation.json'), redact.active ? withoutSignature : { ...withoutSignature, signature }, redact);
+            if (!screenshotsWithheld && !await showsSecret(page, redact)) { await page.screenshot({ path: join(directory, 'start.jpg'), type: 'jpeg', quality: 60 }).catch(() => undefined); }
+            summary = `Dry run: fixture, start page and ${spec.invariants?.length ?? 0} invariant(s) OK; ${definition.length} steps not run`;
+            throw new DryRunComplete();
+        }
+        nextAct = (index: number) => {
+            const following = definition[index + 1];
+            return following?.kind === 'act' ? describeStep(following as Step<unknown>, displayData, secrets) : undefined;
+        };
+        /** A product-looking failure after AI-driven steps: the agent's, when a step acted on something it did not name. */
+        const misstep = async (upTo: number): Promise<string | undefined> => {
+            const acts = steps.filter(entry => entry.index <= upTo && entry.kind === 'act' && (entry.source === 'ai' || entry.source === 'healed') && entry.actions?.some(action => action.ok));
+            if (!models || !acts.length) { return undefined; }
+            const done = (entry: StepResult) => entry.actions!.filter(action => action.ok);
+            const history = (entry: StepResult) => done(entry).map(action => ({ action: action.tool, ...(action.element ? { element: action.element } : {}), ...(action.value ? { value: action.value } : {}) }));
+            const verdicts = await actedOnTarget(models, acts.map(entry => ({ step: entry.label, history: history(entry), next_step: nextAct(entry.index) ?? null })), signal).catch(() => undefined);
+            const miss = verdicts?.findIndex(p => p < MISSTEP) ?? -1;
+            if (!verdicts || miss < 0) { return undefined; }
+            const entry = acts[miss]!;
+            const touched = [...new Set(done(entry).flatMap(action => action.element ? [action.element] : []))].join(', ');
+            return `step ${entry.index + 1} (${entry.label}) acted on ${touched}, which Jev judged not to be what the step names (p=${verdicts[miss]!.toFixed(2)})`;
+        };
+        let previousLabel: string | undefined;
+        for (const [index, step] of definition.entries()) {
+            signal.throwIfAborted();
+            monitor.setStep(index);
+            downloads.setStep(index, step.kind === 'act' ? step.expect?.download : undefined);
+            const label = describeStep(step as Step<unknown>, displayData, secrets);
+            const stepStarted = performance.now();
+            const writesBefore = monitor.writes.length;
+            const result: StepResult = { index, kind: step.kind, label, status: 'passed', durationMs: 0, url: shortUrl(page.url()), writes: [] };
+            log(`  ${index + 1}. ${label}`);
+            activity = { phase: 'step', step: { index, kind: step.kind, label, started: stepStarted } };
+            try {
+                await runStep(step, index, result, previousLabel);
+            } catch (error) {
+                if (signal.aborted) { throw error; }
+                result.status = 'failed';
+                // A check or verify that could not get a model answer is a model-service failure, not test code.
+                result.failure = error instanceof AttemptError && error.cause === 'timeout' ? 'timeout' : error instanceof ModelError ? 'model' : step.kind === 'verify' && isAssertionError(error) ? 'assertion' : 'exception';
+                result.error = message(error);
+            }
+            // Work that ignored the deadline and finished late must not add steps after the attempt was cut off.
+            signal.throwIfAborted();
+            await settle(page, monitor, { maxMs: 3000 }).catch(() => 0);
+            await monitor.scanText(page);
+            await monitor.flushEvidence();
+            result.url = shortUrl(page.url());
+            await downloads.flush();
+            if (step.kind === 'act' && step.expect?.download && result.status === 'passed') {
+                const state = downloads.state();
+                if (!state.ok) { result.status = 'failed'; result.failure = 'expectation'; result.error = state.reason; }
+            }
+            result.downloads = downloads.forStep(index);
+            result.writes = monitor.writes.slice(writesBefore).map(write => ({ ...write }));
+            const busy = [...new Set(monitor.settleCaps.filter(cap => cap.step === index).map(cap => cap.reason))];
+            if (busy.length) { result.busy = busy.slice(0, 5); }
+            result.durationMs = Math.round(performance.now() - stepStarted);
+            result.screenshot = screenshotsWithheld || await showsSecret(page, redact) ? undefined : await screenshot(page, directory, index);
+            if (!result.screenshot && !screenshotsWithheld && redact.active) { secretShown = true; }
+            steps.push(result);
+            log(`     ${STEP_MARK[result.status]} ${result.source ? `[${result.source}] ` : ''}${result.durationMs}ms${result.error ? ` — ${result.error}` : ''}`);
+            if (result.status === 'failed') {
+                failedStep = index;
+                ({ cause, summary } = attribute(result));
+                const blocking = options.failOnIssues !== false && result.failure === 'error-shown' ? monitor.issues().find(issue => issue.severity === 'high' && issue.step === index) : undefined;
+                if (blocking) { cause = issueCause(blocking); summary = `${blocking.kind} during step ${index + 1}: ${blocking.message}`; }
+                if (cause === 'product' && result.failure === 'assertion') {
+                    result.misstep = await misstep(index);
+                    if (result.misstep) {
+                        cause = 'agent';
+                        summary = `${summary}. Not counted against the product: ${result.misstep}`;
+                    }
+                }
+                if (cause === 'agent' && result.failure !== 'error-shown' && !result.misstep && !(step.kind === 'act' && step.expectError)) {
+                    const server = monitor.issues().find(issue => issue.step === index && issue.kind === 'http-5xx');
+                    const rejected = result.writes.find(write => write.validationError);
+                    if (server || rejected) {
+                        result.misstep = await misstep(index);
+                        if (result.misstep) { summary += `. Not counted against the product: ${result.misstep}`; } else if (server) { cause = 'product'; summary += `. Request evidence: ${server.message}`; } else if (rejected) { cause = 'product'; summary += `. Request evidence: ${rejected.method} ${rejected.path} → ${rejected.status}: ${rejected.validationError}`; }
+                    }
+                }
+                break;
+            }
+            // Invariants after every step: a violation is a finding, whatever the step did.
+            for (const invariant of spec.invariants ?? []) {
+                const outcome = await evaluateCheck(() => invariant.check(runContext(index)));
+                if (!outcome.passed || index === definition.length - 1) { invariants.push({ name: invariant.name, step: index, passed: outcome.passed, evidence: outcome.evidence }); }
+                if (!outcome.passed) {
+                    failedStep = index;
+                    cause = 'product';
+                    summary = `Invariant "${invariant.name}" broke after step ${index + 1}`;
+                    result.status = 'failed';
+                    result.failure = 'invariant';
+                    result.error = summary;
+                    result.misstep = await misstep(index);
+                    if (result.misstep) {
+                        cause = 'agent';
+                        summary = `${summary}. Not counted against the product: ${result.misstep}`;
+                    }
+                    break;
+                }
+            }
+            if (result.status === 'failed') { break; }
+            const blocking = monitor.issues().filter(issue => issue.severity === 'high' && issue.step === index);
+            if (options.failOnIssues !== false && blocking.length) {
+                failedStep = index;
+                cause = issueCause(blocking[0]!);
+                summary = `${blocking[0]!.kind} during step ${index + 1}: ${blocking[0]!.message}`;
+                result.status = 'failed';
+                result.failure = 'blocking-issue';
+                result.error = summary;
+                break;
+            }
+            if (result.status === 'passed' && (step.kind === 'verify' || step.kind === 'check' || (step.kind === 'act' && (step.expect?.write || step.expect?.url || step.expect?.download)))) { deterministicChecks.push(index); }
+            previousLabel = label;
+        }
+    };
+
     try {
         // The test timeout must end the attempt even when awaited work ignores the signal (user callbacks, a frozen page).
-        await untilAborted(async () => {
-            const fixtureContext: FixtureContext = { browser: options.browser, context, origin: options.origin, env: options.env as Env, signal, runId: options.runId, defer: cleanup => cleanups.push(cleanup) };
-            activity = { phase: 'fixture setup' };
-            try {
-                fixture = spec.fixture ? await spec.fixture(fixtureContext) : undefined as F;
-            } catch (error) {
-                throw new AttemptError('environment', `Fixture setup failed: ${message(error)}`);
-            }
-            activity = { phase: 'start page' };
-            page = await context.newPage();
-            monitor.setStep(-1);
-            try {
-                await page.goto(new URL(spec.start, options.origin).toString(), { waitUntil: 'domcontentloaded', timeout: 60_000 });
-                if (spec.ready) { await spec.ready(runContext(-1)); }
-                await settle(page, monitor);
-            } catch (error) {
-                throw new AttemptError('environment', `Start page did not become ready: ${message(error)}`);
-            }
-            await monitor.scanText(page);
-            const loadIssue = monitor.issues().find(issue => issue.severity === 'high');
-            if (loadIssue && options.failOnIssues !== false) {
-                throw new AttemptError(issueCause(loadIssue), `${loadIssue.kind} while loading ${spec.start}: ${loadIssue.message}`);
-            }
-            activity = { phase: 'initial invariants' };
-            for (const invariant of spec.invariants ?? []) {
-                const outcome = await evaluateCheck(() => invariant.check(runContext(-1)));
-                invariants.push({ name: invariant.name, step: -1, passed: outcome.passed, evidence: outcome.evidence });
-                if (!outcome.passed) { throw new AttemptError('environment', `Invariant "${invariant.name}" does not hold before the test starts`); }
-            }
-
-            const definition = spec.steps(fixture as F);
-            for (const [index, step] of definition.entries()) {
-                if (step.kind !== 'act' && step.kind !== 'check') { continue; }
-                const identity = step.kind === 'act' ? step : { instruction: `check:${step.assertion}` };
-                const base = stepKey(identity);
-                const occurrence = (occurrences.get(base) ?? 0) + 1;
-                occurrences.set(base, occurrence);
-                keysByIndex.set(index, { key: stepKey(identity, occurrence), occurrence });
-            }
-            const secretProblems = secretCheckProblems(definition, secrets);
-            if (secretProblems.length) { throw new JevwrightError(secretProblems.join('; ')); }
-            for (const [index, step] of definition.entries()) {
-                if (step.kind === 'act' && step.expectError) { monitor.expectDuring(index, writeRules(step.expect)); }
-            }
-            if (options.dryRun) {
-                const observation = await observe(page, { redact });
-                // The signature hashes raw page content; beside redacted text it would allow guessing a short secret.
-                const { signature, ...withoutSignature } = observation;
-                await writeArtifact(join(directory, 'start-observation.json'), redact.active ? withoutSignature : { ...withoutSignature, signature }, redact);
-                if (!screenshotsWithheld && !await showsSecret(page, redact)) { await page.screenshot({ path: join(directory, 'start.jpg'), type: 'jpeg', quality: 60 }).catch(() => undefined); }
-                summary = `Dry run: fixture, start page and ${spec.invariants?.length ?? 0} invariant(s) OK; ${definition.length} steps not run`;
-                throw new DryRunComplete();
-            }
-            nextAct = (index: number) => {
-                const following = definition[index + 1];
-                return following?.kind === 'act' ? describeStep(following as Step<unknown>, displayData, secrets) : undefined;
-            };
-            /** A product-looking failure after AI-driven steps: the agent's, when a step acted on something it did not name. */
-            const misstep = async (upTo: number): Promise<string | undefined> => {
-                const acts = steps.filter(entry => entry.index <= upTo && entry.kind === 'act' && (entry.source === 'ai' || entry.source === 'healed') && entry.actions?.some(action => action.ok));
-                if (!models || !acts.length) { return undefined; }
-                const done = (entry: StepResult) => entry.actions!.filter(action => action.ok);
-                const history = (entry: StepResult) => done(entry).map(action => ({ action: action.tool, ...(action.element ? { element: action.element } : {}), ...(action.value ? { value: action.value } : {}) }));
-                const verdicts = await actedOnTarget(models, acts.map(entry => ({ step: entry.label, history: history(entry), next_step: nextAct(entry.index) ?? null })), signal).catch(() => undefined);
-                const miss = verdicts?.findIndex(p => p < MISSTEP) ?? -1;
-                if (!verdicts || miss < 0) { return undefined; }
-                const entry = acts[miss]!;
-                const touched = [...new Set(done(entry).flatMap(action => action.element ? [action.element] : []))].join(', ');
-                return `step ${entry.index + 1} (${entry.label}) acted on ${touched}, which Jev judged not to be what the step names (p=${verdicts[miss]!.toFixed(2)})`;
-            };
-            let previousLabel: string | undefined;
-            for (const [index, step] of definition.entries()) {
-                signal.throwIfAborted();
-                monitor.setStep(index);
-                downloads.setStep(index, step.kind === 'act' ? step.expect?.download : undefined);
-                const label = describeStep(step as Step<unknown>, displayData, secrets);
-                const stepStarted = performance.now();
-                const writesBefore = monitor.writes.length;
-                const result: StepResult = { index, kind: step.kind, label, status: 'passed', durationMs: 0, url: shortUrl(page.url()), writes: [] };
-                log(`  ${index + 1}. ${label}`);
-                activity = { phase: 'step', step: { index, kind: step.kind, label, started: stepStarted } };
-                try {
-                    await runStep(step, index, result, previousLabel);
-                } catch (error) {
-                    if (signal.aborted) { throw error; }
-                    result.status = 'failed';
-                    // A check or verify that could not get a model answer is a model-service failure, not test code.
-                    result.failure = error instanceof AttemptError && error.cause === 'timeout' ? 'timeout' : error instanceof ModelError ? 'model' : step.kind === 'verify' && isAssertionError(error) ? 'assertion' : 'exception';
-                    result.error = message(error);
-                }
-                // Work that ignored the deadline and finished late must not add steps after the attempt was cut off.
-                signal.throwIfAborted();
-                await settle(page, monitor, { maxMs: 3000 }).catch(() => 0);
-                await monitor.scanText(page);
-                await monitor.flushEvidence();
-                result.url = shortUrl(page.url());
-                await downloads.flush();
-                if (step.kind === 'act' && step.expect?.download && result.status === 'passed') {
-                    const state = downloads.state();
-                    if (!state.ok) { result.status = 'failed'; result.failure = 'expectation'; result.error = state.reason; }
-                }
-                result.downloads = downloads.forStep(index);
-                result.writes = monitor.writes.slice(writesBefore).map(write => ({ ...write }));
-                const busy = [...new Set(monitor.settleCaps.filter(cap => cap.step === index).map(cap => cap.reason))];
-                if (busy.length) { result.busy = busy.slice(0, 5); }
-                result.durationMs = Math.round(performance.now() - stepStarted);
-                result.screenshot = screenshotsWithheld || await showsSecret(page, redact) ? undefined : await screenshot(page, directory, index);
-                if (!result.screenshot && !screenshotsWithheld && redact.active) { secretShown = true; }
-                steps.push(result);
-                log(`     ${STEP_MARK[result.status]} ${result.source ? `[${result.source}] ` : ''}${result.durationMs}ms${result.error ? ` — ${result.error}` : ''}`);
-                if (result.status === 'failed') {
-                    failedStep = index;
-                    ({ cause, summary } = attribute(result));
-                    const blocking = options.failOnIssues !== false && result.failure === 'error-shown' ? monitor.issues().find(issue => issue.severity === 'high' && issue.step === index) : undefined;
-                    if (blocking) { cause = issueCause(blocking); summary = `${blocking.kind} during step ${index + 1}: ${blocking.message}`; }
-                    if (cause === 'product' && result.failure === 'assertion') {
-                        result.misstep = await misstep(index);
-                        if (result.misstep) {
-                            cause = 'agent';
-                            summary = `${summary}. Not counted against the product: ${result.misstep}`;
-                        }
-                    }
-                    if (cause === 'agent' && result.failure !== 'error-shown' && !result.misstep && !(step.kind === 'act' && step.expectError)) {
-                        const server = monitor.issues().find(issue => issue.step === index && issue.kind === 'http-5xx');
-                        const rejected = result.writes.find(write => write.validationError);
-                        if (server || rejected) {
-                            result.misstep = await misstep(index);
-                            if (result.misstep) { summary += `. Not counted against the product: ${result.misstep}`; } else if (server) { cause = 'product'; summary += `. Request evidence: ${server.message}`; } else if (rejected) { cause = 'product'; summary += `. Request evidence: ${rejected.method} ${rejected.path} → ${rejected.status}: ${rejected.validationError}`; }
-                        }
-                    }
-                    break;
-                }
-                // Invariants after every step: a violation is a finding, whatever the step did.
-                for (const invariant of spec.invariants ?? []) {
-                    const outcome = await evaluateCheck(() => invariant.check(runContext(index)));
-                    if (!outcome.passed || index === definition.length - 1) { invariants.push({ name: invariant.name, step: index, passed: outcome.passed, evidence: outcome.evidence }); }
-                    if (!outcome.passed) {
-                        failedStep = index;
-                        cause = 'product';
-                        summary = `Invariant "${invariant.name}" broke after step ${index + 1}`;
-                        result.status = 'failed';
-                        result.failure = 'invariant';
-                        result.error = summary;
-                        result.misstep = await misstep(index);
-                        if (result.misstep) {
-                            cause = 'agent';
-                            summary = `${summary}. Not counted against the product: ${result.misstep}`;
-                        }
-                        break;
-                    }
-                }
-                if (result.status === 'failed') { break; }
-                const blocking = monitor.issues().filter(issue => issue.severity === 'high' && issue.step === index);
-                if (options.failOnIssues !== false && blocking.length) {
-                    failedStep = index;
-                    cause = issueCause(blocking[0]!);
-                    summary = `${blocking[0]!.kind} during step ${index + 1}: ${blocking[0]!.message}`;
-                    result.status = 'failed';
-                    result.failure = 'blocking-issue';
-                    result.error = summary;
-                    break;
-                }
-                if (result.status === 'passed' && (step.kind === 'verify' || step.kind === 'check' || (step.kind === 'act' && (step.expect?.write || step.expect?.url || step.expect?.download)))) { deterministicChecks.push(index); }
-                previousLabel = label;
-            }
-        }, signal);
+        await untilAborted(attemptSteps, signal);
     } catch (error) {
         if (error instanceof JevwrightError) { throw error; }
         if (error instanceof DryRunComplete) {
@@ -514,7 +517,7 @@ export async function runTestAttempt<F>(spec: TestSpec<F>, options: AttemptOptio
                 result.end = outcome.end;
                 if (outcome.endMismatch) { result.endMismatch = true; }
                 if (outcome.replayOnTarget) { result.replayOnTarget = true; }
-                if (outcome.replayMiss) { result.replayMiss = outcome.replayMiss; if (outcome.replayMissKind) { result.replayMissKind = outcome.replayMissKind; } }
+                if (outcome.replayMiss) { result.replayMiss = outcome.replayMiss; result.replayMissKind = outcome.replayMissKind; }
                 if (outcome.status === 'likely-done') { result.likely = true; }
                 if (outcome.status === 'failed') {
                     result.status = 'failed';

@@ -159,7 +159,7 @@ export async function runAct(input: ActInput): Promise<ActResult> {
             : result.status === 'done' && start.observation
                 ? result.source === 'replay' && input.recorded?.end !== undefined ? input.recorded.end : recordEnd(start.observation, await observeEnd(input), recording, input.redact, input.values, input.baseURL, await replayErrors(input.page))
                 : undefined;
-        return { ...result, actions, rounds, recording, end: { ...end, ...(recordedEnd?.effect ? { effect: recordedEnd.effect } : {}), ...(result.status === 'done' ? { recorded: recordedEnd !== undefined && Boolean(recordedEnd.path || recordedEnd.route || recordedEnd.appeared?.length || recordedEnd.gone?.length || recordedEnd.values?.length) } : {}) }, ...(recordedEnd !== undefined ? { recordedEnd } : {}), ...(replayMiss ? { replayMiss, ...(replayMissKind ? { replayMissKind } : {}) } : {}) };
+        return { ...result, actions, rounds, recording, end: { ...end, ...(recordedEnd?.effect ? { effect: recordedEnd.effect } : {}), ...(result.status === 'done' ? { recorded: recordedEnd !== undefined && Boolean(recordedEnd.path || recordedEnd.route || recordedEnd.appeared?.length || recordedEnd.gone?.length || recordedEnd.values?.length) } : {}) }, ...(recordedEnd !== undefined ? { recordedEnd } : {}), ...(replayMiss ? { replayMiss, replayMissKind } : {}) };
     };
     // An empty recorded path is valid: the step was already achieved when it was recorded.
     if (input.recorded) {

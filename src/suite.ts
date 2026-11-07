@@ -229,16 +229,19 @@ export async function runSuite(specs: ReadonlyArray<TestSpec<unknown>>, options:
     try {
         const queue = [...specs];
         const limits = runLimits(options, Date.now(), () => results.filter(result => result.status === 'failed').length);
+        /** The result of a test the run will not start: cancelled, or past a run-wide limit. */
+        const unstarted = (spec: TestSpec<unknown>): TestResult | undefined => {
+            if (signal.aborted) { return { ...unrun(spec), status: 'interrupted', summary: 'Run cancelled before this test started' }; }
+            const stop = limits();
+            if (!stop) { return undefined; }
+            if (!manifest.stoppedEarly) { manifest.stoppedEarly = stop.reason; log(`Starting no more tests: ${stop.reason}`); }
+            return stop.skip ? skipped(spec, `Not run: ${stop.reason}`) : notRun(spec, 'timeout', `Not run: ${stop.reason}`);
+        };
         const worker = async () => {
             for (let spec = queue.shift(); spec; spec = queue.shift()) {
-                if (signal.aborted) {
-                    results.push({ ...unrun(spec), status: 'interrupted', summary: 'Run cancelled before this test started' });
-                    continue;
-                }
-                const stop = limits();
-                if (stop) {
-                    if (!manifest.stoppedEarly) { manifest.stoppedEarly = stop.reason; log(`Starting no more tests: ${stop.reason}`); }
-                    results.push(stop.skip ? skipped(spec, `Not run: ${stop.reason}`) : notRun(spec, 'timeout', `Not run: ${stop.reason}`));
+                const left = unstarted(spec);
+                if (left) {
+                    results.push(left);
                     continue;
                 }
                 // Not a pass: the run did not test it. Charged to the model budget like a test it stopped mid-way.
@@ -252,8 +255,7 @@ export async function runSuite(specs: ReadonlyArray<TestSpec<unknown>>, options:
         await Promise.all(Array.from({ length: Math.max(1, Math.min(manifest.concurrency, specs.length)) }, worker));
     } finally {
         clearInterval(heartbeat);
-        // A wedged browser must not keep the run from reporting; the CLI's exit grace reaps what is left.
-        if (await within(close(), 15_000).catch(() => undefined) === TIMED_OUT) { log('browser did not close within 15 s; continuing'); }
+        await closeBrowser(close, log);
         await flushLog();
         manifest.finishedAt = new Date().toISOString();
         if (signal.aborted) { manifest.cancelled = true; }
@@ -444,6 +446,11 @@ function buildManifest({ runId, startedAt, git, mode, models, runBudget, specs, 
 
 function skipped(spec: TestSpec<unknown>, reason: string): TestResult {
     return { ...unrun(spec), status: 'skipped', summary: reason, skipReason: reason };
+}
+
+/** A wedged browser must not keep the run from reporting; the CLI's exit grace reaps what is left. */
+async function closeBrowser(close: () => Promise<void>, log: (line: string) => void): Promise<void> {
+    if (await within(close(), 15_000).catch(() => undefined) === TIMED_OUT) { log('browser did not close within 15 s; continuing'); }
 }
 
 /**

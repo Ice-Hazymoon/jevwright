@@ -157,7 +157,7 @@ const schema = z.object({
         actionPriorityThreshold: z.number().min(0.5).max(1).optional(),
     }).strict().optional(),
     command: z.string().min(1).optional(),
-}).strict();
+}).strict().refine(config => !(config.setup && config.server), { message: 'use either setup or server, not both; call startServer() from setup when setup does more', path: ['server'] });
 
 /**
  * Bun runs TypeScript itself and honours tsconfig `paths`, so under Bun the config loads through Bun; elsewhere
@@ -190,7 +190,6 @@ export async function loadConfig(options: { cwd?: string; path?: string } = {}):
         const problems = parsed.error.issues.map(issue => `${issue.path.length ? issue.path.join('.') : 'config'}: ${issue.message}`);
         throw new JevwrightError(`Invalid config in ${file}:\n  ${problems.join('\n  ')}\nThe config file must \`export default defineConfig({ ... })\`.`);
     }
-    if (parsed.data.setup && parsed.data.server) { throw new JevwrightError(`Invalid config in ${file}: use either setup or server, not both; start the server from setup with startServer() when setup does more.`); }
     const config = loaded as JevwrightConfig;
     assertValidTests(config.tests);
     const root = dirname(file);

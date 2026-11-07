@@ -269,23 +269,26 @@ async function startApp(loaded: LoadedConfig, flags: Flags, tests: LoadedConfig[
     const setup = config.setup ?? (server ? (context: SetupContext) => startServer(server, context) : undefined);
     if (setup) {
         log(server ? `Starting the app: ${server.command}` : 'Starting the app (config setup)…');
-        let result: SetupResult | undefined;
-        const started = Date.now();
-        const notice = setInterval(() => log(`Still starting the app (${Math.round((Date.now() - started) / 1000)} s)…`), SETUP_NOTICE_MS);
-        try {
-            // Ctrl-C must stop the wait even when setup ignores its signal.
-            result = await untilAborted(setup({ tests, signal, log }), signal);
-        } catch (error) {
-            if (signal.aborted) { throw error; }
-            throw new JevwrightError(`setup failed: ${error instanceof Error ? error.message : String(error)}`);
-        } finally {
-            clearInterval(notice);
-        }
+        const result = await runSetup(setup, { tests, signal, log });
         if (typeof result?.teardown === 'function') { onTeardown(result.teardown); }
         return { baseURL: checkedOrigin(result?.baseURL, 'setup() baseURL'), env: result?.env, serverLog: result?.serverLog, metadata: result?.metadata };
     }
     if (config.baseURL) { return { baseURL: config.baseURL }; }
     throw new JevwrightError(`${basename(loaded.file)} needs a baseURL (an app that is already running), a server command or a setup function that starts one; or pass --base-url.`);
+}
+
+/** Runs setup, reporting every 30 s while it is still going; Ctrl-C stops the wait even when setup ignores its signal. */
+async function runSetup(setup: (context: SetupContext) => Promise<SetupResult>, context: SetupContext): Promise<SetupResult | undefined> {
+    const started = Date.now();
+    const notice = setInterval(() => context.log(`Still starting the app (${Math.round((Date.now() - started) / 1000)} s)…`), SETUP_NOTICE_MS);
+    try {
+        return await untilAborted(setup(context), context.signal);
+    } catch (error) {
+        if (context.signal.aborted) { throw error; }
+        throw new JevwrightError(`setup failed: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+        clearInterval(notice);
+    }
 }
 
 async function runTeardown(teardown: NonNullable<SetupResult['teardown']>, log: (line: string) => void, limitMs: number): Promise<void> {
